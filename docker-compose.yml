@@ -1,0 +1,17 @@
+# Local development database. Production: use a managed PostgreSQL with encryption at rest,
+# automated encrypted backups, point-in-time recovery and private networking.
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: tradedesk
+      POSTGRES_PASSWORD: tradedesk_dev
+      POSTGRES_DB: tradedesk
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradedesk"]
+      interval: 5s
+      retries: 10
+volumes:
+  pgdata:

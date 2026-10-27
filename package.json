@@ -1,0 +1,16 @@
+{
+  "name": "tradedesk",
+  "private": true,
+  "description": "TradeDesk — Super Admin / Broker / Trader paper-trading platform (API, web portal, mobile app)",
+  "scripts": {
+    "install:all": "npm --prefix apps/api ci && npm --prefix apps/web ci && npm --prefix apps/mobile ci",
+    "db:up": "docker compose up -d postgres",
+    "db:migrate": "npm --prefix apps/api run db:migrate",
+    "db:seed": "npm --prefix apps/api run db:seed",
+    "dev:api": "npm --prefix apps/api run dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:mobile": "npm --prefix apps/mobile run start",
+    "test": "npm --prefix apps/api test",
+    "typecheck": "npm --prefix apps/api run typecheck && npm --prefix apps/web run typecheck && npm --prefix apps/mobile run typecheck"
+  }
+}
