@@ -2,6 +2,7 @@ import { Global, Injectable, Module, OnModuleDestroy } from '@nestjs/common';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { env } from '../config/env';
+import { databaseUrl } from './database-url';
 import * as schema from './schema';
 
 export type Database = NodePgDatabase<typeof schema>;
@@ -9,7 +10,7 @@ export type Database = NodePgDatabase<typeof schema>;
 export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type DbOrTx = Database | Tx;
 
-export function createPool(url = env().DATABASE_URL, max = env().DB_POOL_MAX) {
+export function createPool(url = databaseUrl({ DATABASE_URL: env().DATABASE_URL, DATABASE_URL_UNPOOLED: env().DATABASE_URL_UNPOOLED }), max = env().DB_POOL_MAX) {
   return new Pool({
     connectionString: url,
     max,

@@ -12,5 +12,9 @@
     "dev:mobile": "npm --prefix apps/mobile run start",
     "test": "npm --prefix apps/api test",
     "typecheck": "npm --prefix apps/api run typecheck && npm --prefix apps/web run typecheck && npm --prefix apps/mobile run typecheck"
+  },
+  "dependencies": {
+    "@neon/config": "^1.9.5",
+    "@neon/env": "^1.6.6"
   }
 }

@@ -14,7 +14,7 @@ The K is one codebase with three apps that share a secure GraphQL API:
 
 ```bash
 # 1. Database
-docker compose up -d postgres          # or use your own Postgres 16
+docker compose up -d postgres          # or use your own Postgres 16, or Neon (no install): see docs/NEON.md
 
 # 2. API
 cd apps/api

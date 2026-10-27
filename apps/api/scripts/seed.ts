@@ -4,6 +4,7 @@
  *
  *   SEED_PASSWORD="Dev-Only-Passw0rd!" npm run db:seed
  */
+import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -39,7 +40,7 @@ async function main() {
   const pw = process.env.SEED_PASSWORD;
   if (!pw || pw.length < 12) throw new Error('Set SEED_PASSWORD (≥12 chars) for the seeded dev accounts.');
   if (process.env.NODE_ENV === 'production') throw new Error('Refusing to seed demo accounts in production.');
-  const pool = createPool(process.env.DATABASE_URL!, 2);
+  const pool = createPool(databaseUrl(), 2);
   const db = drizzle(pool, { schema });
   const hash = await argon2.hash(pw, { type: argon2.argon2id, memoryCost: 19 * 1024, timeCost: 3, parallelism: 1 });
 

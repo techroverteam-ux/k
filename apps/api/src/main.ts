@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
 import { env } from './config/env';
 import { requestContextMiddleware } from './common/request-context';
 import { JsonLogger } from './logging/json-logger';
+import { databaseHost, databaseUrl } from './db/database-url';
 
 async function bootstrap() {
   const cfg = env(); // fail fast on invalid / insecure configuration
@@ -41,6 +42,8 @@ async function bootstrap() {
   app.enableShutdownHooks();
   await app.listen(cfg.PORT, '0.0.0.0');
   new Logger('Bootstrap').log(`${cfg.APP_NAME} API listening on :${cfg.PORT}/graphql  (trading mode: SIMULATED)`);
+  const url = databaseUrl({ DATABASE_URL: cfg.DATABASE_URL, DATABASE_URL_UNPOOLED: cfg.DATABASE_URL_UNPOOLED });
+  new Logger('Bootstrap').log(`database ${databaseHost(url)} (${url === cfg.DATABASE_URL_UNPOOLED ? 'direct, DATABASE_URL_UNPOOLED' : 'DATABASE_URL'})`);
 }
 
 bootstrap().catch((e) => {

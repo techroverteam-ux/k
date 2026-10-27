@@ -1,3 +1,4 @@
+import { databaseUrl, databaseHost } from '../src/db/database-url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
@@ -25,8 +26,8 @@ async function encryptLegacyPii(pool: Pool) {
 }
 
 async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is required');
+  const url = databaseUrl();
+  console.log(`migrating ${databaseHost(url)}`);
   const pool = new Pool({ connectionString: url, max: 1 });
   await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
   await migrate(drizzle(pool), { migrationsFolder: path.join(__dirname, '..', 'drizzle') });

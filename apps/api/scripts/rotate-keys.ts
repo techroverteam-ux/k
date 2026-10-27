@@ -7,6 +7,7 @@
  *   2. Deploy, then run:   npm run keys:rotate              (or: npm run keys:rotate -- --reindex)
  *   3. When it reports 0 remaining, remove the old key from DATA_ENCRYPTION_KEYS_PREVIOUS.
  */
+import { databaseUrl } from '../src/db/database-url';
 import { Pool } from 'pg';
 import { decryptField, encryptField, keyIdOf, needsRotation } from '../src/common/crypto';
 import { emailIndex, phoneIndex } from '../src/common/pii';
@@ -19,7 +20,7 @@ const COLUMNS = [
 
 async function main() {
   const reindex = process.argv.includes('--reindex');
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+  const pool = new Pool({ connectionString: databaseUrl(), max: 2 });
   const { rows } = await pool.query<Record<string, string | null> & { id: string }>(`SELECT id, phone_enc, email_enc, mfa_secret_enc FROM users`);
   let changed = 0;
   const seen: Record<string, number> = {};

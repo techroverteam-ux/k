@@ -10,6 +10,8 @@ const schema = z
     PORT: z.coerce.number().int().default(4000),
     APP_NAME: z.string().default('The K'),
     DATABASE_URL: z.string().url(),
+    /** Neon direct (non-pooled) connection string. Preferred over DATABASE_URL when set (see db/database-url.ts). */
+    DATABASE_URL_UNPOOLED: z.string().url().optional(),
     DB_POOL_MAX: z.coerce.number().int().min(1).max(200).default(20),
     CORS_ORIGINS: z.string().default('http://localhost:3000'),
 

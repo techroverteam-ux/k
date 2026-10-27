@@ -24,7 +24,7 @@ services:
       - key: APP_NAME
         value: The K
       - key: DATABASE_URL
-        sync: false # paste the Neon direct connection string (…?sslmode=require)
+        sync: false # Neon DIRECT string: `neon connection-string` or DATABASE_URL_UNPOOLED from .env.local
       - key: DB_POOL_MAX
         value: "5"
       - key: CORS_ORIGINS

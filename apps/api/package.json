@@ -6,15 +6,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "dev": "dotenv -e .env -- ts-node-dev --respawn --transpile-only src/main.ts",
+    "dev": "dotenv -e .env -e ../../.env.local -- ts-node-dev --respawn --transpile-only src/main.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "dotenv -e .env -- ts-node --transpile-only scripts/migrate.ts",
-    "db:seed": "dotenv -e .env -- ts-node --transpile-only scripts/seed.ts",
+    "db:migrate": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/migrate.ts",
+    "db:seed": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "dotenv -e .env.test -- jest --runInBand",
-    "logs:archive": "dotenv -e .env -- ts-node --transpile-only scripts/archive-logs.ts archive",
-    "keys:rotate": "dotenv -e .env -- ts-node --transpile-only scripts/rotate-keys.ts",
-    "logs:verify": "dotenv -e .env -- ts-node --transpile-only scripts/archive-logs.ts verify"
+    "logs:archive": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts archive",
+    "keys:rotate": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/rotate-keys.ts",
+    "logs:verify": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts verify"
   },
   "devDependencies": {
     "@types/cookie-parser": "1.4.10",
