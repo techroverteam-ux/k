@@ -57,7 +57,8 @@ class GqlThrottlerGuard extends ThrottlerGuard {
     return super.getRequestResponse(ctx);
   }
   protected async getTracker(req: Record<string, any>) {
-    return req.ip ?? 'unknown';
+    // Same IP as the logs (also correct for requests relayed by the web app's proxy).
+    return requestContext.get()?.ip ?? req.ip ?? 'unknown';
   }
 }
 

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { randomUUID } from 'crypto';
+import { randomUUID, timingSafeEqual } from 'crypto';
+import { isIP } from 'net';
 import type { IncomingMessage } from 'http';
 import type { NextFunction, Request, Response } from 'express';
 import { env } from '../config/env';
@@ -49,11 +50,29 @@ export function normalizeIp(ip: string | undefined | null): string {
  *   Only enable this when the API is reachable exclusively through that load balancer.
  */
 export function clientIp(req: IncomingMessage): string {
+  const proxied = fromTrustedWebProxy(req);
+  if (proxied) return proxied;
   const peer = req.socket?.remoteAddress;
   if (!env().TRUST_PROXY) return normalizeIp(peer);
   const xff = req.headers['x-forwarded-for'];
   const list = (Array.isArray(xff) ? xff.join(',') : xff ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   return normalizeIp(list.length ? list[list.length - 1] : peer);
+}
+
+/**
+ * The web app proxies browser GraphQL calls through its own server (so the sign-in cookie is first-party).
+ * It forwards the browser's IP in x-k-client-ip, authenticated by x-k-proxy-secret. Anything else is ignored.
+ */
+function fromTrustedWebProxy(req: IncomingMessage): string | null {
+  const secret = env().PROXY_SHARED_SECRET;
+  if (!secret) return null;
+  const got = req.headers['x-k-proxy-secret'];
+  const ip = req.headers['x-k-client-ip'];
+  if (typeof got !== 'string' || typeof ip !== 'string') return null;
+  const a = Buffer.from(got), b = Buffer.from(secret);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  const n = normalizeIp(ip.trim());
+  return isIP(n) ? n : null;
 }
 
 const REQ_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;

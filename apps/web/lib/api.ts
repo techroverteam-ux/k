@@ -44,9 +44,10 @@ export function takeSignedOutReason(): string | null {
 }
 
 async function raw<T>(query: string, variables: Record<string, unknown> | undefined, stepUp?: string): Promise<{ data?: T; errors?: { message: string; extensions?: { code?: string } }[] }> {
-  const res = await fetch(`${API_URL}/graphql`, {
+  // Same-origin relay (app/graphql/route.ts) so the refresh cookie is first-party.
+  const res = await fetch('/graphql', {
     method: 'POST',
-    credentials: 'include',
+    credentials: 'same-origin',
     headers: {
       'content-type': 'application/json',
       'x-client': 'web',

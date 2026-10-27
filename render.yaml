@@ -55,3 +55,26 @@ services:
         value: /tmp/log-archive
       - key: SEED_PASSWORD
         sync: false # demo account password, 12+ characters
+      - key: PROXY_SHARED_SECRET
+        sync: false # same value as on k-web; lets the web relay pass the browser's real IP
+
+  # Web portal (Next.js). Browser GraphQL calls go to this site's /graphql relay, which forwards them to the API,
+  # so the sign-in cookie is first-party and survives page reloads.
+  - type: web
+    name: k-web
+    runtime: node
+    plan: free
+    region: ohio
+    rootDir: apps/web
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npx next start -p $PORT
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_PUBLIC_API_URL
+        value: https://k-api-wijo.onrender.com # baked in at build time; used for live updates and downloads
+      - key: TRUST_PROXY
+        value: "true" # read the browser IP from Render's load balancer
+      - key: PROXY_SHARED_SECRET
+        sync: false # same value as on k-api

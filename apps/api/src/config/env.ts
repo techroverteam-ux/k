@@ -55,6 +55,12 @@ const schema = z
     LOG_MAINTENANCE: z.enum(['on', 'off']).default('on'),
     LOG_FORMAT: z.enum(['json', 'pretty']).optional(),
     LOG_REQUESTS_STDOUT: z.enum(['true', 'false']).default('false'),
+    /**
+     * Shared secret between the web app's server-side /graphql proxy and this API. When a request carries
+     * the matching x-k-proxy-secret header, its x-k-client-ip header is used as the client IP (the web
+     * server read it from its own load balancer). Unset = feature off. Never expose it to browsers.
+     */
+    PROXY_SHARED_SECRET: z.string().min(32, 'PROXY_SHARED_SECRET must be at least 32 chars').optional(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production') {
