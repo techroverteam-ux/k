@@ -3,7 +3,7 @@ import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AllowWithoutMfa, CurrentActor, Public } from '../common/context';
 import { badInput, notFound } from '../common/errors';
-import { AppSettings, Instrument, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
+import { AppSettings, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
 import { API_VERSION } from '../common/version';
 import { clampLimit, toInstrument, toQuote } from '../common/mappers';
 import { ConfigService } from '../config-mgmt/config.service';
@@ -39,6 +39,23 @@ export class MarketResolver {
       maxWatchlists: MAX_LISTS,
       apiVersion: API_VERSION,
     };
+  }
+
+  /** Public price snapshot for the sign-in screen: a fixed, small set of instruments, no account data. */
+  @Public()
+  @Query(() => [MarketPulseItem], { description: 'Public snapshot of a few instruments from the price feed (sign-in screen).' })
+  marketPulse(): MarketPulseItem[] {
+    const order = ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER', 'CRUDEOIL', 'RELIANCE', 'HDFCBANK', 'TCS', 'INFY', 'SBIN'];
+    const base = (s: string) => s.replace(/\d{2}[A-Z]{3}FUT$/, '');
+    return this.market
+      .all()
+      .filter((q) => order.includes(base(q.symbol)))
+      .sort((a, b) => order.indexOf(base(a.symbol)) - order.indexOf(base(b.symbol)))
+      .map((q) => {
+        const t = toQuote(q);
+        const meta = this.market.instrument(q.instrumentId);
+        return { instrumentId: q.instrumentId, symbol: q.symbol, name: meta?.name ?? q.symbol, exchange: meta?.exchange ?? '', ltp: t.ltp, change: t.change, changePct: t.changePct, source: q.source };
+      });
   }
 
   @AllowWithoutMfa()

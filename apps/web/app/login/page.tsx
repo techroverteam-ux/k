@@ -9,6 +9,9 @@ interface Conflict { token: string; limit: number; sessions: { id: string; devic
 import { homeFor, useAuth } from '@/lib/auth';
 import { Icon, Logo } from '@/components/icons';
 import { useToast } from '@/components/ui';
+import { MarketBoard } from '@/components/MarketBoard';
+
+const LAST_USER = 'k.lastUsername';
 
 const STRONG = 'At least 10 characters, using three of: lowercase, uppercase, digits, symbols.';
 
@@ -22,6 +25,7 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
+  const [caps, setCaps] = useState(false);
   const [mfaToken, setMfaToken] = useState('');
   const [code, setCode] = useState('');
   const [phone, setPhone] = useState('');
@@ -37,6 +41,7 @@ export default function Login() {
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const [signedOut, setSignedOut] = useState<string | null>(null);
   useEffect(() => { const m = takeSignedOutReason(); if (m) setSignedOut(m); }, []); // guarded: React dev runs effects twice
+  useEffect(() => { try { const u = localStorage.getItem(LAST_USER); if (u) setUsername(u); } catch { /* storage unavailable */ } }, []);
 
   useEffect(() => {
     const m = new URLSearchParams(window.location.search).get('mode');
@@ -90,6 +95,7 @@ export default function Login() {
     e.preventDefault();
     void go(async () => {
       const d = await gql(`mutation($u:String!,$p:String!,$d:String){ login(username:$u,password:$p,deviceName:$d){ mfaRequired mfaToken ${AUTH_FIELDS} } }`, { u: username, p: password, d: DEVICE });
+      try { localStorage.setItem(LAST_USER, username.trim()); } catch { /* storage unavailable */ }
       if (d.login.mfaRequired) {
         setMfaToken(d.login.mfaToken);
         setCode('');
@@ -166,12 +172,12 @@ export default function Login() {
     });
   };
 
-  const title = { conflict: 'Already signed in', signin: 'Welcome back', mfa: 'Two-step verification', phone: 'Get a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
+  const title = { conflict: 'Already signed in', signin: 'Sign in', mfa: 'Two-step verification', phone: 'Sign in with mobile', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
   const sub = {
     conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
-    signin: 'Use the username your administrator or broker gave you.',
+    signin: `Welcome back to ${settings?.appName ?? 'The K'}.`,
     mfa: 'Enter the 6-digit code from your authenticator app.',
-    phone: 'We’ll text a one-time code. Demo accounts use virtual money only.',
+    phone: 'We’ll text you a one-time code. New numbers get a demo account with a virtual balance.',
     otp: `Enter the code sent to ${sentTo}.`,
     forgot: 'We’ll text a code to the mobile number on your account.',
     reset: info ?? '',
@@ -201,30 +207,29 @@ export default function Login() {
 
   return (
     <div className="auth">
-      <section className="auth-side" aria-hidden>
-        <div className="logo" style={{ width: 'auto' }}><Logo size={32} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div>
-        <div className="stack" style={{ gap: 24 }}>
-          <div className="lead">Practise the markets with zero risk.</div>
-          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0, gap: 14 }}>
-            {[['trend', 'Live simulated prices for NSE and MCX futures'], ['shield', 'Virtual balance. No real money is ever at risk'], ['file', 'Every order and fund movement is recorded']].map(([ic, t]) => (
-              <li key={t} className="row" style={{ flexWrap: 'nowrap' }}><span className="mark" style={{ background: 'var(--brand-soft)', color: 'var(--brand)' }}><Icon name={ic as 'trend'} size={18} /></span><span className="t2">{t}</span></li>
-            ))}
-          </ul>
-        </div>
-        <p className="t3">Orders are simulated and never sent to an exchange.</p>
+      <section className="auth-side">
+        <div className="auth-brand"><Logo size={30} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div>
+        <MarketBoard />
       </section>
       <section className="auth-main">
         <div className="auth-card">
-          <div className="logo only-mob" style={{ width: 'auto' }}><Logo size={36} /></div>
+          <div className="auth-mob-head"><div className="auth-brand"><Logo size={30} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div><MarketBoard variant="strip" /></div>
           <div>
             {back[step] && (
               <button type="button" className="btn btn-sm btn-ghost" style={{ marginLeft: -12, marginBottom: 8 }} onClick={() => { setErr(null); setDevCode(null); setStep(back[step]!); }}>
                 <Icon name="chevronLeft" size={16} />Back
               </button>
             )}
-            <h1>{title}</h1>
+            <h1 className="auth-title">{title}</h1>
             <p className="t2" style={{ marginTop: 6 }}>{sub}</p>
           </div>
+
+          {(step === 'signin' || (step === 'phone' && settings?.demoEnabled !== false)) && settings?.demoEnabled !== false && (
+            <div className="seg" role="tablist" aria-label="Sign-in method">
+              <button type="button" role="tab" aria-selected={step === 'signin'} className={step === 'signin' ? 'on' : ''} onClick={() => { setErr(null); setStep('signin'); }}><Icon name="user" size={16} />Username</button>
+              <button type="button" role="tab" aria-selected={step === 'phone'} className={step === 'phone' ? 'on' : ''} onClick={() => { setErr(null); setStep('phone'); }}><Icon name="device" size={16} />Mobile number</button>
+            </div>
+          )}
 
           {step === 'conflict' && conflict && (
             <div className="stack">
@@ -248,23 +253,28 @@ export default function Login() {
               {signedOut && <div className="notice warn" role="status"><Icon name="info" size={18} />{signedOut}</div>}
               <div className="field">
                 <label htmlFor="u">Username</label>
-                <input id="u" className="input" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={40} aria-invalid={!!err} />
-              </div>
-              <div className="field">
-                <label htmlFor="p">Password</label>
-                <div style={{ position: 'relative' }}>
-                  <input id="p" className="input" style={{ paddingRight: 64 }} type={show ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required maxLength={128} aria-invalid={!!err} />
-                  <button type="button" className="btn btn-sm btn-ghost" style={{ position: 'absolute', right: 4, top: 4 }} onClick={() => setShow((s) => !s)} aria-pressed={show}>{show ? 'Hide' : 'Show'}</button>
+                <div className="input-ic">
+                  <Icon name="user" size={18} />
+                  <input id="u" className="input" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={40} aria-invalid={!!err} autoFocus={!username} placeholder="e.g. trader.one" />
                 </div>
               </div>
-              {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username || !password}>{busy ? 'Signing in…' : 'Sign in'}</button>
-              <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-end', marginTop: -8 }} onClick={() => { setErr(null); setStep('forgot'); }}>Forgot password?</button>
-              <div className="row" style={{ flexWrap: 'nowrap', gap: 12 }}><hr className="divider grow" /><span className="t3">or</span><hr className="divider grow" /></div>
-              <div className="row" style={{ flexWrap: 'nowrap', gap: 12 }}>
-                {settings?.demoEnabled !== false && <button type="button" className="btn btn-lg grow" onClick={() => { setErr(null); setStep('phone'); }}>Try a demo</button>}
-                {settings?.signupEnabled !== false && <button type="button" className="btn btn-lg grow" onClick={() => { setErr(null); setStep('signup'); }}>Create account</button>}
+              <div className="field">
+                <div className="label-row">
+                  <label htmlFor="p">Password</label>
+                  <button type="button" className="link-btn" onClick={() => { setErr(null); setStep('forgot'); }}>Forgot password?</button>
+                </div>
+                <div className="input-ic">
+                  <Icon name="lock" size={18} />
+                  <input id="p" className="input" style={{ paddingRight: 48 }} type={show ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyUp={(e) => setCaps(e.getModifierState?.('CapsLock') ?? false)} onBlur={() => setCaps(false)} required maxLength={128} aria-invalid={!!err} autoFocus={!!username} aria-describedby={caps ? 'caps' : undefined} />
+                  <button type="button" className="eye" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show}><Icon name="eye" size={18} /></button>
+                </div>
+                {caps && <span id="caps" className="hint warn-t">Caps Lock is on.</span>}
               </div>
+              {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username || !password}>{busy ? <><span className="spin" aria-hidden />Signing in…</> : 'Sign in'}</button>
+              {settings?.signupEnabled !== false && (
+                <p className="t2 auth-alt">New to {settings?.appName ?? 'The K'}? <button type="button" className="link-btn" onClick={() => { setErr(null); setStep('signup'); }}>Create an account</button></p>
+              )}
             </form>
           )}
 
@@ -275,7 +285,7 @@ export default function Login() {
                 <input id="c" className="input num" style={{ fontSize: 20, letterSpacing: '0.3em', textAlign: 'center', height: 52 }} inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} required autoFocus aria-invalid={!!err} />
               </div>
               {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || code.length !== 6}>{busy ? 'Verifying…' : 'Verify and sign in'}</button>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || code.length !== 6}>{busy ? <><span className="spin" aria-hidden />Verifying…</> : 'Verify and sign in'}</button>
             </form>
           )}
 
@@ -290,7 +300,7 @@ export default function Login() {
                 <span className="hint">We’ll text a 6-digit code to verify it’s you.</span>
               </div>
               {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? 'Sending…' : 'Send code'}</button>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? <><span className="spin" aria-hidden />Sending…</> : 'Send code'}</button>
               <p className="t3" style={{ textAlign: 'center' }}>Demo accounts use virtual money for practice only.</p>
             </form>
           )}
@@ -303,7 +313,7 @@ export default function Login() {
               </div>
               {devCode && <div className="notice info"><Icon name="info" size={18} /><span>Development mode code: <strong className="num">{devCode}</strong>. Never shown in production.</span></div>}
               {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || code.length !== 6}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || code.length !== 6}>{busy ? <><span className="spin" aria-hidden />Verifying…</> : 'Verify and continue'}</button>
               <button type="button" className="btn btn-ghost btn-block" disabled={resendIn > 0 || busy} onClick={() => sendOtp()}>{resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}</button>
             </form>
           )}
@@ -315,7 +325,7 @@ export default function Login() {
                 <input id="fu" className="input" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={40} autoFocus />
               </div>
               {errNote}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username}>{busy ? 'Sending…' : 'Send code'}</button>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username}>{busy ? <><span className="spin" aria-hidden />Sending…</> : 'Send code'}</button>
               <p className="t3" style={{ textAlign: 'center' }}>No mobile number on your account, or an administrator account? Ask your broker or administrator to reset it.</p>
             </form>
           )}
@@ -340,7 +350,7 @@ export default function Login() {
             <form className="stack" onSubmit={sendSignupOtp}>
               {phoneInput}
               {errNote}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? 'Sending…' : 'Send code'}</button>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? <><span className="spin" aria-hidden />Sending…</> : 'Send code'}</button>
               <p className="t3" style={{ textAlign: 'center' }}>New accounts are reviewed by an administrator before first sign-in.</p>
             </form>
           )}

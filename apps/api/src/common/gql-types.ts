@@ -305,3 +305,15 @@ export class WatchlistCount {
   @Field(() => Int) listIndex: number;
   @Field(() => Int) count: number;
 }
+
+@ObjectType({ description: 'A small public snapshot of the price feed, for the sign-in screen.' })
+export class MarketPulseItem {
+  @Field(() => ID) instrumentId: string;
+  @Field() symbol: string;
+  @Field() name: string;
+  @Field() exchange: string;
+  @Field() ltp: string;
+  @Field() change: string;
+  @Field() changePct: string;
+  @Field({ description: '"SIMULATED" prices are not live market data.' }) source: string;
+}

@@ -8,7 +8,9 @@ import { logArchives, otpChallenges, sessions } from '../db/schema';
 import { archiveDay } from './archive';
 
 /** Quiet read operations (admin-configured) shared with the activity plugin. */
-export const quietOps = { set: new Set<string>() };
+/** Public polling that is never written to the activity log (it carries no account action). */
+export const ALWAYS_QUIET = ['marketPulse'];
+export const quietOps = { set: new Set<string>(ALWAYS_QUIET) };
 
 /**
  * Log housekeeping, every 15 minutes, on exactly one API instance (Postgres advisory lock):
@@ -39,7 +41,7 @@ export class LogMaintenanceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async refreshQuiet() {
-    quietOps.set = new Set(await this.config.get('logs.quietOperations'));
+    quietOps.set = new Set([...ALWAYS_QUIET, ...(await this.config.get('logs.quietOperations'))]);
   }
 
   async run(now = new Date()) {
