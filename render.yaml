@@ -1,30 +1,28 @@
-# Render Blueprint for The K API: native Node runtime, no Docker.
-# Database: an external free Postgres (Neon recommended). Paste its DIRECT connection string
-# (not the "-pooler" one) into DATABASE_URL when Render asks.
+# Render Blueprint for The K API: Docker service built from apps/api/Dockerfile.
+# The container runs migrations and (when SEED_PASSWORD is set and NODE_ENV isn't production) the
+# idempotent demo seed at start-up, then starts the API on Render's PORT.
+# Database: Neon DIRECT connection string (host without "-pooler") in DATABASE_URL.
 #
-# This is a DEMO / staging deployment of a paper-trading build:
-#  - NODE_ENV=development so the seed script runs and demo OTP codes are shown on screen
-#    (there is no real SMS provider configured). No real money, no real orders.
-#  - Switch to NODE_ENV=production only after a real SMS provider and secrets manager are set up.
+# DEMO / staging deployment of a paper-trading build: NODE_ENV=development shows demo OTP codes on
+# screen (no real SMS provider). No real money, no real orders. Use NODE_ENV=production only after a
+# real SMS provider and a secrets manager are in place.
 services:
   - type: web
-    name: the-k-api
-    runtime: node
+    name: k-api
+    runtime: docker
     plan: free
-    region: singapore
+    region: ohio # same region as the Neon database (us-east-2)
     rootDir: apps/api
-    buildCommand: npm ci --include=dev && npm run build && npm run db:migrate && npm run db:seed
-    startCommand: node dist/main.js
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     autoDeploy: true
     envVars:
-      - key: NODE_VERSION
-        value: "22"
       - key: NODE_ENV
         value: development
       - key: APP_NAME
         value: The K
       - key: DATABASE_URL
-        sync: false # Neon DIRECT string: `neon connection-string` or DATABASE_URL_UNPOOLED from .env.local
+        sync: false # Neon DIRECT string (no -pooler)
       - key: DB_POOL_MAX
         value: "5"
       - key: CORS_ORIGINS
@@ -42,7 +40,7 @@ services:
       - key: COOKIE_SECURE
         value: "true"
       - key: TRUST_PROXY
-        value: "true" # the API is only reachable through Render's proxy
+        value: "true"
       - key: SMS_PROVIDER
         value: dev
       - key: LIVE_TRADING_ENABLED
@@ -54,6 +52,6 @@ services:
       - key: LOG_FORMAT
         value: json
       - key: LOG_ARCHIVE_DIR
-        value: /tmp/log-archive # free plan disk is wiped on restart; archives are demo-only here
+        value: /tmp/log-archive
       - key: SEED_PASSWORD
-        sync: false # password for the demo accounts, at least 12 characters
+        sync: false # demo account password, 12+ characters
