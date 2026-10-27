@@ -174,7 +174,7 @@ const STATUS: Record<string, [string, string]> = {
   ACTIVE: ['ok', 'Active'], FILLED: ['ok', 'Executed'], POSTED: ['ok', 'Completed'], APPROVED: ['ok', 'Approved'], SUCCESS: ['ok', 'Success'],
   PENDING: ['warn', 'Pending'], REQUESTED: ['warn', 'In review'], OPEN: ['warn', 'Open'],
   SUSPENDED: ['bad', 'Suspended'], REJECTED: ['bad', 'Rejected'], FAILED: ['bad', 'Failed'], DENIED: ['bad', 'Denied'], FAILURE: ['bad', 'Failed'], CLOSED: ['', 'Closed'], CANCELLED: ['', 'Cancelled'], SUPERSEDED: ['', 'Superseded'],
-  SIMULATED: ['info', 'Paper'],
+  SIMULATED: ['info', 'Simulated'],
 };
 export function Status({ value }: { value: string }) {
   const [c, label] = STATUS[value] ?? ['', value.charAt(0) + value.slice(1).toLowerCase()];

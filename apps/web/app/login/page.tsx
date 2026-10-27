@@ -211,7 +211,7 @@ export default function Login() {
             ))}
           </ul>
         </div>
-        <p className="t3">Paper trading only. Orders are never sent to an exchange.</p>
+        <p className="t3">Orders are simulated and never sent to an exchange.</p>
       </section>
       <section className="auth-main">
         <div className="auth-card">
@@ -341,7 +341,7 @@ export default function Login() {
               {phoneInput}
               {errNote}
               <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? 'Sending…' : 'Send code'}</button>
-              <p className="t3" style={{ textAlign: 'center' }}>New accounts are reviewed by an administrator before first sign-in. Paper trading only.</p>
+              <p className="t3" style={{ textAlign: 'center' }}>New accounts are reviewed by an administrator before first sign-in.</p>
             </form>
           )}
 

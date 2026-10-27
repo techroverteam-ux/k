@@ -44,8 +44,7 @@ export function TermsGate() {
         </div>
         <div className="consent-foot">
           {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-          <button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => void accept()}>{busy ? 'Recording…' : 'I understand & accept'}</button>
-          <p className="t3 xs" style={{ textAlign: 'center' }}>Asked every time you sign in. Your acceptance is recorded with the time, your IP address and device.</p>
+          <button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => void accept()}>{busy ? 'Recording…' : 'I UNDERSTAND & ACCEPT'}</button>
         </div>
       </div>
     </div>

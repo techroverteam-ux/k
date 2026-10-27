@@ -112,7 +112,7 @@ export default function Security() {
             </a>
           )}
         </div>
-        <p className="t3 xs">{settings?.appName ?? 'The K'} web {process.env.NEXT_PUBLIC_APP_VERSION ?? ''} · API {settings?.apiVersion ?? '—'} · paper trading</p>
+        <p className="t3 xs">{settings?.appName ?? 'The K'} web {process.env.NEXT_PUBLIC_APP_VERSION ?? ''} · API {settings?.apiVersion ?? '—'}</p>
       </section>
       {terms && settings && (
         <Dialog title="App terms & rules" onClose={() => setTerms(false)}>

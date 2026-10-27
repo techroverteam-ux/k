@@ -77,7 +77,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         if (o.filledAt && new Date(o.filledAt).getTime() - new Date(o.createdAt).getTime() < 1500) return; // filled on placement: the order screen already said so
         playTone('fill', sounds.current);
         const what = o.type === 'STOP_LOSS' ? 'Stop-loss triggered' : o.type === 'TAKE_PROFIT' ? 'Take-profit triggered' : 'Limit order filled';
-        toast(`${what}: ${o.side === 'BUY' ? 'bought' : 'sold'} ${o.quantity} ${shortSymbol(o.instrument?.symbol ?? '')} at ₹${inr(o.fillPrice)} (paper)`);
+        toast(`${what}: ${o.side === 'BUY' ? 'bought' : 'sold'} ${o.quantity} ${shortSymbol(o.instrument?.symbol ?? '')} at ₹${inr(o.fillPrice)}`);
       },
     );
   }, [me?.role, toast]);
@@ -97,7 +97,6 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         </Link>
         {me.role === 'TRADER' && <GlobalSearch />}
         <div className="top-actions">
-          <span className="paper-pill" title="All orders are simulated and balances are virtual. Nothing is sent to an exchange."><span>Paper<span className="long"> trading</span></span></span>
           {settings?.helplineUrl && (
             <a href={settings.helplineUrl} target="_blank" rel="noopener noreferrer" className="icon-btn" aria-label="Helpline (opens in a new tab)" title="Helpline">
               <Icon name="chat" />
@@ -138,7 +137,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         <div className="side-label">Account</div>
         <Link href="/notifications" aria-current={path === '/notifications' ? 'page' : undefined} title="Notifications"><Icon name="bell" /><span className="lbl">Notifications</span></Link>
         <Link href="/account" aria-current={path === '/account' ? 'page' : undefined} title="Profile & security"><Icon name="shield" /><span className="lbl">Profile & security</span></Link>
-        <p className="foot">Paper trading. Prices are simulated and balances are virtual, with no cash value.</p>
+        <p className="foot">Prices are simulated and balances are virtual, with no cash value.</p>
       </nav>
 
       <div className="main">

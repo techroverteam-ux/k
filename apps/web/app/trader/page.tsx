@@ -10,7 +10,7 @@ export default function TraderHome() {
       <div className="stack" style={{ gap: 40 }}>
         <div className="stack" style={{ gap: 4 }}>
           <h1>Hi{first ? `, ${first}` : ''}</h1>
-          <p className="t2">Here’s your paper-trading account.</p>
+          <p className="t2">Here’s your trading account.</p>
         </div>
         <PortfolioSummary actions />
         <Movers />

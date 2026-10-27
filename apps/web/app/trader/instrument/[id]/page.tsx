@@ -212,7 +212,7 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
     void sum.refetch();
     void pos.refetch();
     if (o.status === 'REJECTED') { playTone('reject', prefs.sounds); toast(`Order rejected: ${o.rejectReason}`, true); }
-    else if (o.status === 'FILLED') { playTone('fill', prefs.sounds); toast(`${side === 'BUY' ? 'Bought' : 'Sold'} ${n} ${shortSymbol(i.symbol)} at ₹${inr(o.fillPrice)} (paper)`); }
+    else if (o.status === 'FILLED') { playTone('fill', prefs.sounds); toast(`${side === 'BUY' ? 'Bought' : 'Sold'} ${n} ${shortSymbol(i.symbol)} at ₹${inr(o.fillPrice)}`); }
     else { playTone('placed', prefs.sounds); toast(isTrig(type) ? `${TYPE_LABEL[type]} set. It fills at the LTP when the price reaches ₹${inr(price)}.` : 'Limit order placed. It executes when the price reaches your limit.'); }
   };
 
@@ -299,12 +299,12 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         <button className={`btn btn-lg btn-block ${side === 'BUY' ? 'btn-buy' : 'btn-sell'}`} disabled={!valid || !preview} onClick={() => { place.setError(null); setConfirm(true); }}>
           {side === 'BUY' ? 'Buy' : 'Sell'}{valid && preview ? ` ${n} @ ${type === 'MARKET' ? inr(side === 'BUY' ? q?.ask : q?.bid) : inr(price)}` : ''}
         </button>
-        <p className="t3" style={{ textAlign: 'center' }}>Paper order. Never sent to an exchange.</p>
+        <p className="t3" style={{ textAlign: 'center' }}>Simulated order. Never sent to an exchange.</p>
       </div>
       {confirm && preview && (
         <Confirm
           title={`${side === 'BUY' ? 'Buy' : 'Sell'} ${shortSymbol(i.symbol)}`}
-          sub="Review your paper order"
+          sub="Review your order"
           lines={[
             ['Order type', TYPE_LABEL[type]],
             ['Quantity', n],

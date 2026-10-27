@@ -5,7 +5,7 @@ import { PageHead, Tabs } from '@/components/ui';
 
 const TABS = {
   open: { label: 'Open', s: ['OPEN'], title: 'No open orders', text: 'Limit orders waiting for their price appear here.' },
-  done: { label: 'Executed', s: ['FILLED'], title: 'No executed orders', text: 'Filled paper orders appear here.' },
+  done: { label: 'Executed', s: ['FILLED'], title: 'No executed orders', text: 'Filled orders appear here.' },
   rej: { label: 'Rejection log', s: ['REJECTED', 'CANCELLED'], title: 'Nothing rejected or cancelled', text: 'If an order fails a check, you’ll see the reason here.' },
 } as const;
 

@@ -13,7 +13,7 @@ export default function Commissions() {
   const brokerage = r?.lines.reduce((a, l) => a + Number(l.brokerage), 0).toFixed(2);
   return (
     <div className="stack" style={{ gap: 32 }}>
-      <PageHead title="Commissions" sub="Your share of brokerage from assigned traders. In paper trading these figures are simulated.">
+      <PageHead title="Commissions" sub="Your share of brokerage from assigned traders. These figures are simulated.">
         <input type="month" className="input" style={{ width: 180 }} aria-label="Month" value={month} max={new Date().toISOString().slice(0, 7)} onChange={(e) => setMonth(e.target.value)} />
       </PageHead>
       {error && !data ? <ErrorState error={error} retry={refetch} /> : <>

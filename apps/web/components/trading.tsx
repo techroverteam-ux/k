@@ -107,7 +107,7 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
   return (
     <Dialog
       title={type === 'DEPOSIT' ? 'Add virtual funds' : 'Withdraw virtual funds'}
-      sub="A Super Admin reviews every request. Balances in paper trading have no cash value."
+      sub="A Super Admin reviews every request. Virtual balances have no cash value."
       onClose={onClose}
     >
       <form className="stack" onSubmit={async (e) => {
@@ -375,7 +375,7 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
               <td className="r num">₹{inr(o.fillPrice ?? o.limitPrice ?? o.triggerPrice)}</td>
               <td>
                 <Status value={o.status} />
-                {o.status === 'FILLED' && o.venue === 'SIMULATED' && <span className="sub" style={{ display: 'block' }}>Paper fill</span>}
+                {o.status === 'FILLED' && o.venue === 'SIMULATED' && <span className="sub" style={{ display: 'block' }}>Simulated fill</span>}
                 {o.rejectReason && <span className="sub neg" style={{ display: 'block' }}>{o.rejectReason}</span>}
               </td>
               <td className="num t2 sm hide-sm">{when(o.createdAt)}</td>
