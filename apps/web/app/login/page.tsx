@@ -172,12 +172,12 @@ export default function Login() {
     });
   };
 
-  const title = { conflict: 'Already signed in', signin: 'Sign in', mfa: 'Two-step verification', phone: 'Sign in with mobile', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
+  const title = { conflict: 'Already signed in', signin: 'Sign in', mfa: 'Two-step verification', phone: 'Try a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
   const sub = {
     conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
     signin: `Welcome back to ${settings?.appName ?? 'The K'}.`,
     mfa: 'Enter the 6-digit code from your authenticator app.',
-    phone: 'We’ll text you a one-time code. New numbers get a demo account with a virtual balance.',
+    phone: 'Enter your mobile number. We’ll text a one-time code and open a demo account with a virtual balance.',
     otp: `Enter the code sent to ${sentTo}.`,
     forgot: 'We’ll text a code to the mobile number on your account.',
     reset: info ?? '',
@@ -227,7 +227,7 @@ export default function Login() {
           {(step === 'signin' || (step === 'phone' && settings?.demoEnabled !== false)) && settings?.demoEnabled !== false && (
             <div className="seg" role="tablist" aria-label="Sign-in method">
               <button type="button" role="tab" aria-selected={step === 'signin'} className={step === 'signin' ? 'on' : ''} onClick={() => { setErr(null); setStep('signin'); }}><Icon name="user" size={16} />Username</button>
-              <button type="button" role="tab" aria-selected={step === 'phone'} className={step === 'phone' ? 'on' : ''} onClick={() => { setErr(null); setStep('phone'); }}><Icon name="device" size={16} />Mobile number</button>
+              <button type="button" role="tab" aria-selected={step === 'phone'} className={step === 'phone' ? 'on' : ''} onClick={() => { setErr(null); setStep('phone'); }}><Icon name="trend" size={16} />Try a demo</button>
             </div>
           )}
 
