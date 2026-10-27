@@ -1,6 +1,7 @@
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import { Controller, Get, Injectable, Module, type ExecutionContext } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { inputHygienePlugin, validationPipe } from './common/validation';
 import { GqlExecutionContext, GraphQLModule } from '@nestjs/graphql';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { sql } from 'drizzle-orm';
@@ -77,7 +78,11 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
   const code = (f.extensions?.code as string) ?? 'INTERNAL_SERVER_ERROR';
   const original = (err as { originalError?: any })?.originalError;
   if (original?.name === 'ThrottlerException') return { message: 'Too many requests. Please slow down.', extensions: { code: 'RATE_LIMITED' } };
-  if (SAFE_CODES.has(code)) return { message: f.message, path: f.path, extensions: { code } };
+  if (SAFE_CODES.has(code)) {
+    // A machine-readable reason (e.g. SESSION_REPLACED, CONSENT_REQUIRED) is safe to pass through; nothing else is.
+    const reason = f.extensions?.reason;
+    return { message: f.message, path: f.path, extensions: typeof reason === 'string' && /^[A-Z_]{3,40}$/.test(reason) ? { code, reason } : { code } };
+  }
   if (original?.status === 403 || original?.response?.statusCode === 403) return { message: 'You do not have permission to do this.', extensions: { code: 'FORBIDDEN' } };
   if (env().NODE_ENV !== 'production') console.error('[graphql]', (err as Error)?.message ?? err, original?.stack ?? '');
   return { message: 'Something went wrong. Please try again.', path: f.path, extensions: { code: 'INTERNAL_SERVER_ERROR' } };
@@ -102,7 +107,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
           csrfPrevention: true,
           includeStacktraceInErrorResponses: false,
           validationRules: [depthLimit(8)],
-          plugins: [complexityPlugin(() => 1500), activityPlugin(() => activity, () => quietOps.set)],
+          plugins: [inputHygienePlugin(), complexityPlugin(() => 1500), activityPlugin(() => activity, () => quietOps.set)],
           formatError,
           subscriptions: {
             'graphql-ws': {
@@ -174,6 +179,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
   providers: [
     { provide: APP_GUARD, useClass: GqlThrottlerGuard },
     { provide: APP_GUARD, useClass: GqlAuthGuard },
+    { provide: APP_PIPE, useValue: validationPipe },
     AuthResolver,
     StatementService,
     StatementResolver,

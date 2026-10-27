@@ -41,8 +41,15 @@ export const users = pgTable(
     id: id(),
     username: varchar('username', { length: 40 }).notNull().unique(),
     displayName: varchar('display_name', { length: 120 }).notNull(),
-    phone: varchar('phone', { length: 20 }).unique(),
-    email: varchar('email', { length: 254 }).unique(),
+    /** @deprecated Plaintext columns from v0.1; emptied by the encryption backfill (scripts/migrate.ts). Drop in a later release. */
+    legacyPhone: varchar('phone', { length: 20 }).unique(),
+    /** @deprecated see legacyPhone */
+    legacyEmail: varchar('email', { length: 254 }).unique(),
+    /** AES-256-GCM ciphertext (common/pii.ts) and a keyed blind index for lookups/uniqueness. */
+    phoneEnc: text('phone_enc'),
+    phoneHash: char('phone_hash', { length: 64 }).unique(),
+    emailEnc: text('email_enc'),
+    emailHash: char('email_hash', { length: 64 }).unique(),
     passwordHash: text('password_hash'),
     role: roleEnum('role').notNull(),
     status: userStatusEnum('status').notNull().default('PENDING'),
@@ -89,7 +96,8 @@ export const otpChallenges = pgTable(
   'otp_challenges',
   {
     id: id(),
-    phone: varchar('phone', { length: 20 }).notNull(),
+    /** Blind index of the phone number (never the number itself). */
+    phone: varchar('phone', { length: 64 }).notNull(),
     purpose: varchar('purpose', { length: 32 }).notNull(),
     codeHash: char('code_hash', { length: 64 }).notNull(),
     attempts: integer('attempts').notNull().default(0),

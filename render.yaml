@@ -1,0 +1,59 @@
+# Render Blueprint for The K API: native Node runtime, no Docker.
+# Database: an external free Postgres (Neon recommended). Paste its DIRECT connection string
+# (not the "-pooler" one) into DATABASE_URL when Render asks.
+#
+# This is a DEMO / staging deployment of a paper-trading build:
+#  - NODE_ENV=development so the seed script runs and demo OTP codes are shown on screen
+#    (there is no real SMS provider configured). No real money, no real orders.
+#  - Switch to NODE_ENV=production only after a real SMS provider and secrets manager are set up.
+services:
+  - type: web
+    name: the-k-api
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: apps/api
+    buildCommand: npm ci --include=dev && npm run build && npm run db:migrate && npm run db:seed
+    startCommand: node dist/main.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: development
+      - key: APP_NAME
+        value: The K
+      - key: DATABASE_URL
+        sync: false # paste the Neon direct connection string (…?sslmode=require)
+      - key: DB_POOL_MAX
+        value: "5"
+      - key: CORS_ORIGINS
+        value: http://localhost:3000,http://localhost:8081
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_STEPUP_SECRET
+        generateValue: true
+      - key: HASH_PEPPER
+        generateValue: true # never change it later, or phone/email lookups stop matching
+      - key: DATA_ENCRYPTION_KEY
+        sync: false # 32 bytes base64. Save a copy: losing it makes encrypted fields unreadable
+      - key: DATA_ENCRYPTION_KEY_ID
+        value: k1
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true" # the API is only reachable through Render's proxy
+      - key: SMS_PROVIDER
+        value: dev
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: MARKET_FEED
+        value: simulated
+      - key: MARKET_HOURS
+        value: always_open # demo only; use "config" for real NSE session hours
+      - key: LOG_FORMAT
+        value: json
+      - key: LOG_ARCHIVE_DIR
+        value: /tmp/log-archive # free plan disk is wiped on restart; archives are demo-only here
+      - key: SEED_PASSWORD
+        sync: false # password for the demo accounts, at least 12 characters

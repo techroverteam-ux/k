@@ -41,6 +41,24 @@ export const CONFIG_REGISTRY = {
   'broker.commissionShareBps': { schema: z.number().int().min(0).max(10000), default: 5000, description: "Broker's share of brokerage from assigned traders." },
   'security.adminMfaRequired': { schema: z.boolean(), default: true, description: 'Super Admins must use TOTP MFA.' },
   'security.maxFailedLogins': { schema: z.number().int().min(3).max(20), default: 5, description: 'Failed logins before temporary lockout.' },
+  'security.sessionPolicy': {
+    schema: z.record(
+      z.enum(['SUPER_ADMIN', 'BROKER', 'TRADER']),
+      z.object({
+        maxConcurrent: z.number().int().min(0).max(20),
+        onLimit: z.enum(['ask', 'replace_oldest', 'block']),
+        idleMinutes: z.number().int().min(5).max(1440),
+        maxHours: z.number().int().min(1).max(720),
+      }),
+    ),
+    default: {
+      SUPER_ADMIN: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 30, maxHours: 12 },
+      BROKER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 120, maxHours: 24 },
+      TRADER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 480, maxHours: 24 },
+    },
+    description:
+      'Per role: how many devices may be signed in at once (0 = unlimited); what happens on one more sign-in (ask = offer "sign out the other device and continue", replace_oldest = sign it out automatically, block = refuse); sign-out after idle minutes; maximum session length in hours.',
+  },
   'security.lockoutMinutes': { schema: z.number().int().min(1).max(1440), default: 15, description: 'Lockout duration.' },
   'logs.activityRetentionDays': { schema: z.number().int().min(30).max(3650), default: 365, description: 'Keep per-request activity logs (time, IP, device, action) in the database for this many days. Older days are kept in the archive.' },
   'logs.requireArchiveBeforePurge': { schema: z.boolean(), default: true, description: 'Only delete activity logs for days that have been archived with a checksum.' },

@@ -1,3 +1,5 @@
+import { IsEnum, IsInt, IsOptional, IsUUID, Matches, Max, Min } from 'class-validator';
+import { RX } from '../common/validation';
 import { Args, Context, Field, ID, InputType, Int, Mutation, Parent, Query, ResolveField, Resolver, Subscription } from '@nestjs/graphql';
 import type { Actor, GqlContext } from '../common/context';
 import { Ctx, CurrentActor } from '../common/context';
@@ -28,13 +30,13 @@ import { OrdersService } from './orders.service';
 
 @InputType()
 class PlaceOrderInput {
-  @Field(() => ID) instrumentId: string;
-  @Field(() => OrderSideGql) side: OrderSideGql;
-  @Field(() => OrderTypeGql) type: OrderTypeGql;
-  @Field(() => Int) quantity: number;
-  @Field({ nullable: true, description: 'Required for LIMIT. Decimal rupees, e.g. "6350.05".' }) limitPrice?: string;
-  @Field({ nullable: true, description: 'Required for STOP_LOSS / TAKE_PROFIT: the LTP that triggers the order (filled at LTP).' }) triggerPrice?: string;
-  @Field({ description: 'Client-generated unique key (UUID). Retries with the same key never create a second order.' }) idempotencyKey: string;
+  @Field(() => ID) @IsUUID('all', { message: 'Invalid instrument.' }) instrumentId: string;
+  @Field(() => OrderSideGql) @IsEnum(OrderSideGql) side: OrderSideGql;
+  @Field(() => OrderTypeGql) @IsEnum(OrderTypeGql) type: OrderTypeGql;
+  @Field(() => Int) @IsInt() @Min(1, { message: 'Quantity must be at least 1.' }) @Max(1_000_000, { message: 'Quantity is too large.' }) quantity: number;
+  @Field({ nullable: true, description: 'Required for LIMIT. Decimal rupees, e.g. "6350.05".' }) @IsOptional() @Matches(RX.money, { message: 'Enter a price with up to 2 decimals.' }) limitPrice?: string;
+  @Field({ nullable: true, description: 'Required for STOP_LOSS / TAKE_PROFIT: the LTP that triggers the order (filled at LTP).' }) @IsOptional() @Matches(RX.money, { message: 'Enter a trigger price with up to 2 decimals.' }) triggerPrice?: string;
+  @Field({ description: 'Client-generated unique key (UUID). Retries with the same key never create a second order.' }) @Matches(RX.idempotencyKey, { message: 'Invalid idempotency key.' }) idempotencyKey: string;
 }
 
 function parsePrice(s?: string) {

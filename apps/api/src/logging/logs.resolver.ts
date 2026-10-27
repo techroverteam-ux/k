@@ -1,3 +1,5 @@
+import { IsBoolean, IsDate, IsIn, IsOptional, IsUUID, Matches } from 'class-validator';
+import { RX } from '../common/validation';
 import { Args, Field, ID, InputType, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import { desc } from 'drizzle-orm';
 import type { Actor } from '../common/context';
@@ -70,13 +72,13 @@ class ArchiveCheck {
 
 @InputType()
 class ActivityFilter {
-  @Field(() => ID, { nullable: true }) userId?: string;
-  @Field({ nullable: true }) ip?: string;
-  @Field({ nullable: true }) opName?: string;
-  @Field({ nullable: true, description: 'OK or ERROR' }) outcome?: string;
-  @Field({ nullable: true, description: 'Only actions (mutations), sign-ins and live-feed connections' }) actionsOnly?: boolean;
-  @Field({ nullable: true }) from?: Date;
-  @Field({ nullable: true }) to?: Date;
+  @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID('all') userId?: string;
+  @Field({ nullable: true }) @IsOptional() @Matches(RX.ip, { message: 'Invalid IP address.' }) ip?: string;
+  @Field({ nullable: true }) @IsOptional() @Matches(RX.opName, { message: 'Invalid operation name.' }) opName?: string;
+  @Field({ nullable: true, description: 'OK or ERROR' }) @IsOptional() @IsIn(['OK', 'ERROR']) outcome?: string;
+  @Field({ nullable: true, description: 'Only actions (mutations), sign-ins and live-feed connections' }) @IsOptional() @IsBoolean() actionsOnly?: boolean;
+  @Field({ nullable: true }) @IsOptional() @IsDate() from?: Date;
+  @Field({ nullable: true }) @IsOptional() @IsDate() to?: Date;
 }
 
 const toEntry = (a: ActivityRow, username?: string | null): ActivityEntry => ({

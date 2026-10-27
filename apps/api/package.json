@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "dotenv -e .env.test -- jest --runInBand",
     "logs:archive": "dotenv -e .env -- ts-node --transpile-only scripts/archive-logs.ts archive",
+    "keys:rotate": "dotenv -e .env -- ts-node --transpile-only scripts/rotate-keys.ts",
     "logs:verify": "dotenv -e .env -- ts-node --transpile-only scripts/archive-logs.ts verify"
   },
   "devDependencies": {

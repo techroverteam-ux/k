@@ -1,7 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { gql, refreshSession, resetWs, setSignedOutHandler, tokenStore } from './api';
+import { gql, refreshSession, rememberSignedOut, resetWs, setSignedOutHandler, subscribe, tokenStore } from './api';
 import { requestSplash } from './splash';
 
 export type Role = 'SUPER_ADMIN' | 'BROKER' | 'TRADER';
@@ -71,6 +71,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     })();
   }, [reload, router]);
+
+  // Live: if this session is signed out elsewhere (another device forced a login, an admin, idle timeout), leave now.
+  useEffect(() => {
+    if (!me) return;
+    return subscribe<{ sessionEvents: { type: string; message: string } }>(`subscription { sessionEvents { type reason message at } }`, {}, ({ sessionEvents: e }) => {
+      if (e.type !== 'SIGNED_OUT') return;
+      rememberSignedOut(e.message);
+      tokenStore.set(null);
+      resetWs();
+      setMe(null);
+      router.replace('/login');
+    });
+  }, [me, router]);
 
   const signIn = useCallback(
     async (t: string) => {

@@ -21,6 +21,9 @@ import { archiveDay, verifyArchive } from '../src/logging/archive';
 import { DbService } from '../src/db/db';
 import { appendFileSync, rmSync } from 'fs';
 import { sessionStatus } from '../src/trading/market-hours';
+import { ConfigService } from '../src/config-mgmt/config.service';
+import { pubsub, TOPIC } from '../src/notifications/notifications.service';
+import { decryptField, encryptField, needsRotation, resetKeyRing } from '../src/common/crypto';
 
 jest.setTimeout(120_000);
 
@@ -97,6 +100,17 @@ async function stepUp(token: string, username: string) {
   return r.data.stepUp.token as string;
 }
 
+const OPEN_POLICY = { SUPER_ADMIN: { maxConcurrent: 0, onLimit: 'ask', idleMinutes: 30, maxHours: 12 }, BROKER: { maxConcurrent: 0, onLimit: 'ask', idleMinutes: 120, maxHours: 24 }, TRADER: { maxConcurrent: 0, onLimit: 'ask', idleMinutes: 480, maxHours: 24 } };
+/** Test helper: approve a config value directly (the maker-checker flow itself is tested separately). */
+async function setConfig(key: string, value: unknown) {
+  const p = pg ?? new Pool({ connectionString: process.env.DATABASE_URL });
+  await p.query(`UPDATE config_versions SET status = 'SUPERSEDED' WHERE key = $1 AND status IN ('APPROVED','PENDING')`, [key]);
+  const { rows } = await p.query(`SELECT coalesce(max(version),0)+1 AS v FROM config_versions WHERE key = $1`, [key]);
+  await p.query(`INSERT INTO config_versions (key, version, value, status, reason, decided_at) VALUES ($1, $2, $3, 'APPROVED', 'test setup', now())`, [key, rows[0].v, JSON.stringify(value)]);
+  if (!pg) await p.end();
+  if (app) app.get(ConfigService).invalidate();
+}
+
 const SUMMARY = `query($u:ID){ accountSummary(userId:$u){ balance available marginUsed realizedPnl fees } }`;
 
 beforeAll(async () => {
@@ -110,6 +124,8 @@ beforeAll(async () => {
   execSync('npx ts-node --transpile-only scripts/seed.ts', { stdio: 'inherit', env: process.env });
   pg = new Pool({ connectionString: base });
 
+  // Most suites sign the same users in many times: start with no concurrent-session limit.
+  await setConfig('security.sessionPolicy', OPEN_POLICY);
   app = await NestFactory.create(AppModule, { logger: ['error'], bodyParser: false });
   app.use(requestContextMiddleware);
   app.use(json({ limit: '100kb' }));
@@ -714,5 +730,155 @@ describe('trading consent per session and sign-in audit', () => {
     expect(all.data.loginAudit.every((e: any) => e.outcome === 'FAILURE')).toBe(true);
     const consents = await gql(`{ consentLog(limit:50){ username ip acceptedAt termsVersion } }`, {}, { token: admin.token });
     expect(consents.data.consentLog.some((c: any) => c.username === 'trader.two')).toBe(true);
+  });
+});
+
+
+describe('concurrent sessions: detection, force login, policies', () => {
+  const LOGIN = `mutation($u:String!,$p:String!){ login(username:$u,password:$p){ accessToken sessionConflict conflictToken conflictLimit activeSessions{ id ip userAgent lastUsedAt } } }`;
+  const STRICT = (onLimit: string, extra: Record<string, unknown> = {}) => ({ ...OPEN_POLICY, TRADER: { maxConcurrent: 1, onLimit, idleMinutes: 480, maxHours: 24, ...extra } });
+  const sid = async (token: string) => (await gql(`{ mySessions { id current } }`, {}, { token })).data.mySessions.find((x: any) => x.current).id as string;
+  afterAll(() => setConfig('security.sessionPolicy', OPEN_POLICY));
+
+  it('detects a second sign-in, shows the device already signed in, and lets the user force login', async () => {
+    await setConfig('security.sessionPolicy', STRICT('ask'));
+    await pg.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'test_reset' WHERE user_id = (SELECT id FROM users WHERE username = 'trader.three') AND revoked_at IS NULL`);
+    const a = await gql(LOGIN, { u: 'trader.three', p: PW }, { ua: 'Phone-A/1.0' });
+    expect(a.data.login.sessionConflict).toBe(false);
+    const tokenA = a.data.login.accessToken;
+    const sidA = await sid(tokenA);
+    const b = await gql(LOGIN, { u: 'trader.three', p: PW }, { ua: 'Laptop-B/2.0' });
+    expect(b.data.login).toMatchObject({ sessionConflict: true, accessToken: null, conflictLimit: 1 });
+    expect(b.data.login.activeSessions).toHaveLength(1);
+    expect(b.data.login.activeSessions[0]).toMatchObject({ id: sidA, userAgent: 'Phone-A/1.0', ip: '127.0.0.1' });
+    expect((await gql(`{ me { username } }`, {}, { token: tokenA })).data.me.username).toBe('trader.three'); // A untouched so far
+    // the force-login token is bound to the device that asked for it
+    expect(code(await gql(`mutation($t:String!){ forceLogin(conflictToken:$t){ accessToken } }`, { t: b.data.login.conflictToken }, { ua: 'Other/9' }))).toBe('UNAUTHENTICATED');
+    const events = pubsub.asyncIterableIterator<{ sessionEvents: { reason: string } }>(TOPIC.session(sidA));
+    const next = events.next();
+    const f = await gql(`mutation($t:String!){ forceLogin(conflictToken:$t){ accessToken sessionConflict } }`, { t: b.data.login.conflictToken }, { ua: 'Laptop-B/2.0' });
+    expect(f.data.forceLogin.sessionConflict).toBe(false);
+    expect(f.data.forceLogin.accessToken).toBeTruthy();
+    expect((await next).value.sessionEvents.reason).toBe('SESSION_REPLACED'); // pushed to device A live
+    const kicked = await gql(`{ me { username } }`, {}, { token: tokenA });
+    expect(code(kicked)).toBe('UNAUTHENTICATED');
+    expect(kicked.errors?.[0].extensions).toMatchObject({ reason: 'SESSION_REPLACED' });
+    expect(kicked.errors?.[0].message).toMatch(/signed in on another device/);
+    const { rows } = await pg.query(`SELECT action FROM audit_events WHERE actor_id = (SELECT id FROM users WHERE username='trader.three') AND action IN ('auth.concurrent_login_detected','auth.force_login') ORDER BY seq`);
+    expect(rows.map((r) => r.action)).toEqual(['auth.concurrent_login_detected', 'auth.force_login']);
+  });
+
+  it('replace_oldest signs the old device out automatically; block refuses the new sign-in', async () => {
+    await setConfig('security.sessionPolicy', STRICT('replace_oldest'));
+    const first = await gql(LOGIN, { u: 'trader.three', p: PW }, { ua: 'Laptop-B/2.0' });
+    const second = await gql(LOGIN, { u: 'trader.three', p: PW }, { ua: 'Tablet-C/1.0' });
+    expect(second.data.login.sessionConflict).toBe(false);
+    expect((await gql(`{ me { id } }`, {}, { token: first.data.login.accessToken })).errors?.[0].extensions).toMatchObject({ reason: 'SESSION_REPLACED' });
+    await setConfig('security.sessionPolicy', STRICT('block'));
+    const third = await gql(LOGIN, { u: 'trader.three', p: PW }, { ua: 'Phone-D/1.0' });
+    expect(code(third)).toBe('FORBIDDEN');
+    expect(third.errors?.[0].extensions).toMatchObject({ reason: 'CONCURRENT_LOGIN_BLOCKED' });
+    expect((await gql(`{ me { id } }`, {}, { token: second.data.login.accessToken })).data.me.id).toBeTruthy();
+  });
+
+  it('signs a device out after the idle limit, and lets a Super Admin sign out any account', async () => {
+    await setConfig('security.sessionPolicy', STRICT('ask', { maxConcurrent: 0, idleMinutes: 5 }));
+    const t = await gql(LOGIN, { u: 'trader.three', p: PW });
+    const token = t.data.login.accessToken;
+    await pg.query(`UPDATE sessions SET last_used_at = now() - interval '10 minutes' WHERE id = $1`, [await sid(token)]);
+    const idle = await gql(`{ me { id } }`, {}, { token });
+    expect(idle.errors?.[0].extensions).toMatchObject({ reason: 'SESSION_IDLE' });
+    const t2 = (await gql(LOGIN, { u: 'trader.three', p: PW })).data.login.accessToken;
+    const admin = await adminLogin('admin');
+    const uid = (await pg.query(`SELECT id FROM users WHERE username='trader.three'`)).rows[0].id;
+    const list = await gql(`query($u:ID!){ userSessions(userId:$u){ id ip userAgent } }`, { u: uid }, { token: admin.token });
+    expect(list.data.userSessions.length).toBeGreaterThan(0);
+    const n = await gql(`mutation($u:ID!){ revokeUserSessions(userId:$u) }`, { u: uid }, { token: admin.token, stepUp: await stepUp(admin.token, 'admin') });
+    expect(n.data.revokeUserSessions).toBeGreaterThan(0);
+    expect((await gql(`{ me { id } }`, {}, { token: t2 })).errors?.[0].extensions).toMatchObject({ reason: 'SESSION_REVOKED' });
+    const trader = await login('trader.one');
+    expect(code(await gql(`query($u:ID!){ userSessions(userId:$u){ id } }`, { u: uid }, { token: trader.accessToken }))).toBe('FORBIDDEN');
+  });
+});
+
+describe('encryption at rest', () => {
+  it('stores phone numbers only as AES-GCM ciphertext plus a blind index, and still finds them', async () => {
+    const PHONE = '9000012345';
+    const otp = await gql(`mutation{ requestSignupOtp(phone:"${PHONE}"){ devCode } }`);
+    const { rows: o } = await pg.query(`SELECT phone FROM otp_challenges WHERE purpose = 'signup' ORDER BY created_at DESC LIMIT 1`);
+    expect(o[0].phone).toMatch(/^[0-9a-f]{64}$/); // never the number itself
+    await gql(`mutation($i:RegisterInput!){ registerTrader(input:$i){ status } }`, { i: { displayName: 'Enc Test', username: 'enc.test', phone: PHONE, email: 'Enc@Example.com', password: 'Enc-Strong-Pass-1', code: otp.data.requestSignupOtp.devCode } });
+    const { rows } = await pg.query(`SELECT phone, email, phone_enc, phone_hash, email_enc FROM users WHERE username = 'enc.test'`);
+    expect(rows[0].phone).toBeNull();
+    expect(rows[0].email).toBeNull();
+    expect(rows[0].phone_enc).toMatch(/^enc:v2:k1:/);
+    expect(rows[0].phone_enc).not.toContain(PHONE);
+    expect(decryptField(rows[0].phone_enc, 'users.phone')).toBe('+91' + PHONE);
+    expect(decryptField(rows[0].email_enc, 'users.email')).toBe('enc@example.com');
+    // bound to its column: the same ciphertext can't be read as another field
+    expect(() => decryptField(rows[0].phone_enc, 'users.email')).toThrow();
+    // lookups by blind index still work: the same phone can't register again
+    const otp2 = await gql(`mutation{ requestSignupOtp(phone:"${PHONE}"){ devCode } }`);
+    const dup = await gql(`mutation($i:RegisterInput!){ registerTrader(input:$i){ status } }`, { i: { displayName: 'Enc Two', username: 'enc.two', phone: PHONE, password: 'Enc-Strong-Pass-1', code: otp2.data.requestSignupOtp.devCode } });
+    expect(dup.errors?.[0].message).toMatch(/already has an account/);
+  });
+
+  it('rotates keys: old ciphertext stays readable via the previous key and is flagged for re-encryption', () => {
+    const old = encryptField('secret-value', 'users.phone');
+    const saved = { k: process.env.DATA_ENCRYPTION_KEY, id: process.env.DATA_ENCRYPTION_KEY_ID, prev: process.env.DATA_ENCRYPTION_KEYS_PREVIOUS };
+    try {
+      process.env.DATA_ENCRYPTION_KEYS_PREVIOUS = `k1:${saved.k}`;
+      process.env.DATA_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+      process.env.DATA_ENCRYPTION_KEY_ID = 'k2';
+      (require('../src/config/env') as { resetEnvCache?: () => void }).resetEnvCache?.();
+      resetKeyRing();
+      expect(decryptField(old, 'users.phone')).toBe('secret-value');
+      expect(needsRotation(old)).toBe(true);
+      const fresh = encryptField('secret-value', 'users.phone');
+      expect(fresh.startsWith('enc:v2:k2:')).toBe(true);
+      expect(needsRotation(fresh)).toBe(false);
+    } finally {
+      process.env.DATA_ENCRYPTION_KEY = saved.k;
+      process.env.DATA_ENCRYPTION_KEY_ID = saved.id;
+      if (saved.prev === undefined) delete process.env.DATA_ENCRYPTION_KEYS_PREVIOUS; else process.env.DATA_ENCRYPTION_KEYS_PREVIOUS = saved.prev;
+      (require('../src/config/env') as { resetEnvCache?: () => void }).resetEnvCache?.();
+      resetKeyRing();
+    }
+  });
+});
+
+
+describe('input validation', () => {
+  const PLACE = `mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status } }`;
+  it('rejects malformed input objects with a readable BAD_USER_INPUT message', async () => {
+    const t = await login('trader.one');
+    const { rows } = await pg.query(`SELECT id FROM instruments LIMIT 1`);
+    const base = { instrumentId: rows[0].id, side: 'BUY', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() };
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ ...base, instrumentId: 'not-a-uuid' }, /Invalid instrument/],
+      [{ ...base, quantity: 0 }, /at least 1/],
+      [{ ...base, quantity: 5_000_000 }, /too large/],
+      [{ ...base, type: 'LIMIT', limitPrice: '12.345' }, /up to 2 decimals/],
+      [{ ...base, idempotencyKey: 'x' }, /idempotency key/],
+    ];
+    for (const [i, rx] of cases) {
+      const r = await gql(PLACE, { i }, { token: t.accessToken });
+      expect(code(r)).toBe('BAD_USER_INPUT');
+      expect(r.errors?.[0].message).toMatch(rx);
+    }
+    const pay = await gql(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type: 'DEPOSIT', amount: '-5', idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    expect(code(pay)).toBe('BAD_USER_INPUT');
+    const signup = await gql(`mutation($i:RegisterInput!){ registerTrader(input:$i){ status } }`, { i: { displayName: 'X', username: 'ab', phone: 'abc', password: 'short', code: '12' } });
+    expect(code(signup)).toBe('BAD_USER_INPUT');
+  });
+
+  it('rejects control characters, bidi overrides and oversized strings anywhere in the request', async () => {
+    expect(code(await gql(`mutation($u:String!,$p:String!){ login(username:$u,password:$p){ accessToken } }`, { u: 'trader.one\u0000', p: 'x' }))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(`mutation($u:String!,$p:String!){ login(username:$u,password:$p){ accessToken } }`, { u: 'admin‮exe', p: 'x' }))).toBe('BAD_USER_INPUT');
+    const t = await login('trader.one');
+    expect(code(await gql(`query($q:String!){ searchInstruments(query:$q){ id } }`, { q: 'a'.repeat(6000) }, { token: t.accessToken }))).toBe('BAD_USER_INPUT');
+    // ordinary Unicode (names, ₹, emoji) is fine
+    const ok = await gql(`query($q:String!){ searchInstruments(query:$q){ id } }`, { q: 'Rāmā ₹ 🙂' }, { token: t.accessToken });
+    expect(ok.errors).toBeUndefined();
   });
 });

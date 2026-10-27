@@ -1,14 +1,18 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
-import { gql } from '@/lib/api';
+import { gql, takeSignedOutReason } from '@/lib/api';
+import { deviceLabel, stamp } from '@/lib/activity';
+
+const AUTH_FIELDS = 'accessToken sessionConflict conflictToken conflictLimit activeSessions { id deviceName userAgent ip lastUsedAt }';
+interface Conflict { token: string; limit: number; sessions: { id: string; deviceName?: string; userAgent?: string; ip?: string; lastUsedAt: string }[] }
 import { homeFor, useAuth } from '@/lib/auth';
 import { Icon, Logo } from '@/components/icons';
 import { useToast } from '@/components/ui';
 
 const STRONG = 'At least 10 characters, using three of: lowercase, uppercase, digits, symbols.';
 
-type Step = 'signin' | 'mfa' | 'phone' | 'otp' | 'forgot' | 'reset' | 'signup' | 'signupDetails' | 'signupDone';
+type Step = 'conflict' | 'signin' | 'mfa' | 'phone' | 'otp' | 'forgot' | 'reset' | 'signup' | 'signupDetails' | 'signupDone';
 const DEVICE = typeof navigator !== 'undefined' ? `Web · ${navigator.platform || 'browser'}` : 'Web';
 
 export default function Login() {
@@ -30,6 +34,9 @@ export default function Login() {
   const [info, setInfo] = useState<string | null>(null);
   const [su, setSu] = useState({ displayName: '', username: '', email: '', password: '' });
   const toast = useToast();
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [signedOut, setSignedOut] = useState<string | null>(null);
+  useEffect(() => { const m = takeSignedOutReason(); if (m) setSignedOut(m); }, []); // guarded: React dev runs effects twice
 
   useEffect(() => {
     const m = new URLSearchParams(window.location.search).get('mode');
@@ -58,6 +65,21 @@ export default function Login() {
     }
   };
 
+  /** Either signed in, or the account is already signed in elsewhere: ask before signing that device out. */
+  const done = async (p: { accessToken?: string; sessionConflict?: boolean; conflictToken?: string; conflictLimit?: number; activeSessions?: Conflict['sessions'] }) => {
+    if (p.sessionConflict && p.conflictToken) {
+      setConflict({ token: p.conflictToken, limit: p.conflictLimit ?? 1, sessions: p.activeSessions ?? [] });
+      setStep('conflict');
+      return;
+    }
+    if (p.accessToken) await finish(p.accessToken);
+  };
+  const forceLogin = () => {
+    void go(async () => {
+      const d = await gql(`mutation($t:String!,$d:String){ forceLogin(conflictToken:$t, deviceName:$d){ ${AUTH_FIELDS} } }`, { t: conflict!.token, d: DEVICE });
+      await done(d.forceLogin);
+    });
+  };
   const finish = async (accessToken: string) => {
     const u = await signIn(accessToken);
     if (u) toast(`Signed in. Welcome${u.isDemo ? ' to your demo account' : `, ${u.displayName.split(' ')[0]}`}!`);
@@ -67,19 +89,19 @@ export default function Login() {
   const onSignIn = (e: FormEvent) => {
     e.preventDefault();
     void go(async () => {
-      const d = await gql(`mutation($u:String!,$p:String!,$d:String){ login(username:$u,password:$p,deviceName:$d){ accessToken mfaRequired mfaToken } }`, { u: username, p: password, d: DEVICE });
+      const d = await gql(`mutation($u:String!,$p:String!,$d:String){ login(username:$u,password:$p,deviceName:$d){ mfaRequired mfaToken ${AUTH_FIELDS} } }`, { u: username, p: password, d: DEVICE });
       if (d.login.mfaRequired) {
         setMfaToken(d.login.mfaToken);
         setCode('');
         setStep('mfa');
-      } else await finish(d.login.accessToken);
+      } else await done(d.login);
     });
   };
   const onMfa = (e: FormEvent) => {
     e.preventDefault();
     void go(async () => {
-      const d = await gql(`mutation($t:String!,$c:String!,$d:String){ completeMfaLogin(mfaToken:$t, code:$c, deviceName:$d){ accessToken } }`, { t: mfaToken, c: code, d: DEVICE });
-      await finish(d.completeMfaLogin.accessToken);
+      const d = await gql(`mutation($t:String!,$c:String!,$d:String){ completeMfaLogin(mfaToken:$t, code:$c, deviceName:$d){ ${AUTH_FIELDS} } }`, { t: mfaToken, c: code, d: DEVICE });
+      await done(d.completeMfaLogin);
     });
   };
   const sendOtp = (e?: FormEvent) => {
@@ -96,8 +118,8 @@ export default function Login() {
   const verifyOtp = (e: FormEvent) => {
     e.preventDefault();
     void go(async () => {
-      const d = await gql(`mutation($p:String!,$c:String!,$d:String){ verifyDemoOtp(phone:$p, code:$c, deviceName:$d){ accessToken } }`, { p: phone, c: code, d: DEVICE });
-      await finish(d.verifyDemoOtp.accessToken);
+      const d = await gql(`mutation($p:String!,$c:String!,$d:String){ verifyDemoOtp(phone:$p, code:$c, deviceName:$d){ ${AUTH_FIELDS} } }`, { p: phone, c: code, d: DEVICE });
+      await done(d.verifyDemoOtp);
     });
   };
 
@@ -144,8 +166,9 @@ export default function Login() {
     });
   };
 
-  const title = { signin: 'Welcome back', mfa: 'Two-step verification', phone: 'Get a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
+  const title = { conflict: 'Already signed in', signin: 'Welcome back', mfa: 'Two-step verification', phone: 'Get a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
   const sub = {
+    conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
     signin: 'Use the username your administrator or broker gave you.',
     mfa: 'Enter the 6-digit code from your authenticator app.',
     phone: 'We’ll text a one-time code. Demo accounts use virtual money only.',
@@ -156,7 +179,7 @@ export default function Login() {
     signupDetails: `Enter the code sent to ${sentTo} and choose your sign-in details.`,
     signupDone: 'An administrator will review your account. You can sign in once it’s approved.',
   }[step];
-  const back: Partial<Record<Step, Step>> = { mfa: 'signin', phone: 'signin', otp: 'phone', forgot: 'signin', reset: 'forgot', signup: 'signin', signupDetails: 'signup' };
+  const back: Partial<Record<Step, Step>> = { conflict: 'signin', mfa: 'signin', phone: 'signin', otp: 'phone', forgot: 'signin', reset: 'forgot', signup: 'signin', signupDetails: 'signup' };
   const otpInput = (id: string) => (
     <div className="field">
       <label htmlFor={id}>6-digit code</label>
@@ -203,8 +226,26 @@ export default function Login() {
             <p className="t2" style={{ marginTop: 6 }}>{sub}</p>
           </div>
 
+          {step === 'conflict' && conflict && (
+            <div className="stack">
+              <div className="list">
+                {conflict.sessions.map((x) => (
+                  <div key={x.id} className="list-row">
+                    <span className="mark"><Icon name="device" size={18} /></span>
+                    <div className="grow"><div className="w5">{x.deviceName || deviceLabel(x.userAgent)}</div><div className="t3">IP {x.ip ?? '—'} · last active {stamp(x.lastUsedAt)}</div></div>
+                  </div>
+                ))}
+              </div>
+              <div className="notice warn"><Icon name="info" size={18} /><span>Continuing here signs {conflict.sessions.length === 1 ? 'that device' : 'those devices'} out straight away. If you don’t recognise {conflict.sessions.length === 1 ? 'it' : 'them'}, continue and then change your password.</span></div>
+              {errNote}
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={forceLogin}>{busy ? 'Signing in…' : 'Sign out other device & continue here'}</button>
+              <button className="btn btn-lg btn-block" disabled={busy} onClick={() => { setConflict(null); setPassword(''); setStep('signin'); }}>Cancel</button>
+            </div>
+          )}
+
           {step === 'signin' && (
             <form className="stack" onSubmit={onSignIn} noValidate>
+              {signedOut && <div className="notice warn" role="status"><Icon name="info" size={18} />{signedOut}</div>}
               <div className="field">
                 <label htmlFor="u">Username</label>
                 <input id="u" className="input" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={40} aria-invalid={!!err} />

@@ -46,6 +46,11 @@ export async function clearSession() {
   resetWs();
 }
 
+/** Why the last session ended (shown on the sign-in screen). */
+let signedOutReason: string | null = null;
+export const rememberSignedOut = (m: string) => { signedOutReason = m; };
+export const takeSignedOutReason = () => { const m = signedOutReason; signedOutReason = null; return m; };
+
 async function raw(query: string, variables?: Record<string, unknown>, stepUp?: string) {
   const res = await fetch(`${API_URL}/graphql`, {
     method: 'POST',
@@ -57,7 +62,7 @@ async function raw(query: string, variables?: Record<string, unknown>, stepUp?: 
     },
     body: JSON.stringify({ query, variables }),
   });
-  return (await res.json()) as { data?: any; errors?: { message: string; extensions?: { code?: string } }[] };
+  return (await res.json()) as { data?: any; errors?: { message: string; extensions?: { code?: string; reason?: string } }[] };
 }
 
 export async function refreshSession(): Promise<boolean> {
@@ -67,6 +72,8 @@ export async function refreshSession(): Promise<boolean> {
       if (!rt) return false;
       const r = await raw(`mutation($r:String){ refresh(refreshToken:$r){ accessToken refreshToken } }`, { r: rt });
       const d = r.data?.refresh;
+      const why = r.errors?.[0];
+      if (why?.extensions?.reason && why.extensions.reason !== 'SESSION_ENDED') rememberSignedOut(why.message);
       if (!d?.accessToken) {
         await clearSession();
         return false;
@@ -93,7 +100,9 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
   if (!e) return r.data as T;
   const code = e.extensions?.code ?? 'ERROR';
   if (code === 'UNAUTHENTICATED' && accessToken && !opts.retried) {
-    if (await refreshSession()) return gql<T>(query, variables, { ...opts, retried: true });
+    const reason = e.extensions?.reason;
+    if (reason && reason !== 'SESSION_ENDED') rememberSignedOut(e.message); // e.g. signed in on another device
+    else if (await refreshSession()) return gql<T>(query, variables, { ...opts, retried: true });
     await clearSession();
     signedOutHandler?.();
   }

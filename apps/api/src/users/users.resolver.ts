@@ -1,3 +1,8 @@
+import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { RX } from '../common/validation';
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const trimLower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 import { Args, Field, ID, InputType, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 import type { Actor, GqlContext } from '../common/context';
 import { Ctx, CurrentActor, RequireStepUp, Roles } from '../common/context';
@@ -11,13 +16,13 @@ import { UsersService } from './users.service';
 
 @InputType()
 class CreateUserInput {
-  @Field() username: string;
-  @Field() displayName: string;
-  @Field(() => RoleGql) role: RoleGql;
-  @Field({ nullable: true }) phone?: string;
-  @Field({ nullable: true }) email?: string;
-  @Field(() => ID, { nullable: true }) brokerId?: string;
-  @Field({ description: 'Temporary password; the user should change it on first sign-in.' }) tempPassword: string;
+  @Field() @Transform(trimLower) @Matches(RX.username, { message: 'Username: 4–40 characters, start with a letter; letters, digits, _ and . only.' }) username: string;
+  @Field() @Transform(trim) @Length(2, 120, { message: 'Enter a name of 2–120 characters.' }) displayName: string;
+  @Field(() => RoleGql) @IsEnum(RoleGql) role: RoleGql;
+  @Field({ nullable: true }) @IsOptional() @Matches(RX.phoneIn, { message: 'Enter a valid mobile number.' }) phone?: string;
+  @Field({ nullable: true }) @IsOptional() @IsEmail({}, { message: 'Enter a valid email address.' }) @MaxLength(254) email?: string;
+  @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID('all', { message: 'Invalid broker.' }) brokerId?: string;
+  @Field({ description: 'Temporary password; the user should change it on first sign-in.' }) @Length(10, 128, { message: 'Password must be 10–128 characters.' }) tempPassword: string;
 }
 
 @Resolver()

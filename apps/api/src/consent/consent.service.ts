@@ -22,6 +22,11 @@ export const LOGIN_ACTIONS = [
   'auth.session_revoked',
   'auth.sessions_revoked_all',
   'auth.password_changed',
+  'auth.concurrent_login_detected',
+  'auth.force_login',
+  'auth.session_replaced',
+  'auth.concurrent_login_blocked',
+  'auth.sessions_revoked_by_admin',
 ] as const;
 
 @Injectable()

@@ -57,6 +57,13 @@
       "when": 1793067900895,
       "tag": "0007_consent_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793069201390,
+      "tag": "0008_pii_encryption",
+      "breakpoints": true
     }
   ]
 }

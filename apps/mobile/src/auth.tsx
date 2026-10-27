@@ -1,7 +1,7 @@
 import * as Device from 'expo-device';
 import { router } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { clearSession, gql, refreshSession, setSignedOutHandler, storeSession } from './api';
+import { clearSession, gql, refreshSession, rememberSignedOut, setSignedOutHandler, storeSession, subscribe } from './api';
 import { requestSplash } from './splash';
 
 export type Role = 'SUPER_ADMIN' | 'BROKER' | 'TRADER';
@@ -39,6 +39,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setReady(true);
     })();
   }, [reload]);
+
+  // Live: if this session is signed out elsewhere (another device forced a login, an admin, idle timeout), leave now.
+  useEffect(() => {
+    if (!me) return;
+    return subscribe<{ sessionEvents: { type: string; message: string } }>(`subscription { sessionEvents { type reason message at } }`, {}, ({ sessionEvents: e }) => {
+      if (e.type !== 'SIGNED_OUT') return;
+      rememberSignedOut(e.message);
+      void clearSession().then(() => { setMe(null); router.replace('/login'); });
+    });
+  }, [me]);
 
   const signIn = useCallback(async (a: string, r?: string | null) => { await storeSession(a, r); requestSplash(); return reload(); }, [reload]);
   const signOut = useCallback(async () => {

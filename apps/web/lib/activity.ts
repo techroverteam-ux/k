@@ -3,7 +3,7 @@ const ACTIONS: Record<string, string> = {
   login: 'Signed in', completeMfaLogin: 'Signed in with 2-step code', verifyDemoOtp: 'Signed in with OTP', requestDemoOtp: 'Requested an OTP',
   logout: 'Signed out', refresh: 'Session renewed', revokeSession: 'Signed out a device', revokeOtherSessions: 'Signed out other devices',
   changePassword: 'Changed password', stepUp: 'Confirmed identity', beginMfaEnrollment: 'Started 2-step setup', confirmMfaEnrollment: 'Turned on 2-step verification', acceptTerms: 'Accepted the rules',
-  placeOrder: 'Placed an order', acceptTradingConsent: 'Accepted the trading rules', resetPassword_: '', statementLink: 'Downloaded a statement', 'statement.pdf': 'Downloaded a statement', registerTrader: 'Applied for an account', requestSignupOtp: 'Requested a sign-up code', requestPasswordReset: 'Requested a password reset', resetPassword: 'Reset the password', cancelOrder: 'Cancelled an order', addToWatchlist: 'Added to watchlist', removeFromWatchlist: 'Removed from watchlist',
+  placeOrder: 'Placed an order', forceLogin: 'Signed in on this device (other device signed out)', revokeUserSessions: 'Signed out an account’s devices', acceptTradingConsent: 'Accepted the trading rules', resetPassword_: '', statementLink: 'Downloaded a statement', 'statement.pdf': 'Downloaded a statement', registerTrader: 'Applied for an account', requestSignupOtp: 'Requested a sign-up code', requestPasswordReset: 'Requested a password reset', resetPassword: 'Reset the password', cancelOrder: 'Cancelled an order', addToWatchlist: 'Added to watchlist', removeFromWatchlist: 'Removed from watchlist',
   requestPayment: 'Requested a fund transfer', cancelPayment: 'Cancelled a fund request', approvePayment: 'Approved a fund request', rejectPayment: 'Rejected a fund request',
   createUser: 'Created an account', approveUser: 'Approved an account', setUserStatus: 'Changed account status', assignTraderToBroker: 'Changed a broker assignment', resetUserPassword: 'Reset a password',
   proposeConfigChange: 'Proposed a setting change', decideConfigChange: 'Decided a setting change', proposeConfigRollback: 'Proposed a setting rollback',
@@ -40,7 +40,8 @@ export function toCsv(rows: ActivityEntry[]) {
 export const LOGIN_LABEL: Record<string, string> = {
   'auth.login': 'Signed in', 'auth.login_failed': 'Failed sign-in', 'auth.mfa_failed': 'Wrong 2-step code', 'auth.login_locked': 'Blocked: account locked',
   'auth.login_inactive': 'Blocked: account not active', 'auth.refresh_reuse_detected': 'Old session token reused — device signed out', 'auth.password_reset': 'Password reset by OTP',
-  'auth.password_reset_failed': 'Password reset failed', 'auth.session_revoked': 'Signed out', 'auth.sessions_revoked_all': 'Signed out other devices', 'auth.password_changed': 'Password changed',
+  'auth.password_reset_failed': 'Password reset failed', 'auth.concurrent_login_detected': 'Sign-in while already signed in elsewhere', 'auth.force_login': 'Signed in and signed out the other device',
+  'auth.session_replaced': 'Signed in; oldest device signed out', 'auth.concurrent_login_blocked': 'Blocked: already signed in elsewhere', 'auth.sessions_revoked_by_admin': 'Signed out by an administrator', 'auth.session_revoked': 'Signed out', 'auth.sessions_revoked_all': 'Signed out other devices', 'auth.password_changed': 'Password changed',
 };
 export interface LoginEvent { seq: string; at: string; action: string; outcome: string; userId?: string; username?: string; role?: string; ip?: string; userAgent?: string; sessionId?: string; requestId?: string; detail?: string }
 export const LOGIN_FIELDS = 'seq at action outcome userId username role ip userAgent sessionId requestId detail';

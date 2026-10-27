@@ -69,6 +69,7 @@ The interface takes Groww as its usability reference: clean white surfaces, one 
 - IDOR protection: cross-account reads return `NOT_FOUND` and write an audit entry.
 - GraphQL depth limit (8), cost limit (1500), 100 kB body limit, CSRF prevention, no introspection in production, masked errors, per-IP rate limits.
 - A hash-chained audit log that redacts secrets, and a reconciliation job with 7 independent checks.
+- **Sessions & encryption**: per-role concurrent-login policy with *force login*, idle and maximum session length, live sign-out with a reason; phone/email encrypted (AES-256-GCM + blind index) with key rotation; strict input validation. See `docs/SESSIONS_AND_ENCRYPTION.md`.
 - **Trading consent per session**: the rules a trader accepted, with time, IP, device, session and the exact rules text (SHA-256), in an append-only table. Orders are refused until it exists. Login audit (successful and failed sign-ins) for users and Super Admins.
 - **Every request is logged** with time, IP, device, session and outcome. Logs are append-only, archived daily with SHA-256 checksums, and searchable by Super Admins (by IP, account or time) under Activity log. Users see their own activity. See `docs/LOGGING.md`.
 
@@ -80,7 +81,7 @@ Full threat model and controls: `docs/SECURITY.md`.
 cd apps/api && cp .env .env.test   # point DATABASE_URL at a throwaway DB (…/tradedesk_test), NODE_ENV=test, THROTTLE_SCALE=20
 npm test
 ```
-The 43 end-to-end tests run against real PostgreSQL. They cover authentication, refresh-token reuse, OTP, role checks, IDOR, broker scoping, MFA enforcement, step-up, maker-checker (payments and config), concurrent idempotency (payments and orders), quantity limits, P&L through the ledger, limit-order matching, append-only and balanced-journal triggers, reconciliation, audit-chain verification, secret redaction, query cost limits and error masking.
+The 50 end-to-end tests run against real PostgreSQL. They cover authentication, refresh-token reuse, OTP, role checks, IDOR, broker scoping, MFA enforcement, step-up, maker-checker (payments and config), concurrent idempotency (payments and orders), quantity limits, P&L through the ledger, limit-order matching, append-only and balanced-journal triggers, reconciliation, audit-chain verification, secret redaction, query cost limits and error masking.
 
 ## Repository layout
 

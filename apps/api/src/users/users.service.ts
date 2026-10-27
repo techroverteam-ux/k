@@ -1,3 +1,4 @@
+import { emailColumns, emailIndex, normalizeEmail, normalizePhone, phoneColumns, phoneIndex } from '../common/pii';
 import { Injectable } from '@nestjs/common';
 import { and, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
@@ -65,6 +66,8 @@ export class UsersService {
     if (actor.role === 'BROKER' && input.role !== 'TRADER') throw forbidden('Brokers can only create trader accounts.');
     const brokerId = actor.role === 'BROKER' ? actor.userId : input.role === 'TRADER' ? input.brokerId : undefined;
     this.passwords.assertStrong(input.tempPassword, username);
+    const phone = input.phone ? normalizePhone(input.phone) : null;
+    const email = input.email ? normalizeEmail(input.email) : null;
     const hash = await this.passwords.hash(input.tempPassword);
     return this.dbs.serializable(async (tx) => {
       if (brokerId) {
@@ -74,7 +77,7 @@ export class UsersService {
       const [exists] = await tx
         .select({ id: users.id })
         .from(users)
-        .where(or(eq(users.username, username), input.phone ? eq(users.phone, input.phone) : undefined, input.email ? eq(users.email, input.email.toLowerCase()) : undefined));
+        .where(or(eq(users.username, username), phone ? eq(users.phoneHash, phoneIndex(phone)) : undefined, email ? eq(users.emailHash, emailIndex(email)) : undefined));
       if (exists) throw conflict('Username, phone or email is already in use.');
       const [u] = await tx
         .insert(users)
@@ -82,8 +85,8 @@ export class UsersService {
           username,
           displayName: input.displayName.trim().slice(0, 120) || username,
           role: input.role,
-          phone: input.phone || null,
-          email: input.email?.toLowerCase() || null,
+          ...phoneColumns(phone),
+          ...emailColumns(email),
           brokerId: brokerId ?? null,
           passwordHash: hash,
           status: 'PENDING',

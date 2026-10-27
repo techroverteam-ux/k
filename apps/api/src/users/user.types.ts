@@ -1,6 +1,7 @@
 import { Field, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import type { UserRow } from '../db/schema';
 import { maskPhone } from '../auth/sms.provider';
+import { readEmail, readPhone } from '../common/pii';
 
 export enum RoleGql {
   SUPER_ADMIN = 'SUPER_ADMIN',
@@ -39,12 +40,13 @@ export class UserType {
 
   static from(u: UserRow, viewer?: { userId: string; role: string }): UserType {
     const full = viewer && (viewer.userId === u.id || viewer.role === 'SUPER_ADMIN');
+    const phone = u.phoneEnc || u.legacyPhone ? readPhone(u) : null; // decrypt only when present
     return Object.assign(new UserType(), {
       id: u.id,
       username: u.username,
       displayName: u.displayName,
-      phone: u.phone ? (full ? u.phone : maskPhone(u.phone)) : undefined,
-      email: full ? (u.email ?? undefined) : undefined,
+      phone: phone ? (full ? phone : maskPhone(phone)) : undefined,
+      email: full ? (readEmail(u) ?? undefined) : undefined,
       role: u.role as RoleGql,
       status: u.status as UserStatusGql,
       mode: u.mode as AccountModeGql,

@@ -13,6 +13,8 @@ export const TOPIC = {
   quotes: 'QUOTES',
   orderUpdate: (userId: string) => `ORDER_UPDATE:${userId}`,
   notification: (userId: string) => `NOTIFICATION:${userId}`,
+  /** Events for one signed-in session (e.g. it was signed out because the account signed in elsewhere). */
+  session: (sessionId: string) => `SESSION:${sessionId}`,
 };
 
 @Injectable()

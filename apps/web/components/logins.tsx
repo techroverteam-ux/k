@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { CONSENT_FIELDS, deviceLabel, LOGIN_FIELDS, LOGIN_LABEL, stamp, type ConsentRecord, type LoginEvent } from '@/lib/activity';
 import { useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
-import { Dialog, Empty, ErrorState, SectionHead, SkeletonRows } from './ui';
+import { Dialog, Empty, ErrorState, SectionHead, SkeletonRows, useToast } from './ui';
+import { gql } from '@/lib/api';
 
 const tone = (o: string) => (o === 'SUCCESS' ? 'ok' : o === 'DENIED' ? 'warn' : 'bad');
 
@@ -84,5 +85,38 @@ export function ConsentDialog({ c, onClose }: { c: ConsentRecord; onClose: () =>
       <ol className="stack" style={{ paddingLeft: 20, gap: 8, margin: 0 }}>{c.rules.map((r) => <li key={r} className="sm">{r}</li>)}</ol>
       <div className="actions" style={{ marginTop: 16 }}><button className="btn btn-primary" onClick={onClose}>Close</button></div>
     </Dialog>
+  );
+}
+
+interface Sess { id: string; deviceName?: string; userAgent?: string; ip?: string; createdAt: string; lastUsedAt: string }
+/** Super Admin: signed-in devices of an account, with "sign out" per device or everywhere (needs a step-up code). */
+export function UserSessions({ userId }: { userId: string }) {
+  const { data, loading, error, refetch } = useQuery<{ userSessions: Sess[] }>(`query($u:ID!){ userSessions(userId:$u){ id deviceName userAgent ip createdAt lastUsedAt } }`, { u: userId });
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const revoke = async (sessionId?: string) => {
+    setBusy(sessionId ?? 'all');
+    try {
+      const d = await gql<{ revokeUserSessions: number }>(`mutation($u:ID!,$s:ID){ revokeUserSessions(userId:$u, sessionId:$s) }`, { u: userId, s: sessionId });
+      toast(`${d.revokeUserSessions} device${d.revokeUserSessions === 1 ? '' : 's'} signed out`);
+      void refetch();
+    } catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') toast((e as Error).message, true); } finally { setBusy(null); }
+  };
+  const rows = data?.userSessions ?? [];
+  return (
+    <section className="section">
+      <SectionHead title="Signed-in devices">{rows.length > 0 && <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={() => void revoke()}>Sign out everywhere</button>}</SectionHead>
+      {loading && !data ? <SkeletonRows rows={2} pad={false} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !rows.length ? <Empty icon="device" title="Not signed in anywhere" /> : (
+        <div className="list">
+          {rows.map((x) => (
+            <div key={x.id} className="list-row">
+              <span className="mark"><Icon name="device" size={18} /></span>
+              <div className="grow"><div className="w5">{x.deviceName || deviceLabel(x.userAgent)}</div><div className="t3">IP {x.ip ?? '—'} · signed in {stamp(x.createdAt)} · last active {stamp(x.lastUsedAt)}</div></div>
+              <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={() => void revoke(x.id)}>{busy === x.id ? 'Signing out…' : 'Sign out'}</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

@@ -20,6 +20,12 @@ const schema = z
     STEPUP_TTL_SEC: z.coerce.number().int().min(60).max(900).default(300),
     /** 32-byte key, base64. Used for AES-256-GCM encryption of MFA secrets. Load from KMS/vault in production. */
     DATA_ENCRYPTION_KEY: z.string().refine((v) => Buffer.from(v, 'base64').length === 32, 'DATA_ENCRYPTION_KEY must be 32 bytes base64'),
+    /** Id of DATA_ENCRYPTION_KEY, written into every ciphertext so keys can be rotated. */
+    DATA_ENCRYPTION_KEY_ID: z.string().regex(/^[A-Za-z0-9_-]{1,16}$/).default('k1'),
+    /** Older keys that may still be needed to decrypt: "k0:base64,k-1:base64". Remove after `npm run keys:rotate`. */
+    DATA_ENCRYPTION_KEYS_PREVIOUS: z.string().optional(),
+    /** 32-byte key (base64) for blind indexes on encrypted columns. Defaults to a key derived from HASH_PEPPER. */
+    BLIND_INDEX_KEY: z.string().refine((v) => Buffer.from(v, 'base64').length === 32, 'BLIND_INDEX_KEY must be 32 bytes base64').optional(),
     /** HMAC pepper for OTP and refresh-token hashing. */
     HASH_PEPPER: z.string().min(32),
 

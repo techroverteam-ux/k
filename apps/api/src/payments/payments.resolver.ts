@@ -1,3 +1,5 @@
+import { IsEnum, IsOptional, IsUUID, Matches, MaxLength } from 'class-validator';
+import { RX } from '../common/validation';
 import { Args, Field, ID, InputType, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { inArray } from 'drizzle-orm';
 import type { Actor, GqlContext } from '../common/context';
@@ -12,11 +14,11 @@ import { PaymentsService } from './payments.service';
 
 @InputType()
 class PaymentRequestInput {
-  @Field(() => PaymentTypeGql) type: PaymentTypeGql;
-  @Field({ description: 'Decimal rupees, e.g. "10000.00"' }) amount: string;
-  @Field({ description: 'Client-generated unique key; retries are safe.' }) idempotencyKey: string;
-  @Field(() => ID, { nullable: true, description: 'Broker/admin: the trader this request is for.' }) userId?: string;
-  @Field({ nullable: true }) note?: string;
+  @Field(() => PaymentTypeGql) @IsEnum(PaymentTypeGql) type: PaymentTypeGql;
+  @Field({ description: 'Decimal rupees, e.g. "10000.00"' }) @Matches(RX.money, { message: 'Enter an amount with up to 2 decimals.' }) amount: string;
+  @Field({ description: 'Client-generated unique key; retries are safe.' }) @Matches(RX.idempotencyKey, { message: 'Invalid idempotency key.' }) idempotencyKey: string;
+  @Field(() => ID, { nullable: true, description: 'Broker/admin: the trader this request is for.' }) @IsOptional() @IsUUID('all') userId?: string;
+  @Field({ nullable: true }) @IsOptional() @MaxLength(300, { message: 'Note: up to 300 characters.' }) note?: string;
 }
 
 @Resolver()

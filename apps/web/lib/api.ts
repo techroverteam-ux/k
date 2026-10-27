@@ -34,6 +34,15 @@ export function setSignedOutHandler(h: typeof onSignedOut) {
   onSignedOut = h;
 }
 
+/** Why the last session ended (shown on the sign-in screen), e.g. "signed in on another device". */
+const SIGNED_OUT_KEY = 'td.signedOutReason';
+export function rememberSignedOut(message: string) {
+  try { sessionStorage.setItem(SIGNED_OUT_KEY, message); } catch { /* ignore */ }
+}
+export function takeSignedOutReason(): string | null {
+  try { const m = sessionStorage.getItem(SIGNED_OUT_KEY); sessionStorage.removeItem(SIGNED_OUT_KEY); return m; } catch { return null; }
+}
+
 async function raw<T>(query: string, variables: Record<string, unknown> | undefined, stepUp?: string): Promise<{ data?: T; errors?: { message: string; extensions?: { code?: string } }[] }> {
   const res = await fetch(`${API_URL}/graphql`, {
     method: 'POST',
@@ -55,6 +64,8 @@ export async function refreshSession(): Promise<boolean> {
     try {
       const r = await raw<{ refresh: { accessToken: string } }>(`mutation { refresh { accessToken } }`, undefined);
       tokenStore.set(r.data?.refresh?.accessToken ?? null);
+      const why = r.errors?.[0] as { message: string; extensions?: { reason?: string } } | undefined;
+      if (why?.extensions?.reason && why.extensions.reason !== 'SESSION_ENDED') rememberSignedOut(why.message);
       return !!r.data?.refresh?.accessToken;
     } catch {
       return false;
@@ -81,7 +92,9 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
   if (!err) return r.data as T;
   const code = err.extensions?.code ?? 'ERROR';
   if (code === 'UNAUTHENTICATED' && !opts._retried && accessToken) {
-    if (await refreshSession()) return gql<T>(query, variables, { ...opts, _retried: true });
+    const reason = (err.extensions as { reason?: string } | undefined)?.reason;
+    if (reason && reason !== 'SESSION_ENDED') rememberSignedOut(err.message); // e.g. signed in on another device
+    else if (await refreshSession()) return gql<T>(query, variables, { ...opts, _retried: true });
     tokenStore.set(null);
     onSignedOut?.();
   }

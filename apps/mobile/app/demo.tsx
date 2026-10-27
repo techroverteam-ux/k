@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { gql } from '@/api';
+import { AUTH_FIELDS, ConflictPrompt, type AuthPayload } from '@/conflict';
 import { DEVICE_NAME, homeFor, useAuth } from '@/auth';
 import { S, useTheme } from '@/theme';
 import { Button, Field, IconButton, Notice, T, toast } from '@/ui';
@@ -16,6 +17,8 @@ export default function Demo() {
   const [wait, setWait] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [conflict, setConflict] = useState<AuthPayload | null>(null);
+  const finish = async (a: string, r: string) => { const me = await signIn(a, r); if (me) { toast('Signed in. Welcome to your demo account!'); router.replace(homeFor(me.role)); } };
   useEffect(() => { if (wait > 0) { const h = setTimeout(() => setWait(wait - 1), 1000); return () => clearTimeout(h); } }, [wait]);
   const send = async () => {
     setBusy(true); setErr(null);
@@ -25,7 +28,8 @@ export default function Demo() {
   const verify = async () => {
     setBusy(true); setErr(null);
     try {
-      const d = await gql(`mutation($p:String!,$c:String!,$d:String){ verifyDemoOtp(phone:$p, code:$c, deviceName:$d){ accessToken refreshToken } }`, { p: phone, c: code, d: DEVICE_NAME });
+      const d = await gql(`mutation($p:String!,$c:String!,$d:String){ verifyDemoOtp(phone:$p, code:$c, deviceName:$d){ ${AUTH_FIELDS} } }`, { p: phone, c: code, d: DEVICE_NAME });
+      if (d.verifyDemoOtp.sessionConflict) { setConflict(d.verifyDemoOtp); return; }
       const me = await signIn(d.verifyDemoOtp.accessToken, d.verifyDemoOtp.refreshToken);
       if (me) { toast('Signed in. Welcome to your demo account!'); router.replace(homeFor(me.role)); }
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
@@ -35,6 +39,8 @@ export default function Demo() {
       <View style={{ paddingHorizontal: S[2], height: 56, justifyContent: 'center' }}><IconButton icon="chevronLeft" label="Back" onPress={() => (sent ? setSent(null) : router.back())} /></View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: S[6], paddingTop: S[2], gap: S[5] }} keyboardShouldPersistTaps="handled">
+          {conflict && <ConflictPrompt p={conflict} onDone={finish} onCancel={() => { setConflict(null); setSent(null); }} />}
+          {!conflict && <>
           <View style={{ gap: S[2] }}>
             <T v="h1">{sent ? 'Verify your number' : 'Get a demo account'}</T>
             <T c="text2">{sent ? `Enter the 6-digit code sent to ${sent.sentTo}.` : 'Enter your mobile number. We’ll text you a one-time code.'}</T>
@@ -55,6 +61,7 @@ export default function Demo() {
             </>
           )}
           <T v="xs" style={{ textAlign: 'center' }}>Demo accounts use virtual money for practice only.</T>
+          </>}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
