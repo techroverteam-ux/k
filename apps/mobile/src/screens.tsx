@@ -84,7 +84,7 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const over = type === 'WITHDRAWAL' && !!available && fmt && Number(amount) > Number(available);
   const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : over ? `You can withdraw up to ₹${inr(available)}` : null);
   return (
-    <Sheet visible title={type === 'DEPOSIT' ? 'Add virtual funds' : 'Withdraw virtual funds'} sub="A Super Admin reviews every request. Paper-trading balances have no cash value." onClose={onClose}>
+    <Sheet visible title={type === 'DEPOSIT' ? 'Add virtual funds' : 'Withdraw virtual funds'} sub="A Super Admin reviews every request. Virtual balances have no cash value." onClose={onClose}>
       <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : undefined} />
       {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={['10000', '25000', '50000', '100000'].map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
       {err && <Notice tone="err">{err}</Notice>}
@@ -341,7 +341,7 @@ export function ProfileView() {
         ))}
       </Section>
       <Button kind="danger" icon="logout" title="Sign out" size="lg" onPress={() => void signOut()} />
-      <T v="xs" style={{ textAlign: 'center' }}>{settings?.appName ?? 'The K'} app {APP_VERSION} · API {settings?.apiVersion ?? '—'} · paper trading</T>
+      <T v="xs" style={{ textAlign: 'center' }}>{settings?.appName ?? 'The K'} app {APP_VERSION} · API {settings?.apiVersion ?? '—'}</T>
       {pw && <ChangePassword onClose={() => setPw(false)} />}
       <Sheet visible={terms} title="Rules" onClose={() => setTerms(false)}>
         {settings?.termsRules.map((r, i) => <Row key={i} style={{ alignItems: 'flex-start' }}><T c="brand" w="700">{i + 1}</T><T style={{ flex: 1 }}>{r}</T></Row>)}
@@ -408,7 +408,7 @@ export function TermsGate() {
         </Row>
       ))}
       {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title="I understand & accept" busy={busy} onPress={async () => {
+      <Button kind="primary" size="lg" title="I UNDERSTAND & ACCEPT" busy={busy} onPress={async () => {
         setBusy(true); setErr(null);
         try {
           const d = await gql<{ acceptTradingConsent: { acceptedAt: string; ip: string } }>(`mutation($v:String!){ acceptTradingConsent(termsVersion:$v){ acceptedAt ip } }`, { v: s.termsVersion });
@@ -416,7 +416,6 @@ export function TermsGate() {
         } catch (e) { setErr((e as Error).message); }
         await st.refetch(); setBusy(false);
       }} />
-      <T v="xs" style={{ textAlign: 'center' }}>Asked every time you sign in. Your acceptance is recorded with the time, your IP address and device.</T>
     </Sheet>
   );
 }

@@ -12,7 +12,7 @@ const minor = z
   .describe('paise');
 
 export const CONFIG_REGISTRY = {
-  'demo.enabled': { schema: z.boolean(), default: true, description: 'Allow self-service demo (paper) accounts via OTP.' },
+  'demo.enabled': { schema: z.boolean(), default: true, description: 'Allow self-service demo accounts via OTP.' },
   'demo.initialBalanceMinor': {
     schema: minor,
     default: '50000000',
@@ -65,20 +65,17 @@ export const CONFIG_REGISTRY = {
   'logs.quietOperations': { schema: z.array(z.string().regex(/^[A-Za-z]{1,60}$/)).max(30), default: [], description: 'Read-only operations NOT written to the activity log (e.g. high-frequency polling such as "quotes"). Mutations are always logged.' },
   'ui.tickerMessages': {
     schema: z.array(z.string().max(200)).max(20),
-    default: ['Paper trading: all orders are simulated and are not sent to any exchange.'],
+    default: ['Training platform: all orders are simulated and never sent to an exchange.'],
     description: 'Scrolling announcements shown to traders.',
   },
   'ui.termsRules': {
     schema: z.array(z.string().max(500)).max(20),
     default: [
-      'This workspace uses SIMULATED (paper) trading. Orders are never sent to an exchange and no real money is at risk.',
-      'Prices come from a simulated feed for practice; they may differ from live market prices.',
-      'Virtual balances have no cash value and cannot be withdrawn as money.',
-      'Stop-loss (SL) and take-profit (TP) orders trigger on the last traded price (LTP) and are filled at the LTP.',
-      'Orders are accepted only during market hours: NSE from 9:17 AM, MCX from 9:02 AM and international markets from 3:32 AM (IST). Exact sessions are shown on the order screen.',
-      'For security and audit, we record the time, IP address and device of every sign-in and action on your account.',
+      'THIS APPLICATION IS DESIGNED FOR INDIVIDUAL STUDENTS TO EXCHANGE VIEWS ON MARKET TRAINING PURPOSES ONLY.',
+      'ALL STOP-LOSS (SL) AND TAKE-PROFIT (TP) ORDERS WILL BE PASSED AT THE LAST TRADED PRICE (LTP).',
+      'TRADING ON THE NATIONAL STOCK EXCHANGE (NSE) BEGINS AT 9:17 AM, WHILE TRADING ON THE MULTI COMMODITY EXCHANGE (MCX) STARTS AT 9:02 AM, AND INTERNATIONAL MARKET TRADING BEGINS AT 3:32 AM.',
     ],
-    description: 'Rules shown on first login; acceptance is recorded.',
+    description: 'Rules shown after every trader sign-in; acceptance is recorded.',
   },
   'signup.enabled': { schema: z.boolean(), default: true, description: 'Allow people to apply for a trader account from the login screen (verified by mobile OTP; a Super Admin must approve it).' },
   'ui.helplineUrl': { schema: z.string().url().or(z.literal('')), default: '', description: 'Support link (e.g. WhatsApp business link).' },

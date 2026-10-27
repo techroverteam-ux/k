@@ -51,7 +51,31 @@ let signedOutReason: string | null = null;
 export const rememberSignedOut = (m: string) => { signedOutReason = m; };
 export const takeSignedOutReason = () => { const m = signedOutReason; signedOutReason = null; return m; };
 
+/** Development-only request log (React Native DevTools → Console). Logs the operation name, timing and
+ *  error codes only. Never variables, tokens, passwords or OTPs. Compiled out of release builds. */
+const opName = (q: string) => {
+  const m = q.match(/^\s*(query|mutation|subscription)?[^{]*\{\s*([A-Za-z0-9_]+)/);
+  return `${m?.[1] ?? 'query'} ${m?.[2] ?? '?'}`;
+};
+if (__DEV__) console.log(`[api] using ${API_URL}`);
+
 async function raw(query: string, variables?: Record<string, unknown>, stepUp?: string) {
+  const t0 = Date.now();
+  if (__DEV__) {
+    try {
+      const out = await rawFetch(query, variables, stepUp);
+      const errs = out.errors?.map((e) => e.extensions?.reason ?? e.extensions?.code ?? 'ERROR').join(', ');
+      (errs ? console.warn : console.log)(`[api] ${opName(query)} ${Date.now() - t0}ms${errs ? ` → ${errs}: ${out.errors?.[0]?.message}` : ' ✓'}`);
+      return out;
+    } catch (e) {
+      console.error(`[api] ${opName(query)} failed after ${Date.now() - t0}ms: ${(e as Error).message} (is ${API_URL} reachable?)`);
+      throw e;
+    }
+  }
+  return rawFetch(query, variables, stepUp);
+}
+
+async function rawFetch(query: string, variables?: Record<string, unknown>, stepUp?: string) {
   const res = await fetch(`${API_URL}/graphql`, {
     method: 'POST',
     headers: {

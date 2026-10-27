@@ -67,19 +67,7 @@ function Header({ title, back, right }: { title?: string; back?: boolean; right?
         <View style={{ paddingLeft: S[2] }}><Logo size={28} brand={t.brand} /></View>
       )}
       <T v="h3" style={{ flex: 1 }} numberOfLines={1} accessibilityRole="header">{title ?? 'The K'}</T>
-      <PaperPill />
       {right}
-    </View>
-  );
-}
-
-/** Always-visible honesty marker. */
-export function PaperPill() {
-  const t = useTheme();
-  return (
-    <View accessibilityLabel="Paper trading: simulated orders and virtual funds" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: t.warnSoft, borderRadius: R.pill, paddingHorizontal: 10, height: 24 }}>
-      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.warn }} />
-      <T v="xs" c="warn" w="600">Paper</T>
     </View>
   );
 }

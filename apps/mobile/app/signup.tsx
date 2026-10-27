@@ -46,7 +46,7 @@ export default function Signup() {
               <Field label="Mobile number" prefix="+91" keyboardType="phone-pad" maxLength={10} value={phone} onChangeText={(v) => setPhone(v.replace(/\D/g, ''))} textContentType="telephoneNumber" autoFocus />
               {err && <Notice tone="err">{err}</Notice>}
               <Button kind="primary" size="lg" title="Send code" busy={busy} disabled={phone.length !== 10} onPress={send} />
-              <T v="xs" style={{ textAlign: 'center' }}>New accounts are reviewed by an administrator before first sign-in. Paper trading only.</T>
+              <T v="xs" style={{ textAlign: 'center' }}>New accounts are reviewed by an administrator before first sign-in.</T>
             </>
           ) : (
             <>

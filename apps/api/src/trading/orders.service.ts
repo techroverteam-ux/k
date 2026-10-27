@@ -313,7 +313,7 @@ export class OrdersService implements OnModuleInit {
       tx,
       o.userId,
       'order.filled',
-      triggered ? `${o.type === 'STOP_LOSS' ? 'Stop-loss' : 'Take-profit'} triggered` : `Paper order filled`,
+      triggered ? `${o.type === 'STOP_LOSS' ? 'Stop-loss' : 'Take-profit'} triggered` : `Simulated order filled`,
       `${o.side} ${o.quantity} @ ${(Number(price) / 100).toFixed(2)}${triggered ? ' at LTP' : ''} (simulated fill — not an exchange trade)`,
     );
     return filled;

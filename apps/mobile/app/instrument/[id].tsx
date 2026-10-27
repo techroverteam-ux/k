@@ -157,7 +157,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
       setKey(newKey());
       if (o.status === 'REJECTED') { tradeFeedback('reject'); setErr(`Rejected: ${o.rejectReason}`); setReview(false); return; }
       tradeFeedback(o.status === 'FILLED' ? 'fill' : 'placed');
-      toast(o.status === 'FILLED' ? `${side === 'BUY' ? 'Bought' : 'Sold'} ${n} at ₹${inr(o.fillPrice)} (paper)` : isTrig(type) ? `${TYPE_LABEL[type]} set at ₹${inr(price)}` : 'Limit order placed');
+      toast(o.status === 'FILLED' ? `${side === 'BUY' ? 'Bought' : 'Sold'} ${n} at ₹${inr(o.fillPrice)}` : isTrig(type) ? `${TYPE_LABEL[type]} set at ₹${inr(price)}` : 'Limit order placed');
       onClose();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -165,7 +165,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
   const down = type === 'LIMIT' ? side === 'BUY' : firesOnFall(type, side);
   const steps = type === 'LIMIT' ? [10, 25, 50] : [1, 2, 5];
   return (
-    <Sheet visible title={review ? `Confirm ${side === 'BUY' ? 'buy' : 'sell'}` : shortSymbol(i.symbol)} sub={review ? 'Review your paper order' : `${side === 'BUY' ? 'Ask' : 'Bid'} ₹${inr(side === 'BUY' ? q?.ask : q?.bid)} · LTP ₹${inr(q?.ltp)}`} onClose={onClose}>
+    <Sheet visible title={review ? `Confirm ${side === 'BUY' ? 'buy' : 'sell'}` : shortSymbol(i.symbol)} sub={review ? 'Review your order' : `${side === 'BUY' ? 'Ask' : 'Bid'} ₹${inr(side === 'BUY' ? q?.ask : q?.bid)} · LTP ₹${inr(q?.ltp)}`} onClose={onClose}>
       {!review ? (
         <>
           <View style={{ flexDirection: 'row', backgroundColor: t.bg2, borderRadius: R.md, padding: 4 }} accessibilityRole="tablist">
@@ -207,7 +207,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
           {session && !session.isOpen && <Notice tone="warn">{session.message} Orders placed now will be rejected.</Notice>}
           {err && <Notice tone="err">{err}</Notice>}
           <Button size="lg" kind={side === 'BUY' ? 'buy' : 'sell'} title={valid && preview ? `${side === 'BUY' ? 'Buy' : 'Sell'} ${n} @ ${type === 'MARKET' ? inr(side === 'BUY' ? q?.ask : q?.bid) : inr(price)}` : `Review ${side === 'BUY' ? 'buy' : 'sell'}`} disabled={!valid || !preview} onPress={() => { setErr(null); setReview(true); }} />
-          <T v="xs" style={{ textAlign: 'center' }}>Paper order. Never sent to an exchange.</T>
+          <T v="xs" style={{ textAlign: 'center' }}>Simulated order. Never sent to an exchange.</T>
         </>
       ) : preview && (
         <>

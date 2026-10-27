@@ -18,7 +18,7 @@ SERVICE_NAME="${1:-}"
 need() { command -v "$1" >/dev/null || { echo "Missing $1. Install it first."; exit 1; }; }
 need curl; need node; need openssl
 
-read -rsp "Render API key (hidden): " RENDER_API_KEY; echo
+if [ -z "${RENDER_API_KEY:-}" ]; then read -rsp "Render API key (hidden): " RENDER_API_KEY; echo; fi
 [ -n "$RENDER_API_KEY" ] || { echo "No API key given."; exit 1; }
 AUTH=(-H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json")
 
@@ -66,16 +66,28 @@ rand48() { node -e "console.log(require('crypto').randomBytes(48).toString('base
 key32() { openssl rand -base64 32; }
 
 # --- secrets you provide ----------------------------------------------------
-if has DATABASE_URL; then
+if [ -n "${NEON_DATABASE_URL:-}" ]; then r=y
+elif has DATABASE_URL; then
   read -rp "DATABASE_URL is already set. Replace it? [y/N] " r
 else r=y; fi
 if [[ $r =~ ^[Yy]$ ]]; then
-  read -rsp "Neon DIRECT connection string (hidden): " DB; echo
-  [[ $DB == postgres* ]] || { echo "That doesn't look like a postgres:// link."; exit 1; }
-  [[ $DB != *-pooler* ]] || { echo "That is the POOLED link (-pooler). Use the direct one."; exit 1; }
+  if [ -n "${NEON_DATABASE_URL:-}" ]; then DB_RAW=$NEON_DATABASE_URL; else read -rsp "Neon DIRECT connection string (hidden): " DB_RAW; echo; fi
+  # Accept the bare link, or Neon's snippets (psql '…', DATABASE_URL=…, quotes, spaces).
+  DB=$(printf %s "$DB_RAW" | grep -oE "postgres(ql)?://[^'\" ]+" | head -1 || true)
+  if [ -z "$DB" ]; then
+    echo "No postgresql:// link found in what was pasted (${#DB_RAW} characters)."
+    echo "In Neon: Connect → Connection pooling OFF → copy the connection string, then run this script again."
+    exit 1
+  fi
+  DB=${DB//&channel_binding=require/}; DB=${DB//\?channel_binding=require&/?}
+  if [[ $DB == *-pooler* ]]; then
+    DB=${DB/-pooler./.}
+    echo "  (switched the pooled link to the direct one: removed -pooler)"
+  fi
+  echo "  database host: $(printf %s "$DB" | sed -E 's#^[^@]*@([^/?]*).*#\1#')"
 fi
 if ! has SEED_PASSWORD; then
-  read -rsp "Demo account password, 12+ chars (hidden): " SEED; echo
+  if [ -n "${DEMO_PASSWORD:-}" ]; then SEED=$DEMO_PASSWORD; else read -rsp "Demo account password, 12+ chars (hidden): " SEED; echo; fi
   [ ${#SEED} -ge 12 ] || { echo "Too short."; exit 1; }
 fi
 
@@ -127,4 +139,4 @@ echo "Starting a deploy…"
 api POST "/services/$SERVICE_ID/deploys" '{"clearCache":"do_not_clear"}' | node -e '
   let d = ""; process.stdin.on("data", c => d += c).on("end", () => console.log("  deploy " + JSON.parse(d).id + " started"));'
 echo "Done. Watch the Logs tab on Render for: migrations applied → Seeded → API listening."
-unset RENDER_API_KEY DB SEED NEW_PEPPER NEW_DEK
+unset RENDER_API_KEY NEON_DATABASE_URL DEMO_PASSWORD DB SEED NEW_PEPPER NEW_DEK

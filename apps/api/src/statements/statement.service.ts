@@ -168,7 +168,7 @@ export class StatementService {
       doc.moveDown(0.6);
       doc.rect(40, doc.y, W, 30).fill('#fff4e5');
       doc.fillColor('#8a5300').fontSize(8.5).text(
-        'PAPER TRADING. Balances are virtual and every fill is simulated - no order was sent to an exchange and no real money moved. This is not a contract note, ledger of a registered broker or tax document.',
+        'SIMULATED TRADING. Balances are virtual and every fill is simulated - no order was sent to an exchange and no real money moved. This is not a contract note, ledger of a registered broker or tax document.',
         46,
         doc.y + 6,
         { width: W - 12 },
@@ -268,7 +268,7 @@ export class StatementService {
       for (let i = range.start; i < range.start + range.count; i++) {
         doc.switchToPage(i);
         doc.page.margins.bottom = 0; // footer sits in the margin; don't let it spill onto a new page
-        doc.font('Helvetica').fontSize(7.5).fillColor(grey).text(`${u.username} - ${c.from} to ${c.to} - Page ${i + 1} of ${range.count} - Simulated (paper) account`, 40, doc.page.height - 30, { width: W, align: 'center', lineBreak: false });
+        doc.font('Helvetica').fontSize(7.5).fillColor(grey).text(`${u.username} - ${c.from} to ${c.to} - Page ${i + 1} of ${range.count} - Simulated account`, 40, doc.page.height - 30, { width: W, align: 'center', lineBreak: false });
       }
       doc.end();
     });

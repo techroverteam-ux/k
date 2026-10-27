@@ -7,7 +7,7 @@ import { AUTH_FIELDS, ConflictPrompt, type AuthPayload } from '@/conflict';
 import { DEVICE_NAME, homeFor, useAuth } from '@/auth';
 import { Logo } from '@/icons';
 import { S, useTheme } from '@/theme';
-import { Button, Divider, Field, Notice, PaperPill, Row, T, toast } from '@/ui';
+import { Button, Divider, Field, Notice, Row, T, toast } from '@/ui';
 
 export default function Login() {
   const t = useTheme();
@@ -50,7 +50,7 @@ export default function Login() {
         <ScrollView contentContainerStyle={{ flexGrow: 1, padding: S[6], gap: S[5], justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
           {signedOut && !conflict && <Notice tone="warn">{signedOut}</Notice>}
           <View style={{ gap: S[4], marginBottom: S[4], display: conflict ? 'none' : 'flex' }}>
-            <Row style={{ justifyContent: 'space-between' }}><Logo size={44} brand={t.brand} /><PaperPill /></Row>
+            <Row style={{ justifyContent: 'space-between' }}><Logo size={44} brand={t.brand} /></Row>
             <T v="h1">{mfaToken ? 'Two-step verification' : 'Welcome back'}</T>
             <T c="text2">{mfaToken ? 'Enter the 6-digit code from your authenticator app.' : `Sign in to ${settings?.appName ?? 'The K'} with the username your broker or administrator gave you.`}</T>
           </View>
