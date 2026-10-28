@@ -141,7 +141,7 @@ function Seg<T extends string>({ value, items, onChange, label }: { value: T; it
 function Preferences() {
   const { prefs, set } = usePrefs();
   const rows: { icon: string; t: string; s: string; c: React.ReactNode }[] = [
-    { icon: 'sun', t: 'Theme', s: 'Follow your device, or always light or dark.', c: <Seg label="Theme" value={prefs.theme} onChange={(v) => set('theme', v)} items={[['system', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]} /> },
+    { icon: 'sun', t: 'Theme', s: 'System follows your device. Also in the top bar.', c: <Seg label="Theme" value={prefs.theme} onChange={(v) => set('theme', v)} items={[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]} /> },
     { icon: 'eye', t: 'Hide balances', s: 'Mask balance amounts on screen.', c: <Switch label="Hide balances" on={prefs.hideBalances} onChange={(v) => set('hideBalances', v)} /> },
     { icon: 'trend', t: 'Charts', s: 'Show price charts where available.', c: <Switch label="Charts" on={prefs.charts} onChange={(v) => set('charts', v)} /> },
     { icon: 'sound', t: 'Trade sounds', s: 'Play a tone when an order is placed, filled or rejected.', c: <Switch label="Trade sounds" on={prefs.sounds} onChange={(v) => set('sounds', v)} /> },

@@ -20,6 +20,12 @@ function StockPage() {
   const inst = useQuery<{ instrument: Instrument }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
+  // Focus mode hides the order panel so the chart can use the full width. Remembered in this browser.
+  const [focus, setFocusState] = useState(false);
+  const [tab, setTab] = useState<'perf' | 'contract'>('perf');
+  useEffect(() => { try { setFocusState(localStorage.getItem('k.chartFocus') === '1'); } catch { /* storage unavailable */ } }, []);
+  const setFocus = (v: boolean) => { setFocusState(v); try { localStorage.setItem('k.chartFocus', v ? '1' : '0'); } catch { /* ignore */ } };
+  const openOrder = (s: Side) => { setFocus(false); setTimeout(() => { window.dispatchEvent(new CustomEvent('td:side', { detail: s })); document.getElementById('order')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 0); };
 
   if (inst.error) return <ErrorState error={inst.error} retry={inst.refetch} />;
   if (!inst.data) return <SkeletonRows rows={6} />;
@@ -28,8 +34,8 @@ function StockPage() {
   const pos = hi > lo ? ((ltp - lo) / (hi - lo)) * 100 : 50;
 
   return (
-    <div className="cols">
-      <div className="stack" style={{ gap: 32 }}>
+    <div className={`cols${focus ? ' focus' : ''}`}>
+      <div className="stack" style={{ gap: 24 }}>
         <Link href="/trader/watchlist" className="t2 sm row" style={{ gap: 4 }}><Icon name="chevronLeft" size={16} />Back</Link>
         <header className="stack" style={{ gap: 12 }}>
           <div className="row" style={{ flexWrap: 'nowrap' }}>
@@ -38,7 +44,19 @@ function StockPage() {
               <h1 style={{ fontSize: 22 }}>{i.name.replace(/ — .*/, '')}</h1>
               <div className="t3">{i.symbol} · {i.exchange} {i.segment}</div>
             </div>
-            <a className="btn btn-sm" style={{ marginLeft: 'auto' }} href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`} target="_blank" rel="noopener noreferrer" title="Opens TradingView in a new tab. Its prices are real market data and will differ from this simulated feed.">
+            <div className="row hide-sm" style={{ marginLeft: 'auto', gap: 8, flexWrap: 'nowrap' }}>
+              {focus && (
+                <>
+                  <button className="btn btn-sm btn-sell" onClick={() => openOrder('SELL')}>Sell</button>
+                  <button className="btn btn-sm btn-buy" onClick={() => openOrder('BUY')}>Buy</button>
+                </>
+              )}
+              <Link className="btn btn-sm" href={`/trader/algo/new?instrument=${i.id}`} title="Build an automated strategy for this instrument"><Icon name="activity" size={16} />Automate</Link>
+              <button className="btn btn-sm" aria-pressed={focus} onClick={() => setFocus(!focus)} title={focus ? 'Show the order panel' : 'Hide the order panel and widen the chart'}>
+                {focus ? 'Show order panel' : 'Focus chart'}
+              </button>
+            </div>
+            <a className="btn btn-sm" href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`} target="_blank" rel="noopener noreferrer" title="Opens TradingView in a new tab. Its prices are real market data and will differ from this simulated feed.">
               <Icon name="external" size={16} />TradingView
             </a>
           </div>
@@ -50,8 +68,13 @@ function StockPage() {
 
         {prefs.charts ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : <p className="t3">Charts are turned off in Profile → Preferences.</p>}
 
-        <section className="section">
-          <h2>Performance</h2>
+        <section className="section" aria-label="Details">
+          <div className="tabs" role="tablist" aria-label="Details">
+            <button role="tab" aria-selected={tab === 'perf'} onClick={() => setTab('perf')}>Performance</button>
+            <button role="tab" aria-selected={tab === 'contract'} onClick={() => setTab('contract')}>Contract details</button>
+          </div>
+          {tab === 'perf' ? (
+            <div className="stack" style={{ gap: 16 }} role="tabpanel">
           <div>
             <div className="spread sm"><span className="t2">Today’s low</span><span className="t2">Today’s high</span></div>
             <div className="range" aria-label={`Day range ${q?.low} to ${q?.high}`}>
@@ -65,10 +88,9 @@ function StockPage() {
             <div className="metric"><div className="k">Best ask</div><div className="v num pos" style={{ fontSize: 18 }}>₹{inr(q?.ask)}</div></div>
             <div className="metric"><div className="k">Spread</div><div className="v num" style={{ fontSize: 18 }}>₹{q ? (Number(q.ask) - Number(q.bid)).toFixed(2) : '—'}</div></div>
           </div>
-        </section>
-
-        <section className="section">
-          <h2>Contract details</h2>
+            </div>
+          ) : (
+            <div role="tabpanel">
           <dl className="facts">
             {[
               ['Exchange', `${i.exchange} · ${i.segment}`],
@@ -81,6 +103,8 @@ function StockPage() {
               <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
             ))}
           </dl>
+            </div>
+          )}
         </section>
       </div>
       <div className="trade-bar">

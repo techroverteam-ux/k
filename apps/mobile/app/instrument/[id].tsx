@@ -1,9 +1,9 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Linking, Pressable, View, useWindowDimensions } from 'react-native';
+import { useEffect, useState } from 'react';
+import { CandleChart } from '@/candle-chart';
+import { Linking, Pressable, View } from 'react-native';
 import { tradeFeedback, usePrefs, usePrivate } from '@/prefs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Defs, Line, LinearGradient, Path, Stop } from 'react-native-svg';
 import { gql, newKey } from '@/api';
 import { useLiveQuotes, useSummary } from '@/screens';
 import { inr, R, S, shortSymbol, useTheme } from '@/theme';
@@ -21,9 +21,7 @@ export default function StockScreen() {
   const inst = useQuery<{ instrument: I }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
-  const [pts, setPts] = useState<number[]>([]);
   const [order, setOrder] = useState<Side | null>(s0 === 'BUY' || s0 === 'SELL' ? s0 : null);
-  useEffect(() => { if (q?.ltp) setPts((h) => [...h.slice(-199), Number(q.ltp)]); }, [q?.ltp, q?.ts]);
   const i = inst.data?.instrument;
   const lo = Number(q?.low ?? 0), hi = Number(q?.high ?? 0), ltp = Number(q?.ltp ?? 0);
   const pos = hi > lo ? Math.min(100, Math.max(0, ((ltp - lo) / (hi - lo)) * 100)) : 50;
@@ -46,7 +44,7 @@ export default function StockScreen() {
         <T v="hero">₹{inr(q?.ltp)}</T>
         <Row gap={6}><Change value={q?.change} pct={q?.changePct} size="md" /><T v="xs">vs previous close</T></Row>
       </View>
-      {prefs.charts ? <Chart pts={pts} /> : <T v="xs">Charts are turned off in Profile → Preferences.</T>}
+      {prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>}
       {i && <Button size="sm" icon="external" title="Open in TradingView" onPress={() => void Linking.openURL(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`)} />}
       {i && <T v="xs">TradingView shows real market data, which differs from this simulated feed.</T>}
       <Section title="Performance">
@@ -68,37 +66,6 @@ export default function StockScreen() {
       </Section>
       {i && order && <OrderSheet i={i} q={q} side={order} setSide={setOrder} initialQty={q0 ?? '1'} onClose={() => setOrder(null)} />}
     </Screen>
-  );
-}
-
-function Chart({ pts }: { pts: number[] }) {
-  const t = useTheme();
-  const { width } = useWindowDimensions();
-  const W = width - S[4] * 2, H = 180;
-  const d = useMemo(() => {
-    if (pts.length < 2) return null;
-    const mn = Math.min(...pts), mx = Math.max(...pts), span = mx - mn || mx * 0.001 || 1;
-    const xy = pts.map((v, k) => [(k / (pts.length - 1)) * W, 6 + (1 - (v - mn) / span) * (H - 12)]);
-    const line = xy.map(([x, y], k) => `${k ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    return { line, area: `${line} L${W},${H} L0,${H} Z`, mn, mx, up: pts[pts.length - 1] >= pts[0] };
-  }, [pts, W]);
-  const color = d?.up === false ? t.neg : t.pos;
-  return (
-    <View style={{ gap: S[3] }}>
-      {!d ? (
-        <View style={{ height: H, alignItems: 'center', justifyContent: 'center', backgroundColor: t.bg2, borderRadius: R.lg }}><T v="sm" c="text2">Waiting for live prices…</T></View>
-      ) : (
-        <Svg width={W} height={H} accessibilityLabel={`Price moved from ${pts[0]} to ${pts[pts.length - 1]} since you opened this screen`}>
-          <Defs><LinearGradient id="g" x1="0" y1="0" x2="0" y2="1"><Stop offset="0" stopColor={color} stopOpacity={0.15} /><Stop offset="1" stopColor={color} stopOpacity={0} /></LinearGradient></Defs>
-          {[0.25, 0.5, 0.75].map((f) => <Line key={f} x1={0} x2={W} y1={H * f} y2={H * f} stroke={t.line} strokeDasharray="3 4" />)}
-          <Path d={d.area} fill="url(#g)" />
-          <Path d={d.line} stroke={color} strokeWidth={2} fill="none" strokeLinejoin="round" />
-        </Svg>
-      )}
-      {d && <Spread><T v="xs">Range ₹{d.mn.toFixed(2)} – ₹{d.mx.toFixed(2)}</T><T v="xs">Live since opened</T></Spread>}
-      <Chips value="live" onChange={() => undefined} items={[{ k: 'live', label: 'Live' }, { k: '1w', label: '1W', disabled: true }, { k: '1m', label: '1M', disabled: true }, { k: '1y', label: '1Y', disabled: true }]} />
-      <T v="xs">Longer ranges need a market-data provider. The simulated feed has no history.</T>
-    </View>
   );
 }
 

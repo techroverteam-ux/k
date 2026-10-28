@@ -49,6 +49,8 @@ const schema = z
     MARKET_FEED: z.enum(['simulated']).default('simulated'),
     /** 'config' = use trading.marketHours; 'always_open' = ignore sessions (development/testing only). */
     MARKET_HOURS: z.enum(['config', 'always_open']).default('config'),
+    // How many days of 1-minute candles to keep in Postgres (daily candles are kept for good). ~3 MB per day for 20 instruments.
+    CANDLE_MINUTE_RETENTION_DAYS: z.coerce.number().int().min(3).max(365).default(30),
     THROTTLE_SCALE: z.coerce.number().int().min(1).max(100).default(1),
     /** Where daily log archives are written. In production use WORM storage (S3 Object Lock etc.). */
     LOG_ARCHIVE_DIR: z.string().default('./log-archive'),

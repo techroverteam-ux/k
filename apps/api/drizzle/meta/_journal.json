@@ -64,6 +64,20 @@
       "when": 1793069201390,
       "tag": "0008_pii_encryption",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793210611490,
+      "tag": "0009_candle_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793212620123,
+      "tag": "0010_automated_strategies",
+      "breakpoints": true
     }
   ]
 }

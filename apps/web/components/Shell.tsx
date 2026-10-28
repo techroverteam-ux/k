@@ -6,6 +6,7 @@ import { gql, onLiveState, subscribe } from '@/lib/api';
 import { playTone, usePrefs } from '@/lib/prefs';
 import { useToast } from './ui';
 import { Splash } from './Splash';
+import { ThemeMenu } from './ThemeMenu';
 import { homeFor, useAuth, type Role } from '@/lib/auth';
 import { inr, initials, shortSymbol } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
@@ -20,6 +21,7 @@ const NAV: Record<Role, Item[]> = {
     { href: '/trader/positions', label: 'Positions', icon: 'briefcase' },
     { href: '/trader/orders', label: 'Orders', icon: 'list' },
     { href: '/trader/funds', label: 'Funds', icon: 'wallet' },
+    { href: '/trader/algo', label: 'Algo trading', icon: 'activity' },
   ],
   BROKER: [
     { href: '/broker', label: 'Dashboard', icon: 'grid', exact: true },
@@ -97,6 +99,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         </Link>
         {me.role === 'TRADER' && <GlobalSearch />}
         <div className="top-actions">
+          <ThemeMenu />
           {settings?.helplineUrl && (
             <a href={settings.helplineUrl} target="_blank" rel="noopener noreferrer" className="icon-btn" aria-label="Helpline (opens in a new tab)" title="Helpline">
               <Icon name="chat" />
@@ -119,6 +122,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
                 <div className="divider" />
                 <Link role="menuitem" href="/account"><Icon name="shield" size={18} />Profile & security</Link>
                 <Link role="menuitem" href="/notifications"><Icon name="bell" size={18} />Notifications</Link>
+                {me.role === 'TRADER' && <Link role="menuitem" href="/trader/algo"><Icon name="activity" size={18} />Algo trading</Link>}
                 {settings?.helplineUrl && <a role="menuitem" href={settings.helplineUrl} target="_blank" rel="noopener noreferrer"><Icon name="info" size={18} />Contact support</a>}
                 <div className="divider" style={{ margin: '4px 0' }} />
                 <button role="menuitem" className="neg" onClick={() => void signOut()}><Icon name="logout" size={18} />Sign out</button>

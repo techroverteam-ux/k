@@ -2,6 +2,7 @@
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { API_URL, gql, newKey, subscribe } from './api';
 import { NUM_SCALE, usePrefs, usePrivate } from './prefs';
 import { useSplashActive } from './splash';
@@ -30,11 +31,38 @@ export function useLiveQuotes(ids: string[]) {
   return q;
 }
 
-/** Bell with unread count, used in headers. */
+/** Bell with unread count, used in headers; the theme switch sits beside it. */
 export function BellButton() {
   const { data } = useQuery<{ unreadNotificationCount: number }>(`{ unreadNotificationCount }`, undefined, 30_000);
   const n = data?.unreadNotificationCount ?? 0;
-  return <IconButton icon="bell" label={`Notifications${n ? `, ${n} unread` : ''}`} badge={n} onPress={() => router.push('/notifications')} />;
+  return (
+    <>
+      <ThemeButton />
+      <IconButton icon="bell" label={`Notifications${n ? `, ${n} unread` : ''}`} badge={n} onPress={() => router.push('/notifications')} />
+    </>
+  );
+}
+
+const THEME_ORDER = ['system', 'light', 'dark'] as const;
+const THEME_INFO = {
+  system: { label: 'System', d: 'M3 5h18v11H3zM8 20h8M12 16v4' },
+  light: { label: 'Light', d: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4' },
+  dark: { label: 'Dark', d: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z' },
+} as const;
+
+/** Header switch: System → Light → Dark. Same setting as Profile → Preferences → Theme. */
+export function ThemeButton() {
+  const t = useTheme();
+  const { prefs, set } = usePrefs();
+  const cur = THEME_INFO[prefs.theme];
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(prefs.theme) + 1) % THEME_ORDER.length];
+  return (
+    <Pressable onPress={() => { set('theme', next); toast(`Theme: ${THEME_INFO[next].label}`); }} accessibilityRole="button"
+      accessibilityLabel={`Theme: ${cur.label}. Double-tap for ${THEME_INFO[next].label}.`} hitSlop={6}
+      style={({ pressed }) => ({ width: CTL.tap, height: CTL.tap, borderRadius: R.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? t.bg3 : 'transparent' })}>
+      <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={t.text2} strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round"><Path d={cur.d} /></Svg>
+    </Pressable>
+  );
 }
 
 /* ====================================================================== summary */
@@ -512,7 +540,7 @@ function Seg<K extends string>({ value, items, onChange }: { value: K; items: [K
 function Preferences() {
   const { prefs, set } = usePrefs();
   const rows: { icon: 'sun' | 'eye' | 'activity' | 'sound' | 'type' | 'bold' | 'list'; t: string; s: string; c: React.ReactNode }[] = [
-    { icon: 'sun', t: 'Theme', s: 'Auto follows your phone.', c: <Seg value={prefs.theme} onChange={(v) => set('theme', v)} items={[['system', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]} /> },
+    { icon: 'sun', t: 'Theme', s: 'System follows your phone. Also the button next to the bell.', c: <Seg value={prefs.theme} onChange={(v) => set('theme', v)} items={[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]} /> },
     { icon: 'eye', t: 'Hide balances', s: 'Mask all balance amounts.', c: <Switch label="Hide balances" on={prefs.hideBalances} onChange={(v) => set('hideBalances', v)} /> },
     { icon: 'activity', t: 'Charts', s: 'Show app charts where available.', c: <Switch label="Charts" on={prefs.charts} onChange={(v) => set('charts', v)} /> },
     { icon: 'sound', t: 'Trade sounds', s: 'Play tones (and vibrate) for trade events.', c: <Switch label="Trade sounds" on={prefs.sounds} onChange={(v) => set('sounds', v)} /> },

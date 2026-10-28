@@ -1,5 +1,6 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { gql, setStepUpHandler } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { inr, tone } from '@/lib/format';
@@ -51,7 +52,8 @@ export function Dialog({ title, sub, children, onClose }: { title: string; sub?:
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); prev?.focus(); };
   }, [onClose]);
-  return (
+  // Rendered at the end of <body>, so no sticky panel, chart or other stacking context can cover it.
+  const node = (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t" ref={ref}>
         <div className="spread" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
@@ -65,6 +67,7 @@ export function Dialog({ title, sub, children, onClose }: { title: string; sub?:
       </div>
     </div>
   );
+  return typeof document === 'undefined' ? node : createPortal(node, document.body);
 }
 
 /** Confirmation step for consequential actions: shows exactly what will happen. */

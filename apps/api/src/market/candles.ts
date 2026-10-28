@@ -1,14 +1,16 @@
 /**
- * OHLC candle history for the SIMULATED feed.
+ * OHLC candle history for the SIMULATED feed: an in-memory window of recent candles, backed by Postgres.
  *
- * - Live ticks are folded into 1-minute bars as they happen.
- * - At start-up each instrument gets a synthetic back-history so charts are not empty:
+ * - Live ticks are folded into 1-minute bars as they happen. MarketDataService saves changed bars to
+ *   Postgres every minute (candles_1m for minutes, candles_1d for whole days) and restores them at start-up,
+ *   so history and the last price survive restarts. Minutes older than the memory window are read from Postgres.
+ * - The first time an instrument has no stored history, it gets a synthetic back-history so charts aren't empty:
  *     · daily bars for the past year, ending at the previous close;
- *     · 1-minute bars for the last 5 days, continuing from those daily bars, passing through the
- *       previous close at IST midnight and ending at the current price.
- *   The back-history is generated from a per-instrument seed, so it looks the same after a restart.
- * - 5m / 15m / 1h candles are aggregated from the 1-minute bars. 1D uses the daily bars for older days and
- *   the 1-minute bars for the days they cover, so intraday and daily views agree.
+ *     · 1-minute bars for the last 5 days, one day at a time between those daily closes, then today from the
+ *       previous close to the current price.
+ *   It is generated from a per-instrument seed, so it is the same wherever it is generated.
+ * - 5m / 15m / 1h candles are aggregated from 1-minute bars. 1D uses daily bars for days before the memory
+ *   window and the 1-minute bars for the days inside it, so intraday and daily views agree.
  * - The simulated feed runs every day, so the history has no weekend gaps either.
  *
  * Buckets are aligned to India Standard Time (UTC+05:30), so hourly candles start on the hour IST and
@@ -27,13 +29,15 @@ export interface Bar {
   c: number;
 }
 
-const MIN = 60_000;
-const DAY = 86_400_000;
+export const MIN = 60_000;
+export const DAY = 86_400_000;
 const IST = 330 * MIN;
-const MINUTE_BARS = 8 * 24 * 60; // keep eight days of 1-minute bars (about 11.5k per instrument)
+/** Days of 1-minute bars kept in memory (older ones are read from Postgres). */
+export const MEMORY_DAYS = 3;
+const MINUTE_BARS = MEMORY_DAYS * 24 * 60;
 const BACKFILL_MINUTE_DAYS = 5;
 const BACKFILL_DAYS = 365;
-const SIZE: Record<Exclude<CandleInterval, '1D'>, number> = { '1m': MIN, '5m': 5 * MIN, '15m': 15 * MIN, '1h': 60 * MIN };
+export const SIZE: Record<Exclude<CandleInterval, '1D'>, number> = { '1m': MIN, '5m': 5 * MIN, '15m': 15 * MIN, '1h': 60 * MIN };
 
 /** Start of the IST-aligned bucket of `size` ms that contains `t`. */
 export function bucketStart(t: number, size: number): number {
@@ -102,9 +106,12 @@ export class CandleStore {
     return this.minutes.has(id);
   }
 
-  /** Create the synthetic back-history for one instrument (once). */
-  seed(id: string, ltpMinor: number, prevCloseMinor: number, tickMinor: number, now = Date.now()) {
-    if (this.minutes.has(id)) return;
+  /**
+   * Create the synthetic back-history for one instrument (once). Returns every generated 1-minute bar
+   * (more than the memory window keeps) so the caller can store them.
+   */
+  seed(id: string, ltpMinor: number, prevCloseMinor: number, tickMinor: number, now = Date.now()): Bar[] {
+    if (this.minutes.has(id)) return [];
     const tick = Math.max(1, tickMinor);
     const r = rng(hash(id));
     const today = bucketStart(now, DAY);
@@ -136,7 +143,57 @@ export class CandleStore {
       mins.push(...barsFromPath(r, path, times, tick, isToday ? 0.0004 : 0.0002));
     }
     this.minutes.set(id, mins);
+    const generated = mins.map((b) => ({ ...b }));
+    this.trim(id);
+    return generated;
   }
+
+  /** Load stored history (both lists oldest first). Minutes should start at an IST midnight. */
+  restore(id: string, minutes: Bar[], daily: Bar[]) {
+    this.minutes.set(id, minutes);
+    this.daily.set(id, daily);
+    this.trim(id);
+  }
+
+  /** 1-minute bars starting at or after `t` (live objects; callers must not modify them). */
+  minutesSince(id: string, t: number): Bar[] {
+    const list = this.minutes.get(id) ?? [];
+    let i = list.length;
+    while (i > 0 && list[i - 1].t >= t) i--;
+    return list.slice(i);
+  }
+
+  /** Every daily bar this store knows, oldest first: stored days plus days built from minutes. */
+  allDaily(id: string): Bar[] {
+    return this.candles(id, '1D', Number.MAX_SAFE_INTEGER);
+  }
+
+  /** Start of the in-memory minute window, or undefined when there are no minutes. */
+  firstMinute(id: string): number | undefined {
+    return this.minutes.get(id)?.[0]?.t;
+  }
+
+  last(id: string): Bar | undefined {
+    const m = this.minutes.get(id);
+    return m?.[m.length - 1] ?? this.daily.get(id)?.at(-1);
+  }
+
+  /** Drop whole days from the front of the minute window once it exceeds MEMORY_DAYS; they become daily bars. */
+  private trim(id: string) {
+    const list = this.minutes.get(id);
+    if (!list || list.length <= MINUTE_BARS) return;
+    const cutDay = bucketStart(list[list.length - MINUTE_BARS].t, DAY) + DAY;
+    const cut = list.findIndex((b) => b.t >= cutDay);
+    const drop = list.splice(0, cut < 0 ? list.length : cut);
+    const daily = this.daily.get(id) ?? [];
+    for (const d of aggregate(drop, DAY)) {
+      const last = daily[daily.length - 1];
+      if (!last || d.t > last.t) daily.push(d);
+      else if (last.t === d.t) daily[daily.length - 1] = d;
+    }
+    this.daily.set(id, daily);
+  }
+
 
   /** Fold a live trade price into the current 1-minute bar. */
   record(id: string, priceMinor: number, at = Date.now()) {
@@ -150,15 +207,7 @@ export class CandleStore {
       last.c = priceMinor;
     } else if (!last || t > last.t) {
       list.push({ t, o: priceMinor, h: priceMinor, l: priceMinor, c: priceMinor });
-      if (list.length > MINUTE_BARS) {
-        // Trim whole days only, so minutes always start at IST midnight; dropped days become daily bars.
-        const cutDay = bucketStart(list[list.length - MINUTE_BARS].t, DAY) + DAY;
-        const cut = list.findIndex((b) => b.t >= cutDay);
-        const drop = list.splice(0, cut < 0 ? list.length : cut);
-        const daily = this.daily.get(id) ?? [];
-        for (const d of aggregate(drop, DAY)) if (!daily.length || d.t > daily[daily.length - 1].t) daily.push(d);
-        this.daily.set(id, daily);
-      }
+      if (list.length > MINUTE_BARS) this.trim(id);
     }
   }
 
@@ -170,8 +219,13 @@ export class CandleStore {
     const mins = this.minutes.get(id) ?? [];
     let out: Bar[];
     if (interval === '1D') {
-      const firstMinuteDay = mins.length ? mins[0].t : Infinity; // always an IST midnight
-      out = [...(this.daily.get(id) ?? []).filter((b) => b.t < firstMinuteDay).map((b) => ({ ...b })), ...aggregate(mins, DAY)];
+      // Days before the minute window come from daily bars; days inside it are built from minutes. If the
+      // window starts part-way through a day (e.g. after a restart) and a stored daily bar exists for that day,
+      // the stored bar is used for it, so no day appears twice.
+      const daily = this.daily.get(id) ?? [];
+      let cut = mins.length ? bucketStart(mins[0].t, DAY) : Infinity;
+      if (mins.length && mins[0].t !== cut && daily.some((d) => d.t === cut)) cut += DAY;
+      out = [...daily.filter((b) => b.t < cut).map((b) => ({ ...b })), ...aggregate(mins.filter((b) => b.t >= cut), DAY)];
     } else if (interval === '1m') out = mins.map((b) => ({ ...b }));
     else out = aggregate(mins, SIZE[interval]);
     if (before !== undefined) out = out.filter((b) => b.t < before);
@@ -179,7 +233,7 @@ export class CandleStore {
   }
 }
 
-function aggregate(bars: Bar[], size: number): Bar[] {
+export function aggregate(bars: Bar[], size: number): Bar[] {
   const out: Bar[] = [];
   for (const b of bars) {
     const t = bucketStart(b.t, size);

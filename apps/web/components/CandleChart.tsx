@@ -88,6 +88,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
   const [last, setLast] = useState<Bar | null>(null);
   const [hover, setHover] = useState<Bar | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadedIv, setLoadedIv] = useState<Interval | null>(null); // timeframe of the candles on the chart
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -115,7 +116,8 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
     setLoadingOlder(true);
     const g = gen.current;
     try {
-      const page = await fetchPage(ivRef.current, barMs(bars.current[0]));
+      const first = bars.current[0].time;
+      const page = (await fetchPage(ivRef.current, barMs(bars.current[0]))).filter((b) => b.time < first);
       if (g !== gen.current) return false;
       if (!page.length) {
         o.done = true;
@@ -216,6 +218,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
       const g = fresh ? ++gen.current : gen.current;
       if (fresh) {
         setState('loading');
+        setLoadedIv(null);
         older.current = { busy: false, done: false };
       }
       try {
@@ -233,6 +236,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
         if (fresh) showLatest();
         setLast(bars.current[bars.current.length - 1] ?? null);
         setError(null);
+        setLoadedIv(interval);
         setState('ready');
       } catch (e) {
         if (fresh && g === gen.current) {
@@ -264,7 +268,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
 
   // Live: update the forming candle (or start a new one) from each quote.
   useEffect(() => {
-    if (state !== 'ready' || !quote?.ltp) return;
+    if (state !== 'ready' || loadedIv !== interval || !quote?.ltp) return;
     const price = Number(quote.ltp);
     const ms = Date.parse(quote.ts) || Date.now();
     const time = bucketSec(ms, STEP_MS[interval]) as UTCTimestamp;
@@ -281,7 +285,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
     const t = theme();
     range.current?.update(rangeData([bar], t.pos, t.neg)[0]);
     setLast(bar);
-  }, [quote?.ltp, quote?.ts, interval, state]);
+  }, [quote?.ltp, quote?.ts, interval, state, loadedIv]);
 
   // Resize cleanly when the chart is expanded or collapsed; Esc collapses; lock page scroll while expanded.
   useEffect(() => {
@@ -346,13 +350,13 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
     }
   }
   useEffect(() => {
-    if (state === 'ready' && pending.current) {
+    if (state === 'ready' && loadedIv === interval && pending.current) {
       const p = pending.current;
       pending.current = null;
       void showRange(p.fromMs, p.toMs, interval);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, interval]);
+  }, [state, interval, loadedIv]);
 
   /** Is there at least one candle in [fromMs, toMs)? One small request. */
   async function hasCandles(iv: Interval, fromMs: number, toMs: number) {

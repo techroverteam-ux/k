@@ -91,16 +91,16 @@ export class MarketResolver {
 
   @AllowWithoutMfa()
   @Query(() => [Candle], { description: 'Recent OHLC candles for an instrument, oldest first (simulated history in this build).' })
-  candles(
+  async candles(
     @Args('instrumentId', { type: () => ID }) instrumentId: string,
     @Args('interval', { type: () => CandleIntervalGql }) interval: CandleIntervalGql,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
     @Args('before', { type: () => Float, nullable: true, description: 'Only candles that start before this time (epoch ms). Use it to page back through history.' }) before?: number,
-  ): Candle[] {
+  ): Promise<Candle[]> {
     if (!this.market.instrument(instrumentId)) throw notFound('Instrument');
     const n = Math.min(Math.max(Math.trunc(limit ?? 300), 1), 1000);
     if (before !== undefined && !Number.isFinite(before)) throw badInput('Invalid time.');
-    return this.market.candles(instrumentId, INTERVAL[interval], n, before).map((b) => ({
+    return (await this.market.candles(instrumentId, INTERVAL[interval], n, before)).map((b) => ({
       t: b.t,
       open: formatMoney(BigInt(b.o)),
       high: formatMoney(BigInt(b.h)),

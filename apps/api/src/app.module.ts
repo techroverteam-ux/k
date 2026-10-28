@@ -29,6 +29,9 @@ import { DbModule, DbService } from './db/db';
 import { LedgerService } from './ledger/ledger.service';
 import { MarketDataService } from './market/market-data.service';
 import { MarketResolver } from './market/market.resolver';
+import { AlgoResolver } from './algo/algo.resolver';
+import { AlgoRunnerService } from './algo/algo-runner.service';
+import { AlgoService } from './algo/algo.service';
 import { NotificationsService } from './notifications/notifications.service';
 import { PaymentsResolver } from './payments/payments.resolver';
 import { PaymentsService } from './payments/payments.service';
@@ -186,6 +189,9 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     StatementResolver,
     ConsentResolver,
     MarketResolver,
+    AlgoService,
+    AlgoRunnerService,
+    AlgoResolver,
     TradingResolver,
     OrderFieldsResolver,
     PositionFieldsResolver,

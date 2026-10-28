@@ -22,6 +22,7 @@ import { DbService } from '../src/db/db';
 import { appendFileSync, rmSync } from 'fs';
 import { sessionStatus } from '../src/trading/market-hours';
 import { ConfigService } from '../src/config-mgmt/config.service';
+import { AlgoRunnerService } from '../src/algo/algo-runner.service';
 import { pubsub, TOPIC } from '../src/notifications/notifications.service';
 import { decryptField, encryptField, needsRotation, resetKeyRing } from '../src/common/crypto';
 
@@ -880,5 +881,91 @@ describe('input validation', () => {
     // ordinary Unicode (names, ₹, emoji) is fine
     const ok = await gql(`query($q:String!){ searchInstruments(query:$q){ id } }`, { q: 'Rāmā ₹ 🙂' }, { token: t.accessToken });
     expect(ok.errors).toBeUndefined();
+  });
+});
+
+describe('automated trading (paper)', () => {
+  const F = 'id status version position entryPrice stopReason today { pnl orders }';
+  const SAVE = `mutation($i:SaveStrategyInput!){ saveStrategy(input:$i){ ${F} } }`;
+  let instrumentId: string;
+  const always = { side: 'LONG', entry: [{ left: { type: 'price', field: 'close' }, op: 'above', right: { type: 'number', value: 1 } }], exit: [], takeProfitPct: 50 };
+  const input = (rules: unknown, extra: Record<string, unknown> = {}) => ({ name: 'Test strategy', instrumentId, interval: 'M1', rules: JSON.stringify(rules), quantity: 2, maxDailyLoss: '100000', maxOrdersPerDay: 10, ...extra });
+
+  beforeAll(async () => {
+    const { rows } = await pg.query(`SELECT id FROM instruments WHERE symbol = 'SBIN26NOVFUT'`);
+    instrumentId = rows[0].id;
+  });
+
+  it('validates rules and keeps strategies private to their owner', async () => {
+    const t = await login('trader.one');
+    const bad = await gql(SAVE, { i: input({ side: 'LONG', entry: always.entry, exit: [] }) }, { token: t.accessToken });
+    expect(code(bad)).toBe('BAD_USER_INPUT');
+    expect(bad.errors![0].message).toMatch(/exit condition, a stop-loss or a take-profit/);
+    const ok = await gql(SAVE, { i: input(always) }, { token: t.accessToken });
+    expect(ok.errors).toBeUndefined();
+    expect(ok.data.saveStrategy.status).toBe('DRAFT');
+    const other = await login('trader.two');
+    const peek = await gql(`query($id:ID!){ strategy(id:$id){ id } }`, { id: ok.data.saveStrategy.id }, { token: other.accessToken });
+    expect(code(peek)).toBe('NOT_FOUND');
+  });
+
+  it('backtests on stored candles and saves the run', async () => {
+    const t = await login('trader.one');
+    const rules = { side: 'LONG', entry: [{ left: { type: 'ema', period: 9 }, op: 'crossesAbove', right: { type: 'ema', period: 21 } }], exit: [{ left: { type: 'ema', period: 9 }, op: 'crossesBelow', right: { type: 'ema', period: 21 } }], stopLossPct: 1 };
+    const s = (await gql(SAVE, { i: input(rules, { interval: 'M15' }) }, { token: t.accessToken })).data.saveStrategy;
+    const r = await gql(`mutation($id:ID!){ backtestStrategy(id:$id, days:3){ id metrics trades equity } }`, { id: s.id }, { token: t.accessToken });
+    expect(r.errors).toBeUndefined();
+    const m = JSON.parse(r.data.backtestStrategy.metrics);
+    expect(m.candles).toBeGreaterThan(100);
+    expect(m.trades).toBe(JSON.parse(r.data.backtestStrategy.trades).length);
+    expect(Number.isInteger(m.netPnl)).toBe(true);
+    const runs = await gql(`query($id:ID!){ strategyRuns(strategyId:$id){ id } }`, { id: s.id }, { token: t.accessToken });
+    expect(runs.data.strategyRuns).toHaveLength(1);
+  });
+
+  it('needs the session consent to start, trades through OrdersService, and closes the position on stop', async () => {
+    const t = await freshLogin('trader.three'); // fresh session: rules not accepted yet
+    const s = (await gql(SAVE, { i: input(always) }, { token: t.accessToken })).data.saveStrategy;
+    const blocked = await gql(`mutation($id:ID!){ startStrategy(id:$id){ id } }`, { id: s.id }, { token: t.accessToken });
+    expect(code(blocked)).toBe('FORBIDDEN');
+    await acceptConsent(t.accessToken);
+    const started = await gql(`mutation($id:ID!){ startStrategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken });
+    expect(started.data.startStrategy.status).toBe('RUNNING');
+
+    const market = app.get(MarketDataService);
+    const runner = app.get(AlgoRunnerService);
+    const now = Date.now();
+    market.setPrice(instrumentId, 80000n); // a tick in the current minute, so that candle exists
+    await runner.cycle(now + 63_000); // ...and has now closed: the entry rule fires
+    const after = (await gql(`query($id:ID!){ strategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken })).data.strategy;
+    expect(after.position).toBe(2);
+    await runner.cycle(now + 64_000); // same candle again: no second entry
+    const { rows: o1 } = await pg.query(`SELECT status, client_ip FROM orders WHERE strategy_id = $1`, [s.id]);
+    expect(o1).toHaveLength(1);
+    expect(o1[0]).toMatchObject({ status: 'FILLED', client_ip: 'algo' });
+
+    const stopped = await gql(`mutation($id:ID!){ stopStrategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken });
+    expect(stopped.data.stopStrategy).toMatchObject({ status: 'STOPPED', position: 0 });
+    const { rows: o2 } = await pg.query(`SELECT side FROM orders WHERE strategy_id = $1 ORDER BY created_at`, [s.id]);
+    expect(o2.map((r) => r.side)).toEqual(['BUY', 'SELL']);
+    const ev = await gql(`query($id:ID!){ strategyEvents(strategyId:$id){ kind } }`, { id: s.id }, { token: t.accessToken });
+    expect(ev.data.strategyEvents.map((e: { kind: string }) => e.kind)).toEqual(['STOPPED', 'EXIT', 'ENTRY', 'STARTED']);
+  });
+
+  it('stops by itself and flattens when the daily loss limit is hit', async () => {
+    const t = await freshLogin('trader.three');
+    await acceptConsent(t.accessToken);
+    const s = (await gql(SAVE, { i: input(always, { name: 'Loss guard', maxDailyLoss: '10' }) }, { token: t.accessToken })).data.saveStrategy;
+    await gql(`mutation($id:ID!){ startStrategy(id:$id){ id } }`, { id: s.id }, { token: t.accessToken });
+    const market = app.get(MarketDataService);
+    const runner = app.get(AlgoRunnerService);
+    const now = Date.now();
+    market.setPrice(instrumentId, 80000n);
+    await runner.cycle(now + 63_000);
+    market.setPrice(instrumentId, 79000n); // ₹10 × 2 = ₹20 open loss > ₹10 limit
+    await runner.cycle(now + 65_000);
+    const st = (await gql(`query($id:ID!){ strategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken })).data.strategy;
+    expect(st).toMatchObject({ status: 'STOPPED', position: 0 });
+    expect(st.stopReason).toMatch(/Daily loss limit/);
   });
 });

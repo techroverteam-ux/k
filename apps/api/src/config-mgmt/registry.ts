@@ -77,6 +77,9 @@ export const CONFIG_REGISTRY = {
     ],
     description: 'Rules shown after every trader sign-in; acceptance is recorded.',
   },
+  'algo.enabled': { schema: z.boolean(), default: true, description: 'Let traders build, backtest and run automated (paper) strategies.' },
+  'algo.maxRunningPerUser': { schema: z.number().int().min(0).max(20), default: 3, description: 'How many strategies one trader may run at the same time.' },
+  'algo.maxStrategiesPerUser': { schema: z.number().int().min(1).max(100), default: 20, description: 'How many strategies one trader may save.' },
   'signup.enabled': { schema: z.boolean(), default: true, description: 'Allow people to apply for a trader account from the login screen (verified by mobile OTP; a Super Admin must approve it).' },
   'ui.helplineUrl': { schema: z.string().url().or(z.literal('')), default: '', description: 'Support link (e.g. WhatsApp business link).' },
 } as const;

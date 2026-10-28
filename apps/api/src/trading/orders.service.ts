@@ -124,9 +124,15 @@ export class OrdersService implements OnModuleInit {
 
   // ------------------------------------------------------------------ place / cancel
 
-  async place(actor: Actor, input: PlaceOrderInput, ip: string): Promise<OrderRow> {
+  /**
+   * Place an order for the actor's own account.
+   * `automation` is for orders placed by a running strategy (algo/): the trader accepted the trading rules
+   * when they started it (checked there), so the per-session consent check is skipped, and the order is
+   * stamped with the strategy. Every other check below applies exactly as for a manual order.
+   */
+  async place(actor: Actor, input: PlaceOrderInput, ip: string, automation?: { strategyId: string }): Promise<OrderRow> {
     if (actor.role !== 'TRADER') throw new AppError('FORBIDDEN', 'Only traders can place orders on their own account.');
-    await this.consent.assertConsented(actor); // rules accepted for this signed-in session
+    if (!automation) await this.consent.assertConsented(actor); // rules accepted for this signed-in session
     if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw badInput('Quantity must be a positive whole number.');
     if (!/^[A-Za-z0-9_-]{8,120}$/.test(input.idempotencyKey)) throw badInput('Invalid idempotency key.');
     if (input.type === 'LIMIT' && (!input.limitPriceMinor || input.limitPriceMinor <= 0n)) throw badInput('Enter a limit price.');
@@ -201,6 +207,7 @@ export class OrdersService implements OnModuleInit {
           userAgent: requestContext.get()?.userAgent,
           sessionId: actor.sessionId,
           requestId: requestContext.get()?.requestId,
+          strategyId: automation?.strategyId ?? null,
         })
         .returning();
 
@@ -217,7 +224,7 @@ export class OrdersService implements OnModuleInit {
         entityId: o.id,
         outcome: reject ? 'DENIED' : 'SUCCESS',
         ip,
-        metadata: { symbol: inst.symbol, side: o.side, type: o.type, qty: o.quantity, limit: o.limitPriceMinor, trigger: o.triggerPriceMinor, status: final.status, reason: reject, venue: 'SIMULATED' },
+        metadata: { symbol: inst.symbol, side: o.side, type: o.type, qty: o.quantity, limit: o.limitPriceMinor, trigger: o.triggerPriceMinor, status: final.status, reason: reject, venue: 'SIMULATED', strategyId: automation?.strategyId },
       });
       return { order: final, replay: false };
     });

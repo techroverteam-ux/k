@@ -19,6 +19,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -253,6 +254,21 @@ export const instruments = pgTable(
   (t) => [index('instruments_exchange_idx').on(t.exchange, t.segment)],
 );
 
+// ---------------- Price history (candles) ----------------
+// OHLC candles from the price feed (simulated in this build), prices in paise like everything else.
+// candles_1m keeps a rolling window of 1-minute candles; candles_1d keeps one row per IST day for good.
+// Both are written by MarketDataService in batches; nothing financial depends on them.
+const candleColumns = () => ({
+  instrumentId: uuid('instrument_id').notNull().references(() => instruments.id, { onDelete: 'cascade' }),
+  t: ts('t').notNull(),
+  o: money('o').notNull(),
+  h: money('h').notNull(),
+  l: money('l').notNull(),
+  c: money('c').notNull(),
+});
+export const candles1m = pgTable('candles_1m', candleColumns(), (t) => [primaryKey({ name: 'candles_1m_pk', columns: [t.instrumentId, t.t] })]);
+export const candles1d = pgTable('candles_1d', candleColumns(), (t) => [primaryKey({ name: 'candles_1d_pk', columns: [t.instrumentId, t.t] })]);
+
 export const watchlistItems = pgTable(
   'watchlist_items',
   {
@@ -296,6 +312,8 @@ export const orders = pgTable(
     userAgent: varchar('user_agent', { length: 400 }),
     sessionId: uuid('session_id'),
     requestId: varchar('request_id', { length: 64 }),
+    /** Set when an automated strategy placed the order (see strategies). */
+    strategyId: uuid('strategy_id'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
     filledAt: ts('filled_at'),
@@ -461,3 +479,82 @@ export const tradingConsents = pgTable(
 );
 export type ConsentRow = typeof tradingConsents.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
+
+// ---------------- Automated trading (paper) ----------------
+// Rule-based strategies that a trader builds, backtests on stored candles, and runs on the simulated feed.
+// Orders they place go through OrdersService like any other order and carry orders.strategy_id.
+export const strategyStatusEnum = pgEnum('strategy_status', ['DRAFT', 'RUNNING', 'STOPPED']);
+
+export const strategies = pgTable(
+  'strategies',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 80 }).notNull(),
+    instrumentId: uuid('instrument_id').notNull().references(() => instruments.id, { onDelete: 'restrict' }),
+    /** Candle size: M1 | M5 | M15 | H1 | D1. */
+    interval: varchar('interval', { length: 4 }).notNull(),
+    /** Validated rule set (algo/rules.ts). */
+    rules: jsonb('rules').notNull(),
+    quantity: integer('quantity').notNull(),
+    /** Bumped on every edit; backtests and orders record the version they used. */
+    version: integer('version').notNull().default(1),
+    status: strategyStatusEnum('status').notNull().default('DRAFT'),
+    // guardrails
+    maxDailyLossMinor: money('max_daily_loss_minor').notNull(),
+    maxOrdersPerDay: integer('max_orders_per_day').notNull().default(20),
+    // live state while running (the strategy's own position, separate from manual trades)
+    posQty: integer('pos_qty').notNull().default(0),
+    entryPriceMinor: money('entry_price_minor'),
+    entryAt: ts('entry_at'),
+    lastBarAt: ts('last_bar_at'),
+    rejectStreak: integer('reject_streak').notNull().default(0),
+    startedAt: ts('started_at'),
+    startedSessionId: uuid('started_session_id'),
+    stoppedAt: ts('stopped_at'),
+    stopReason: varchar('stop_reason', { length: 200 }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [index('strategies_user_idx').on(t.userId, t.updatedAt), index('strategies_status_idx').on(t.status)],
+);
+export type StrategyRow = typeof strategies.$inferSelect;
+
+export const strategyRuns = pgTable(
+  'strategy_runs',
+  {
+    id: id(),
+    strategyId: uuid('strategy_id').notNull().references(() => strategies.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    interval: varchar('interval', { length: 4 }).notNull(),
+    fromAt: ts('from_at').notNull(),
+    toAt: ts('to_at').notNull(),
+    rules: jsonb('rules').notNull(),
+    quantity: integer('quantity').notNull(),
+    metrics: jsonb('metrics').notNull(),
+    trades: jsonb('trades').notNull(),
+    equity: jsonb('equity').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('strategy_runs_strategy_idx').on(t.strategyId, t.createdAt)],
+);
+export type StrategyRunRow = typeof strategyRuns.$inferSelect;
+
+export const strategyEvents = pgTable(
+  'strategy_events',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    strategyId: uuid('strategy_id').notNull().references(() => strategies.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    at: ts('at').notNull().defaultNow(),
+    /** STARTED | STOPPED | ENTRY | EXIT | BLOCKED | ERROR */
+    kind: varchar('kind', { length: 20 }).notNull(),
+    message: varchar('message', { length: 300 }).notNull(),
+    orderId: uuid('order_id'),
+    /** Realised P&L of a closed trade, paise (EXIT only). */
+    pnlMinor: money('pnl_minor'),
+  },
+  (t) => [index('strategy_events_strategy_idx').on(t.strategyId, t.at)],
+);
+export type StrategyEventRow = typeof strategyEvents.$inferSelect;
