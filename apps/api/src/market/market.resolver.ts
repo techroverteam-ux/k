@@ -3,7 +3,9 @@ import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AllowWithoutMfa, CurrentActor, Public } from '../common/context';
 import { badInput, notFound } from '../common/errors';
-import { AppSettings, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
+import { AppSettings, Candle, CandleIntervalGql, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
+import { formatMoney } from '../common/money';
+import type { CandleInterval } from './candles';
 import { API_VERSION } from '../common/version';
 import { clampLimit, toInstrument, toQuote } from '../common/mappers';
 import { ConfigService } from '../config-mgmt/config.service';
@@ -14,6 +16,7 @@ import { pubsub, TOPIC } from '../notifications/notifications.service';
 import { MarketDataService, type Quote as QuoteData } from './market-data.service';
 
 export const MAX_LISTS = 10;
+const INTERVAL: Record<CandleIntervalGql, CandleInterval> = { M1: '1m', M5: '5m', M15: '15m', H1: '1h', D1: '1D' };
 const MAX_PER_LIST = 50;
 
 @Resolver()
@@ -84,6 +87,24 @@ export class MarketResolver {
   quotes(@Args('instrumentIds', { type: () => [ID] }) ids: string[]) {
     if (ids.length > 100) throw badInput('Max 100 instruments per request.');
     return ids.map((id) => this.market.quote(id)).filter((q): q is QuoteData => !!q).map(toQuote);
+  }
+
+  @AllowWithoutMfa()
+  @Query(() => [Candle], { description: 'Recent OHLC candles for an instrument, oldest first (simulated history in this build).' })
+  candles(
+    @Args('instrumentId', { type: () => ID }) instrumentId: string,
+    @Args('interval', { type: () => CandleIntervalGql }) interval: CandleIntervalGql,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Candle[] {
+    if (!this.market.instrument(instrumentId)) throw notFound('Instrument');
+    const n = Math.min(Math.max(Math.trunc(limit ?? 300), 1), 1000);
+    return this.market.candles(instrumentId, INTERVAL[interval], n).map((b) => ({
+      t: b.t,
+      open: formatMoney(BigInt(b.o)),
+      high: formatMoney(BigInt(b.h)),
+      low: formatMoney(BigInt(b.l)),
+      close: formatMoney(BigInt(b.c)),
+    }));
   }
 
   @Query(() => [WatchlistEntry])

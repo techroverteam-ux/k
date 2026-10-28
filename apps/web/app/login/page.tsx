@@ -172,10 +172,10 @@ export default function Login() {
     });
   };
 
-  const title = { conflict: 'Already signed in', signin: 'Sign in', mfa: 'Two-step verification', phone: 'Try a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
+  const title = { conflict: 'Already signed in', signin: `Welcome to ${settings?.appName ?? 'The K'}`, mfa: 'Two-step verification', phone: 'Try a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
   const sub = {
     conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
-    signin: `Welcome back to ${settings?.appName ?? 'The K'}.`,
+    signin: 'Sign in with the username from your broker or administrator.',
     mfa: 'Enter the 6-digit code from your authenticator app.',
     phone: 'Enter your mobile number. We’ll text a one-time code and open a demo account with a virtual balance.',
     otp: `Enter the code sent to ${sentTo}.`,
@@ -207,13 +207,15 @@ export default function Login() {
 
   return (
     <div className="auth">
-      <section className="auth-side">
+     <div className="auth-shell">
+      <section className="auth-art-pane">
         <div className="auth-brand"><Logo size={30} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div>
-        <MarketBoard />
+        <h2 className="auth-hero">Markets,<br />made simple.</h2>
+        <MarketBoard variant="art" />
       </section>
       <section className="auth-main">
         <div className="auth-card">
-          <div className="auth-mob-head"><div className="auth-brand"><Logo size={30} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div><MarketBoard variant="strip" /></div>
+          <div className="auth-mob-head"><div className="auth-brand"><Logo size={30} /><span className="wordmark">{settings?.appName ?? 'The K'}</span></div></div>
           <div>
             {back[step] && (
               <button type="button" className="btn btn-sm btn-ghost" style={{ marginLeft: -12, marginBottom: 8 }} onClick={() => { setErr(null); setDevCode(null); setStep(back[step]!); }}>
@@ -385,6 +387,8 @@ export default function Login() {
           )}
         </div>
       </section>
+     </div>
+     <p className="auth-legal">Prices come from the platform’s simulated feed, and orders are never sent to an exchange.</p>
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { requestContextMiddleware } from './common/request-context';
 import { JsonLogger } from './logging/json-logger';
 import { databaseHost, databaseUrl } from './db/database-url';
 
+// Redeploy trigger 2026-10-28: no functional change.
 async function bootstrap() {
   const cfg = env(); // fail fast on invalid / insecure configuration
   const json_ = (cfg.LOG_FORMAT ?? (cfg.NODE_ENV === 'production' ? 'json' : 'pretty')) === 'json';

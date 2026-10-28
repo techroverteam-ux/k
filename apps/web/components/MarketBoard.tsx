@@ -6,6 +6,11 @@ import { shortSymbol } from '@/lib/format';
 interface Pulse { instrumentId: string; symbol: string; name: string; exchange: string; ltp: string; change: string; changePct: string; source: string }
 
 const POLL_MS = 3000;
+/** Shown while the feed is waking up: names only, never made-up prices. */
+const WAITING: { sym: string; name: string }[] = [
+  { sym: 'BANKNIFTY', name: 'Nifty Bank Index' }, { sym: 'GOLD', name: 'Gold (1 kg)' }, { sym: 'SILVER', name: 'Silver (30 kg)' },
+  { sym: 'CRUDEOIL', name: 'Crude Oil' }, { sym: 'RELIANCE', name: 'Reliance Industries' }, { sym: 'HDFCBANK', name: 'HDFC Bank' },
+];
 const POINTS = 90;
 
 const plainName = (n: string) => n.split(' — ')[0];
@@ -24,7 +29,7 @@ function useIstClock() {
 }
 
 /** Live board for the sign-in screen, fed by the server's public price snapshot. */
-export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' }) {
+export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' | 'art' }) {
   const [rows, setRows] = useState<Pulse[]>([]);
   const [failed, setFailed] = useState(false);
   const [flash, setFlash] = useState<Record<string, 'up' | 'down'>>({});
@@ -77,9 +82,59 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' }
     return { line: `M${pts.join(' L')}`, area: `M${x(start).toFixed(1)},${h} L${pts.join(' L')} L${w},${h} Z`, last: pts[pts.length - 1].split(',').map(Number) };
   }, [series]);
 
+  if (variant === 'art') {
+    const chip = (sym: string, i: number) => {
+      const r = rows.find((x) => shortSymbol(x.symbol) === sym);
+      const u = r ? Number(r.change) >= 0 : true;
+      return (
+        <div className={`art-chip art-chip-${i} ${r && flash[r.instrumentId] ? `fl-${flash[r.instrumentId]}` : ''}`}>
+          <span className="art-chip-sym">{sym}</span>
+          {r ? <span className="num">{inr(r.ltp)}</span> : <span className="sk sk-light" style={{ width: 70 }} />}
+          {r ? <span className={`num ${u ? 'mb-up' : 'mb-down'}`}>{pct(r.changePct)}</span> : <span className="sk sk-light" style={{ width: 40 }} />}
+        </div>
+      );
+    };
+    return (
+      <div className="art" aria-hidden>
+        <div className="art-card">
+          <div className="art-card-head">
+            <div><div className="art-card-name">NIFTY 50</div><div className="art-card-sub">NSE futures</div></div>
+            <div className="art-card-px">
+              {lead ? <div className={`num art-ltp ${flash[lead.instrumentId] ? `fl-${flash[lead.instrumentId]}` : ''}`}>{inr(lead.ltp)}</div> : <span className="sk sk-light" style={{ width: 110, height: 22 }} />}
+              {lead ? <div className={`num ${up ? 'mb-up' : 'mb-down'}`}>{pct(lead.changePct)}</div> : <span className="sk sk-light" style={{ width: 50, marginTop: 6 }} />}
+            </div>
+          </div>
+          <svg className="art-chart" viewBox="0 0 600 160" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="artfill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stopColor="var(--brand)" stopOpacity="0.22" />
+                <stop offset="1" stopColor="var(--brand)" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {path ? (
+              <>
+                <path d={path.area} fill="url(#artfill)" />
+                <path d={path.line} fill="none" stroke="var(--brand)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+                <circle cx={path.last[0]} cy={path.last[1]} r="5" fill="var(--brand)" className="mb-head" />
+              </>
+            ) : (
+              <path d="M0,118 C60,110 90,124 140,104 S230,70 280,86 S380,112 430,74 S530,46 600,58" fill="none" stroke="var(--line-2)" strokeWidth="2.5" strokeDasharray="5 7" vectorEffect="non-scaling-stroke" />
+            )}
+          </svg>
+        </div>
+        {chip('GOLD', 1)}
+        {chip('BANKNIFTY', 2)}
+        {chip('CRUDEOIL', 3)}
+      </div>
+    );
+  }
+
   if (variant === 'strip') {
     return (
       <div className="mb-strip" aria-label="Market prices">
+        {!rows.length && ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'].map((sym) => (
+          <div key={sym} className="mb-chip"><span className="mb-chip-sym">{sym}</span><span className="sk sk-light" style={{ width: 72 }} /><span className="sk sk-light" style={{ width: 44 }} /></div>
+        ))}
         {rows.slice(0, 4).map((r) => {
           const u = Number(r.change) >= 0;
           return (
@@ -97,7 +152,7 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' }
   return (
     <div className="mb">
       <div className="mb-top">
-        <span className="mb-live"><span className="mb-dot" aria-hidden />Markets</span>
+        <span className="mb-live"><span className={`mb-dot ${lead ? '' : 'idle'}`} aria-hidden />{lead ? 'Markets' : 'Connecting to markets'}</span>
         <span className="num mb-clock" aria-label="Time in India">{clock ? `${clock} IST` : ''}</span>
       </div>
 
@@ -127,13 +182,36 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' }
           </svg>
         </div>
       ) : (
-        <div className="mb-hero mb-empty">{failed ? 'Prices will appear when the server is reachable.' : 'Connecting to prices…'}</div>
+        <div className="mb-hero" aria-busy="true">
+          <div className="mb-hero-head">
+            <div>
+              <div className="mb-hero-name">Nifty 50 Index</div>
+              <div className="mb-hero-sub">NSE futures</div>
+            </div>
+            <div className="mb-hero-px">
+              <span className="sk" style={{ width: 220, height: 44 }} />
+              <span className="sk" style={{ width: 130, height: 14, marginTop: 10 }} />
+            </div>
+          </div>
+          <svg className="mb-chart" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden>
+            {[40, 80, 120].map((g) => <line key={g} x1="0" x2="600" y1={g} y2={g} className="mb-grid" />)}
+            <path d="M0,118 C60,110 90,124 140,104 S230,70 280,86 S380,112 430,74 S530,46 600,58" fill="none" className="mb-ghost" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <p className="mb-wait" role="status">{failed ? 'Waking up the price feed. This can take up to a minute.' : 'Loading prices…'}</p>
+        </div>
       )}
 
       <table className="mb-table">
         <caption className="sr-only">Latest prices</caption>
         <thead><tr><th scope="col">Instrument</th><th scope="col">Last price</th><th scope="col">Change</th></tr></thead>
         <tbody>
+          {!rows.length && WAITING.map((w) => (
+            <tr key={w.sym}>
+              <th scope="row"><span className="mb-sym">{w.sym}</span><span className="mb-name">{w.name}</span></th>
+              <td><span className="sk" style={{ width: 88 }} /></td>
+              <td><span className="sk" style={{ width: 52 }} /></td>
+            </tr>
+          ))}
           {rest.map((r) => {
             const u = Number(r.change) >= 0;
             return (

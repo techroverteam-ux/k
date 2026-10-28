@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { CandleChart } from '@/components/CandleChart';
 import { Icon } from '@/components/icons';
 import { useLiveQuotes, useSummary, type Instrument } from '@/components/trading';
 import { Change, Chips, Confirm, ErrorState, Mark, SkeletonRows, useToast } from '@/components/ui';
@@ -12,7 +13,6 @@ import { Private, playTone, usePrefs } from '@/lib/prefs';
 
 type Side = 'BUY' | 'SELL';
 interface Preview { price: string; value: string; intradayMargin: string; carryForwardMargin: string; brokerage: string }
-interface Pt { t: number; v: number }
 
 function StockPage() {
   const { id } = useParams<{ id: string }>();
@@ -20,8 +20,6 @@ function StockPage() {
   const inst = useQuery<{ instrument: Instrument }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
-  const [pts, setPts] = useState<Pt[]>([]);
-  useEffect(() => { if (q?.ltp) setPts((h) => (h.length && h[h.length - 1].v === Number(q.ltp) ? h : [...h.slice(-299), { t: Date.now(), v: Number(q.ltp) }])); }, [q?.ltp, q?.ts]);
 
   if (inst.error) return <ErrorState error={inst.error} retry={inst.refetch} />;
   if (!inst.data) return <SkeletonRows rows={6} />;
@@ -50,7 +48,7 @@ function StockPage() {
           </div>
         </header>
 
-        {prefs.charts ? <PriceChart pts={pts} /> : <p className="t3">Charts are turned off in Profile → Preferences.</p>}
+        {prefs.charts ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : <p className="t3">Charts are turned off in Profile → Preferences.</p>}
 
         <section className="section">
           <h2>Performance</h2>
@@ -94,56 +92,6 @@ function StockPage() {
         <OrderPanel instrument={i} q={q} initialSide={sp.get('side') === 'SELL' ? 'SELL' : 'BUY'} initialQty={sp.get('qty') ?? '1'} />
       </aside>
     </div>
-  );
-}
-
-/** Line chart of live ticks received since the page opened. Longer history isn't available from the simulated feed. */
-function PriceChart({ pts }: { pts: Pt[] }) {
-  const [range, setRange] = useState<'live' | '1w' | '1m' | '1y'>('live');
-  const [hover, setHover] = useState<number | null>(null);
-  const ref = useRef<SVGSVGElement>(null);
-  const W = 640, H = 240, P = 8;
-  const { path, area, min, max, xs, ys } = useMemo(() => {
-    if (pts.length < 2) return { path: '', area: '', min: 0, max: 0, xs: [] as number[], ys: [] as number[] };
-    const vs = pts.map((p) => p.v);
-    const mn = Math.min(...vs), mx = Math.max(...vs), span = mx - mn || mx * 0.001 || 1;
-    const xs = pts.map((_, k) => P + (k / (pts.length - 1)) * (W - 2 * P));
-    const ys = vs.map((v) => P + (1 - (v - mn) / span) * (H - 2 * P));
-    const d = xs.map((x, k) => `${k ? 'L' : 'M'}${x.toFixed(1)},${ys[k].toFixed(1)}`).join(' ');
-    return { path: d, area: `${d} L${xs[xs.length - 1]},${H} L${xs[0]},${H} Z`, min: mn, max: mx, xs, ys };
-  }, [pts]);
-  const up = pts.length > 1 && pts[pts.length - 1].v >= pts[0].v;
-  const color = up ? 'var(--pos)' : 'var(--neg)';
-  const h = hover !== null ? pts[hover] : null;
-  return (
-    <section className="section" aria-label="Price chart">
-      <div style={{ position: 'relative' }}>
-        {pts.length < 2 ? (
-          <div className="state" style={{ height: H }}><div className="ico"><Icon name="trend" /></div><h3>Waiting for price ticks…</h3><p className="sm">The chart fills in as live prices arrive.</p></div>
-        ) : (
-          <svg ref={ref} viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={`Price moved from ${pts[0].v} to ${pts[pts.length - 1].v} since you opened this page`}
-            onMouseMove={(e) => { const r = ref.current!.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width) * W; let k = 0; xs.forEach((v, j) => { if (Math.abs(v - x) < Math.abs(xs[k] - x)) k = j; }); setHover(k); }}
-            onMouseLeave={() => setHover(null)}>
-            <defs><linearGradient id="ga" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor={color} stopOpacity="0.14" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs>
-            {[0.25, 0.5, 0.75].map((f) => <line key={f} x1="0" x2={W} y1={H * f} y2={H * f} stroke="var(--line)" strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />)}
-            <path d={area} fill="url(#ga)" />
-            <path d={path} fill="none" stroke={color} strokeWidth="1.75" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-            {hover !== null && <><line x1={xs[hover]} x2={xs[hover]} y1="0" y2={H} stroke="var(--text-3)" vectorEffect="non-scaling-stroke" /><circle cx={xs[hover]} cy={ys[hover]} r="4" fill={color} /></>}
-          </svg>
-        )}
-        {h && <div className="badge" style={{ position: 'absolute', top: 0, left: 0, background: 'var(--bg)', border: '1px solid var(--line)', height: 26 }}><span className="num">₹{h.v.toFixed(2)} · {new Date(h.t).toLocaleTimeString('en-IN')}</span></div>}
-      </div>
-      {pts.length > 1 && <div className="spread t3 num"><span>{new Date(pts[0].t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span><span>Range ₹{min.toFixed(2)} – ₹{max.toFixed(2)}</span><span>Now</span></div>}
-      <div className="spread">
-        <Chips label="Chart range" value={range} onChange={setRange} items={[
-          { v: 'live', label: 'Live' },
-          { v: '1w', label: '1W', disabled: true, title: 'Price history isn’t available from the simulated feed' },
-          { v: '1m', label: '1M', disabled: true, title: 'Price history isn’t available from the simulated feed' },
-          { v: '1y', label: '1Y', disabled: true, title: 'Price history isn’t available from the simulated feed' },
-        ]} />
-        <span className="t3">Live ticks since you opened this page. Longer ranges need a market-data provider.</span>
-      </div>
-    </section>
   );
 }
 

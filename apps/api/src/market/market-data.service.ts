@@ -4,6 +4,7 @@ import { roundToTick } from '../common/money';
 import { DbService } from '../db/db';
 import { instruments, type InstrumentRow } from '../db/schema';
 import { pubsub, TOPIC } from '../notifications/notifications.service';
+import { bucketStart, CandleStore, type Bar, type CandleInterval } from './candles';
 
 export interface Quote {
   instrumentId: string;
@@ -35,6 +36,7 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   private meta = new Map<string, InstrumentRow>();
   private timer?: NodeJS.Timeout;
   private listeners: Array<(q: Quote[]) => void> = [];
+  private readonly history = new CandleStore();
 
   constructor(private readonly dbs: DbService) {}
 
@@ -66,6 +68,16 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
           ts: new Date(),
           source: 'SIMULATED',
         });
+      }
+      const q = this.quotes.get(r.id)!;
+      if (!this.history.has(r.id)) {
+        this.history.seed(r.id, Number(q.ltpMinor), Number(q.prevCloseMinor), r.tickMinor);
+        // Keep the day's high/low consistent with today's candles.
+        const today = bucketStart(Date.now(), 86_400_000);
+        for (const b of this.history.candles(r.id, '1m', 24 * 60).filter((x) => x.t >= today)) {
+          if (BigInt(b.h) > q.highMinor) q.highMinor = BigInt(b.h);
+          if (BigInt(b.l) < q.lowMinor) q.lowMinor = BigInt(b.l);
+        }
       }
     }
   }
@@ -106,6 +118,7 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   }
 
   private emit(changed: Quote[]) {
+    for (const q of changed) this.history.record(q.instrumentId, Number(q.ltpMinor), q.ts.getTime());
     void pubsub.publish(TOPIC.quotes, { quotes: changed });
     for (const l of this.listeners) {
       try {
@@ -122,6 +135,11 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
 
   all() {
     return [...this.quotes.values()];
+  }
+
+  /** OHLC candles (prices in paise), oldest first. Simulated history; see candles.ts. */
+  candles(instrumentId: string, interval: CandleInterval, limit: number): Bar[] {
+    return this.history.candles(instrumentId, interval, limit);
   }
 
   instrument(instrumentId: string) {

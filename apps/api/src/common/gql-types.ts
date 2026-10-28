@@ -1,4 +1,4 @@
-import { Field, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
+import { Field, Float, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import { formatMoney } from './money';
 
 /**
@@ -51,6 +51,24 @@ export class Instrument {
   @Field({ nullable: true }) expiry?: Date;
   @Field(() => Int) lotSize: number;
   @Field() tickSize: string;
+}
+
+export enum CandleIntervalGql {
+  M1 = 'M1',
+  M5 = 'M5',
+  M15 = 'M15',
+  H1 = 'H1',
+  D1 = 'D1',
+}
+registerEnumType(CandleIntervalGql, { name: 'CandleInterval', description: 'Candle size: 1, 5 or 15 minutes, 1 hour, or 1 day (buckets aligned to IST).' });
+
+@ObjectType({ description: 'One OHLC candle. Prices are decimal rupee strings. Simulated history in this build.' })
+export class Candle {
+  @Field(() => Float, { description: 'Bucket start, epoch milliseconds.' }) t: number;
+  @Field() open: string;
+  @Field() high: string;
+  @Field() low: string;
+  @Field() close: string;
 }
 
 @ObjectType()
