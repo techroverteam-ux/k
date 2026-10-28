@@ -1,4 +1,4 @@
-import { Args, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
+import { Args, Float, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AllowWithoutMfa, CurrentActor, Public } from '../common/context';
@@ -95,10 +95,12 @@ export class MarketResolver {
     @Args('instrumentId', { type: () => ID }) instrumentId: string,
     @Args('interval', { type: () => CandleIntervalGql }) interval: CandleIntervalGql,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+    @Args('before', { type: () => Float, nullable: true, description: 'Only candles that start before this time (epoch ms). Use it to page back through history.' }) before?: number,
   ): Candle[] {
     if (!this.market.instrument(instrumentId)) throw notFound('Instrument');
     const n = Math.min(Math.max(Math.trunc(limit ?? 300), 1), 1000);
-    return this.market.candles(instrumentId, INTERVAL[interval], n).map((b) => ({
+    if (before !== undefined && !Number.isFinite(before)) throw badInput('Invalid time.');
+    return this.market.candles(instrumentId, INTERVAL[interval], n, before).map((b) => ({
       t: b.t,
       open: formatMoney(BigInt(b.o)),
       high: formatMoney(BigInt(b.h)),

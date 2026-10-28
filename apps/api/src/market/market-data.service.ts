@@ -138,8 +138,8 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   }
 
   /** OHLC candles (prices in paise), oldest first. Simulated history; see candles.ts. */
-  candles(instrumentId: string, interval: CandleInterval, limit: number): Bar[] {
-    return this.history.candles(instrumentId, interval, limit);
+  candles(instrumentId: string, interval: CandleInterval, limit: number, before?: number): Bar[] {
+    return this.history.candles(instrumentId, interval, limit, before);
   }
 
   instrument(instrumentId: string) {

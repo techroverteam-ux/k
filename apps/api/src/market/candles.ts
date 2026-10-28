@@ -3,10 +3,13 @@
  *
  * - Live ticks are folded into 1-minute bars as they happen.
  * - At start-up each instrument gets a synthetic back-history so charts are not empty:
- *     · 1-minute bars for the last 24 hours, bridged from the previous close to the current price;
- *     · daily bars for about a year of weekdays, ending at the previous close.
+ *     · daily bars for the past year, ending at the previous close;
+ *     · 1-minute bars for the last 5 days, continuing from those daily bars, passing through the
+ *       previous close at IST midnight and ending at the current price.
  *   The back-history is generated from a per-instrument seed, so it looks the same after a restart.
- * - 5m / 15m / 1h candles are aggregated from the 1-minute bars; 1D uses the daily bars plus today's minutes.
+ * - 5m / 15m / 1h candles are aggregated from the 1-minute bars. 1D uses the daily bars for older days and
+ *   the 1-minute bars for the days they cover, so intraday and daily views agree.
+ * - The simulated feed runs every day, so the history has no weekend gaps either.
  *
  * Buckets are aligned to India Standard Time (UTC+05:30), so hourly candles start on the hour IST and
  * daily candles start at IST midnight. Prices are integer paise, like the rest of the money model.
@@ -27,9 +30,9 @@ export interface Bar {
 const MIN = 60_000;
 const DAY = 86_400_000;
 const IST = 330 * MIN;
-const MINUTE_BARS = 3 * 24 * 60; // keep three days of 1-minute bars
-const BACKFILL_MINUTES = 24 * 60;
-const BACKFILL_DAYS = 260; // ~one year of weekdays
+const MINUTE_BARS = 8 * 24 * 60; // keep eight days of 1-minute bars (about 11.5k per instrument)
+const BACKFILL_MINUTE_DAYS = 5;
+const BACKFILL_DAYS = 365;
 const SIZE: Record<Exclude<CandleInterval, '1D'>, number> = { '1m': MIN, '5m': 5 * MIN, '15m': 15 * MIN, '1h': 60 * MIN };
 
 /** Start of the IST-aligned bucket of `size` ms that contains `t`. */
@@ -104,25 +107,35 @@ export class CandleStore {
     if (this.minutes.has(id)) return;
     const tick = Math.max(1, tickMinor);
     const r = rng(hash(id));
-
-    // Daily bars: random walk backwards from yesterday's close, weekdays only.
     const today = bucketStart(now, DAY);
-    const days: number[] = [];
-    for (let d = today - DAY; days.length < BACKFILL_DAYS; d -= DAY) {
-      const wd = new Date(d + IST).getUTCDay();
-      if (wd !== 0 && wd !== 6) days.push(d);
-    }
-    days.reverse();
+    const minuteStart = today - BACKFILL_MINUTE_DAYS * DAY;
+
+    // Daily closes for the past year, ending at yesterday's close.
+    const days = Array.from({ length: BACKFILL_DAYS }, (_, k) => today - (BACKFILL_DAYS - k) * DAY);
     const first = prevCloseMinor * Math.exp(gauss(r) * 0.08); // a year-ago level, typically within ±8%
     const dPath = bridge(r, days.length, first, prevCloseMinor, 0.011);
-    this.daily.set(id, barsFromPath(r, dPath, days, tick, 0.006));
+    const dBars = barsFromPath(r, dPath, days, tick, 0.006);
+    // Older days stay as daily bars; the last few days are rebuilt from minutes below.
+    this.daily.set(id, dBars.filter((b) => b.t < minuteStart));
 
-    // 1-minute bars: the last 24 hours, from the previous close to the current price.
+    // 1-minute bars, one day at a time, each running from the previous day's close to that day's close, so the
+    // daily view of those days keeps the same closes. Today runs from yesterday's close to the current price.
     const end = bucketStart(now, MIN);
-    const times = Array.from({ length: BACKFILL_MINUTES }, (_, k) => end - (BACKFILL_MINUTES - k) * MIN);
-    // Step volatility ~0.22% per minute, close to the live simulated feed, so history and live candles look alike.
-    const mPath = bridge(r, BACKFILL_MINUTES, prevCloseMinor, ltpMinor, 0.0022);
-    this.minutes.set(id, barsFromPath(r, mPath, times, tick, 0.0007));
+    const mins: Bar[] = [];
+    for (let day = minuteStart; day <= today; day += DAY) {
+      const idx = dBars.findIndex((b) => b.t === day);
+      const open = idx > 0 ? dBars[idx - 1].c : idx === 0 ? dBars[0].o : prevCloseMinor;
+      const isToday = day === today;
+      const close = isToday ? ltpMinor : dBars[idx]?.c ?? prevCloseMinor;
+      const n = ((isToday ? end : day + DAY) - day) / MIN;
+      if (n < 1) continue;
+      // ~0.05% per minute on past days (a 2–3% daily range, bounded by the bridge); a little livelier today so it
+      // blends into the live simulated feed.
+      const path = bridge(r, n, open, close, isToday ? 0.001 : 0.0005);
+      const times = Array.from({ length: n }, (_, k) => day + k * MIN);
+      mins.push(...barsFromPath(r, path, times, tick, isToday ? 0.0004 : 0.0002));
+    }
+    this.minutes.set(id, mins);
   }
 
   /** Fold a live trade price into the current 1-minute bar. */
@@ -137,21 +150,32 @@ export class CandleStore {
       last.c = priceMinor;
     } else if (!last || t > last.t) {
       list.push({ t, o: priceMinor, h: priceMinor, l: priceMinor, c: priceMinor });
-      if (list.length > MINUTE_BARS) list.splice(0, list.length - MINUTE_BARS);
+      if (list.length > MINUTE_BARS) {
+        // Trim whole days only, so minutes always start at IST midnight; dropped days become daily bars.
+        const cutDay = bucketStart(list[list.length - MINUTE_BARS].t, DAY) + DAY;
+        const cut = list.findIndex((b) => b.t >= cutDay);
+        const drop = list.splice(0, cut < 0 ? list.length : cut);
+        const daily = this.daily.get(id) ?? [];
+        for (const d of aggregate(drop, DAY)) if (!daily.length || d.t > daily[daily.length - 1].t) daily.push(d);
+        this.daily.set(id, daily);
+      }
     }
   }
 
-  /** The most recent `limit` candles for an interval, oldest first. Returned objects are copies. */
-  candles(id: string, interval: CandleInterval, limit: number, now = Date.now()): Bar[] {
+  /**
+   * Up to `limit` candles for an interval, oldest first, ending before `before` (epoch ms) when given —
+   * the client pages back through history with it. Returned objects are copies.
+   */
+  candles(id: string, interval: CandleInterval, limit: number, before?: number): Bar[] {
     const mins = this.minutes.get(id) ?? [];
-    if (interval === '1m') return mins.slice(-limit).map((b) => ({ ...b }));
+    let out: Bar[];
     if (interval === '1D') {
-      const today = bucketStart(now, DAY);
-      const past = (this.daily.get(id) ?? []).filter((b) => b.t < today);
-      const cur = aggregate(mins.filter((b) => b.t >= today), DAY);
-      return [...past.map((b) => ({ ...b })), ...cur].slice(-limit);
-    }
-    return aggregate(mins, SIZE[interval]).slice(-limit);
+      const firstMinuteDay = mins.length ? mins[0].t : Infinity; // always an IST midnight
+      out = [...(this.daily.get(id) ?? []).filter((b) => b.t < firstMinuteDay).map((b) => ({ ...b })), ...aggregate(mins, DAY)];
+    } else if (interval === '1m') out = mins.map((b) => ({ ...b }));
+    else out = aggregate(mins, SIZE[interval]);
+    if (before !== undefined) out = out.filter((b) => b.t < before);
+    return out.slice(-limit);
   }
 }
 

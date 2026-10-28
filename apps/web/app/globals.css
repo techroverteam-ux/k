@@ -567,12 +567,35 @@ tr.clickable { cursor: pointer; }
 }
 
 /* ---------------------------------------------------------------- candle chart (instrument page) */
-.chart-tools { flex-wrap: wrap; gap: var(--s2); }
-.candle-chart { position: relative; height: 400px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.chart-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s2); }
+.chart-tools-right { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.chart-btns { display: flex; align-items: center; border: 1px solid var(--line-2); border-radius: var(--r-pill); padding: 2px; background: var(--bg); }
+.chart-btn { width: 34px; height: 30px; display: grid; place-items: center; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-2); cursor: pointer; }
+.chart-btn:hover { background: var(--bg-3); color: var(--text); }
+.chart-btn[aria-pressed='true'] { background: var(--brand-soft); color: var(--brand); }
+.chart-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.chart-cal { position: relative; }
+.chart-cal-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 300px; padding: var(--s4); display: flex; flex-direction: column; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e2); animation: pop 0.12s ease-out; }
+.chart-cal-h { font-size: var(--fs-sm); color: var(--text-3); margin-top: 6px; }
+.chart-cal-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chart-cal-chips .chip { height: 32px; padding: 0 12px; }
+.chart-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--r-md); background: var(--bg-2); color: var(--text-2); }
+.candle-chart { position: relative; height: 420px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.candle-chart:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .candle-chart-canvas { position: absolute; inset: 0; }
-.candle-chart .ohlc { position: absolute; top: 8px; left: 10px; right: 72px; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--text); pointer-events: none; }
+.candle-chart .ohlc { position: absolute; top: 8px; left: 10px; right: 84px; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--text); pointer-events: none; }
 .candle-chart .ohlc b { color: var(--text-3); font-weight: 500; margin-right: 2px; }
+.candle-chart .ohlc .ohlc-time { color: var(--text-2); font-weight: 600; }
 .candle-chart .ohlc .pos { color: var(--pos); }
 .candle-chart .ohlc .neg { color: var(--neg); }
+.candle-chart .chart-older { position: absolute; left: 10px; bottom: 34px; z-index: 3; background: var(--bg); padding: 2px 8px; border-radius: var(--r-pill); border: 1px solid var(--line); }
 .candle-chart-cover { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; background: var(--bg); }
-@media (max-width: 600px) { .candle-chart { height: 340px; } .candle-chart .ohlc { right: 84px; font-size: 11px; gap: 2px 8px; } }
+/* Full screen: a fixed overlay (works on phones too, where the Fullscreen API isn't available). */
+.chart-panel.is-expanded { position: fixed; inset: 0; z-index: 100; background: var(--bg); padding: var(--s4); margin: 0; }
+.chart-panel.is-expanded .candle-chart { flex: 1; height: auto; min-height: 0; }
+@media (max-width: 600px) {
+  .candle-chart { height: 360px; }
+  .candle-chart .ohlc { font-size: 11px; gap: 2px 8px; }
+  .chart-cal-pop { position: fixed; left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom)); width: auto; z-index: 120; box-shadow: 0 8px 40px rgba(0,0,0,.25); }
+  .chart-panel.is-expanded { padding: var(--s3); padding-bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
+}
