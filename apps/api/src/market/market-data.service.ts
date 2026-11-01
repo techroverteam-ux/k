@@ -6,6 +6,7 @@ import { instruments, type InstrumentRow } from '../db/schema';
 import { pubsub, TOPIC } from '../notifications/notifications.service';
 import { env } from '../config/env';
 import { CandleRepo, type StoredBar } from './candle-repo';
+import { DhanFeedService, DHAN_SEGMENT_MAP } from './dhan-feed.service';
 import { bucketStart, CandleStore, DAY, MEMORY_DAYS, SIZE, type Bar, type CandleInterval } from './candles';
 
 export interface Quote {
@@ -18,7 +19,7 @@ export interface Quote {
   lowMinor: bigint;
   prevCloseMinor: bigint;
   ts: Date;
-  source: 'SIMULATED';
+  source: 'SIMULATED' | 'DHAN';
 }
 
 /**
@@ -47,19 +48,81 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   private pruneTimer?: NodeJS.Timeout;
   private flushing?: Promise<void>;
 
-  constructor(private readonly dbs: DbService) {
+  constructor(private readonly dbs: DbService, private readonly dhanFeed: DhanFeedService) {
     if (process.env.NODE_ENV !== 'test') this.repo = new CandleRepo(dbs.pool);
   }
 
   async onModuleInit() {
     await this.reload();
     if (process.env.NODE_ENV !== 'test') {
-      this.timer = setInterval(() => this.tick(), 1000);
+      const feedMode = env().MARKET_FEED;
+      if (feedMode === 'dhan') {
+        this.startDhanFeed();
+      } else {
+        this.timer = setInterval(() => this.tick(), 1000);
+    
+      }
       this.flushTimer = setInterval(() => void this.flush(), 60_000);
       this.pruneTimer = setInterval(() => void this.prune(), 3_600_000);
       void this.prune();
     }
-    this.log.log(`Simulated feed started for ${this.quotes.size} instruments`);
+
+  }
+
+  private startDhanFeed() {
+    this.log.log(`Starting Dhan Live Market Feed for ${this.quotes.size} instruments`);
+    const secToId = new Map<string, string>();
+    const subs: Array<{ exchangeSegment: string; securityId: string }> = [];
+
+    for (const [id, r] of this.meta.entries()) {
+      if (r.dhanSecurityId && r.dhanSegment) {
+        secToId.set(`${r.dhanSegment}:${r.dhanSecurityId}`, id);
+        secToId.set(r.dhanSecurityId, id);
+        subs.push({ exchangeSegment: r.dhanSegment, securityId: r.dhanSecurityId });
+      }
+    }
+
+    this.dhanFeed.onTick((tick) => {
+      const segmentStr = DHAN_SEGMENT_MAP[tick.segmentCode] || '';
+      const instId = secToId.get(`${segmentStr}:${tick.securityId}`) || secToId.get(tick.securityId);
+      if (!instId) return;
+
+      const q = this.quotes.get(instId);
+      const m = this.meta.get(instId);
+      if (!q || !m) return;
+
+      const ltpMinor = BigInt(Math.round(tick.ltp * 100));
+      if (ltpMinor <= 0n) return;
+
+      const spread = BigInt(m.tickMinor);
+      q.ltpMinor = ltpMinor;
+      q.bidMinor = ltpMinor - spread;
+      q.askMinor = ltpMinor + spread;
+
+      if (tick.high) {
+        q.highMinor = BigInt(Math.round(tick.high * 100));
+      } else if (ltpMinor > q.highMinor) {
+        q.highMinor = ltpMinor;
+      }
+
+      if (tick.low) {
+        q.lowMinor = BigInt(Math.round(tick.low * 100));
+      } else if (ltpMinor < q.lowMinor) {
+        q.lowMinor = ltpMinor;
+      }
+
+      if (tick.close) {
+        q.prevCloseMinor = BigInt(Math.round(tick.close * 100));
+      }
+
+      q.ts = tick.timestamp;
+      q.source = 'DHAN';
+
+      this.emit([q]);
+    });
+
+    this.dhanFeed.setSubscriptions(subs);
+    this.dhanFeed.connect();
   }
 
   async onModuleDestroy() {
