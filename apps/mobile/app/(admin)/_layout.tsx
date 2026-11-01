@@ -16,7 +16,9 @@ export default function AdminTabs() {
   return (
     <Tabs screenOptions={opts}>
       <Tabs.Screen name="index" options={{ title: 'Overview', tabBarIcon: ico('grid') }} />
+      <Tabs.Screen name="users" options={{ title: 'Accounts', tabBarIcon: ico('users') }} />
       <Tabs.Screen name="payments" options={{ title: 'Approvals', tabBarIcon: ico('rupee') }} />
+      <Tabs.Screen name="security" options={{ title: 'Security', tabBarIcon: ico('shield') }} />
       <Tabs.Screen name="settings" options={{ title: 'Profile', tabBarIcon: ico('user') }} />
     </Tabs>
   );

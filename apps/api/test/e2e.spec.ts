@@ -297,6 +297,19 @@ describe('paper trading', () => {
     expect(o.venue).toBe('SIMULATED');
   });
 
+  it('refuses an idempotency key reused for a different order instead of replaying the first one', async () => {
+    const t = await login('trader.two');
+    const key = randomUUID();
+    const a = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 2, idempotencyKey: key } }, { token: t.accessToken });
+    expect(a.data.placeOrder.status).toBe('FILLED');
+    const same = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 2, idempotencyKey: key } }, { token: t.accessToken });
+    expect(same.data.placeOrder.id).toBe(a.data.placeOrder.id);
+    const changed = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 5, idempotencyKey: key } }, { token: t.accessToken });
+    expect(code(changed)).toBe('CONFLICT');
+    // flatten
+    await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: 2, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+  });
+
   it('rejects orders over the per-order quantity limit and logs them', async () => {
     const t = await login('trader.two');
     const r = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 51, idempotencyKey: randomUUID() } }, { token: t.accessToken });
@@ -967,5 +980,96 @@ describe('automated trading (paper)', () => {
     const st = (await gql(`query($id:ID!){ strategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken })).data.strategy;
     expect(st).toMatchObject({ status: 'STOPPED', position: 0 });
     expect(st.stopReason).toMatch(/Daily loss limit/);
+  });
+});
+
+describe('quick unlock: MPIN and fingerprint on a trusted phone', () => {
+  const ENROL = `mutation($c:String!,$m:String!,$b:Boolean){ enableQuickUnlock(code:$c, mpin:$m, biometric:$b, deviceName:"Test phone"){ deviceId bioKey } }`;
+  const UNLOCK = `mutation($d:ID!,$m:String,$k:String){ quickUnlock(deviceId:$d, mpin:$m, bioKey:$k){ accessToken refreshToken sessionConflict user{ username } } }`;
+  async function trust(token: string, mpin: string, biometric = true) {
+    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'device'`); // the request rate limit is tested separately
+    const ch = await gql(`mutation{ beginDeviceTrust{ method sentTo devCode } }`, {}, { token });
+    expect(ch.errors).toBeUndefined();
+    const c = ch.data.beginDeviceTrust.method === 'SMS' ? ch.data.beginDeviceTrust.devCode : PW;
+    return { ch: ch.data.beginDeviceTrust, c, r: await gql(ENROL, { c, m: mpin, b: biometric }, { token }) };
+  }
+  beforeAll(() => tokenCache.delete('trader.three'));
+  afterAll(() => tokenCache.delete('trader.three'));
+
+  it('needs the one-time code, refuses weak MPINs, and is not offered to administrators', async () => {
+    const t = await login('trader.three');
+    const ch = await gql(`mutation{ beginDeviceTrust{ method } }`, {}, { token: t.accessToken });
+    const wrong = await gql(ENROL, { c: ch.data.beginDeviceTrust.method === 'SMS' ? '000000' : 'not-the-password', m: '4826', b: false }, { token: t.accessToken });
+    expect(code(wrong)).toBe('UNAUTHENTICATED');
+    const weak = await trust(t.accessToken, '1234');
+    expect(weak.r.errors?.[0].message).toMatch(/too easy/);
+    // The one-time check allows 5 tries, then a new code is needed, even with the right answer.
+    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'device'`);
+    const c2 = await gql(`mutation{ beginDeviceTrust{ method devCode } }`, {}, { token: t.accessToken });
+    const right = c2.data.beginDeviceTrust.method === 'SMS' ? c2.data.beginDeviceTrust.devCode : PW;
+    for (let i = 0; i < 5; i++) await gql(ENROL, { c: c2.data.beginDeviceTrust.method === 'SMS' ? '000000' : 'wrong-pass', m: '4826', b: false }, { token: t.accessToken });
+    expect(code(await gql(ENROL, { c: right, m: '4826', b: false }, { token: t.accessToken }))).toBe('UNAUTHENTICATED');
+    const web = await gql(ENROL, { c: '1', m: '4826', b: false }, { token: t.accessToken, mobile: false });
+    expect(code(web)).toBe('UNAUTHENTICATED');
+    const a = await adminLogin('admin');
+    const adm = await gql(`mutation{ beginDeviceTrust{ method } }`, {}, { token: a.token });
+    expect(code(adm)).toBe('FORBIDDEN');
+  });
+
+  it('unlocks with the MPIN or the fingerprint key, replacing the phone’s previous session', async () => {
+    const t = await login('trader.three');
+    const { r } = await trust(t.accessToken, '4826');
+    expect(r.errors).toBeUndefined();
+    const { deviceId, bioKey } = r.data.enableQuickUnlock;
+    expect(bioKey).toHaveLength(43);
+    const [row] = (await pg.query(`select mpin_hash, bio_key_hash from device_credentials where id=$1`, [deviceId])).rows;
+    expect(row.mpin_hash).toMatch(/^\$argon2id\$/); // never the MPIN itself
+    expect(row.bio_key_hash).not.toContain(bioKey);
+
+    const u1 = await gql(UNLOCK, { d: deviceId, m: '4826' });
+    expect(u1.data.quickUnlock.user.username).toBe('trader.three');
+    expect(u1.data.quickUnlock.sessionConflict).toBe(false);
+    // The session the phone had before is gone: reopening the app never counts as another device.
+    expect(code(await gql(`{ me { id } }`, {}, { token: t.accessToken }))).toBe('UNAUTHENTICATED');
+
+    const u2 = await gql(UNLOCK, { d: deviceId, k: bioKey });
+    expect(u2.data.quickUnlock.accessToken).toBeTruthy();
+    expect(code(await gql(`{ me { id } }`, {}, { token: u1.data.quickUnlock.accessToken }))).toBe('UNAUTHENTICATED');
+    const me = await gql(`{ me { username } }`, {}, { token: u2.data.quickUnlock.accessToken });
+    expect(me.data.me.username).toBe('trader.three');
+    const td = await gql(`query($d:ID!){ trustedDevice(deviceId:$d){ biometric deviceName } }`, { d: deviceId }, { token: u2.data.quickUnlock.accessToken });
+    expect(td.data.trustedDevice).toEqual({ biometric: true, deviceName: 'Test phone' });
+    tokenCache.set('trader.three', { ...t, accessToken: u2.data.quickUnlock.accessToken, refreshToken: u2.data.quickUnlock.refreshToken });
+  });
+
+  it('turns itself off after 5 wrong MPINs, and when the password changes', async () => {
+    const t = await login('trader.three');
+    const { r } = await trust(t.accessToken, '7391', false);
+    const d = r.data.enableQuickUnlock.deviceId;
+    for (let i = 4; i >= 1; i--) {
+      const bad = await gql(UNLOCK, { d, m: '0007' });
+      expect(bad.errors?.[0].message).toBe(`Wrong MPIN. ${i} ${i === 1 ? 'try' : 'tries'} left.`);
+    }
+    const fifth = await gql(UNLOCK, { d, m: '0007' });
+    expect(fifth.errors?.[0].message).toMatch(/turned off/);
+    const right = await gql(UNLOCK, { d, m: '7391' }); // even the right MPIN no longer works
+    expect((right.errors?.[0] as any).extensions.reason).toBe('QUICK_UNLOCK_OFF');
+    const audit = await pg.query(`select count(*)::int c from audit_events where action='auth.quick_unlock_failed' and entity_id=$1`, [d]);
+    expect(audit.rows[0].c).toBe(5);
+
+    // A forged fingerprint key revokes at once (no guessing).
+    const again = await trust(t.accessToken, '7391', true);
+    const d2 = again.r.data.enableQuickUnlock.deviceId;
+    const forged = await gql(UNLOCK, { d: d2, k: 'x'.repeat(43) });
+    expect((forged.errors?.[0] as any).extensions.reason).toBe('QUICK_UNLOCK_OFF');
+
+    // Password change: other phones lose quick unlock.
+    const third = await trust(t.accessToken, '7391', false);
+    const d3 = third.r.data.enableQuickUnlock.deviceId;
+    await pg.query(`update device_credentials set session_id=null where id=$1`, [d3]); // as if enrolled from another phone
+    const NEWPW = 'Changed-Passw0rd!x';
+    expect((await gql(`mutation($a:String!,$b:String!){ changePassword(currentPassword:$a,newPassword:$b) }`, { a: PW, b: NEWPW }, { token: t.accessToken })).data.changePassword).toBe(true);
+    expect((await gql(UNLOCK, { d: d3, m: '7391' })).errors?.[0].message).toMatch(/off on this phone/);
+    await gql(`mutation($a:String!,$b:String!){ changePassword(currentPassword:$a,newPassword:$b) }`, { a: NEWPW, b: PW }, { token: t.accessToken });
   });
 });

@@ -1,9 +1,10 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
 import { router } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { API_URL, gql, newKey, subscribe } from './api';
+import { useActive } from './active';
 import { NUM_SCALE, usePrefs, usePrivate } from './prefs';
 import { useSplashActive } from './splash';
 import { CONSENT_FIELDS, deviceLabel, LOGIN_FIELDS, LOGIN_LABEL, stamp, type ConsentRecord, type LoginEvent } from './activity';
@@ -11,24 +12,78 @@ import { useAuth } from './auth';
 import { Icon } from './icons';
 import { CTL, inr, initials, R, S, shortSymbol, toneOfValue, useTheme, when } from './theme';
 import {
-  Badge, Button, Change, Chips, Divider, Empty, ErrorState, Field, IconButton, IconMark, ListRow, Mark, Metrics, Notice, Row, Screen, SearchBox,
-  Section, Sheet, Skeleton, Spread, StatusBadge, T, Tabs, toast, useQuery,
+  Badge, Button, Change, Chips, DateField, Divider, Empty, ErrorState, Field, IconButton, IconMark, ListRow, Mark, Metrics, Notice, Row, Screen, SearchBox,
+  Flash, Section, Sheet, Skeleton, Spread, StatusBadge, SwipeRow, T, Tabs, tap, toast, useQuery, VList, ymdLabel,
 } from './ui';
 
 export interface Quote { instrumentId: string; ltp: string; bid: string; ask: string; high: string; low: string; change: string; changePct: string; ts: string; source: string }
 export const QF = 'instrumentId ltp bid ask high low change changePct ts source';
 interface Inst { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string }
 
+/**
+ * Live quotes by instrument id. Streams only while the screen is in use; on return it re-reads a snapshot.
+ * Quotes that didn't change keep their object identity, so memoised rows skip re-rendering.
+ */
 export function useLiveQuotes(ids: string[]) {
   const [q, setQ] = useState<Record<string, Quote>>({});
   const key = ids.slice().sort().join(',');
+  const active = useActive();
   useEffect(() => {
-    if (!key) return;
+    if (!key || !active) return;
     const list = key.split(',');
-    gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QF} } }`, { i: list }).then((d) => setQ((s) => ({ ...s, ...Object.fromEntries(d.quotes.map((x) => [x.instrumentId, x])) }))).catch(() => undefined);
-    return subscribe<{ quotesUpdated: Quote[] }>(`subscription($i:[ID!]!){ quotesUpdated(instrumentIds:$i){ ${QF} } }`, { i: list }, (d) => setQ((s) => ({ ...s, ...Object.fromEntries(d.quotesUpdated.map((x) => [x.instrumentId, x])) })));
-  }, [key]);
+    const merge = (rows: Quote[]) => setQ((s) => {
+      let changed = false;
+      const next = { ...s };
+      for (const x of rows) { const cur = s[x.instrumentId]; if (!cur || cur.ltp !== x.ltp || cur.bid !== x.bid || cur.ask !== x.ask || cur.high !== x.high || cur.low !== x.low) { next[x.instrumentId] = x; changed = true; } }
+      return changed ? next : s;
+    });
+    gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QF} } }`, { i: list }).then((d) => merge(d.quotes)).catch(() => undefined);
+    return subscribe<{ quotesUpdated: Quote[] }>(`subscription($i:[ID!]!){ quotesUpdated(instrumentIds:$i){ ${QF} } }`, { i: list }, (d) => merge(d.quotesUpdated));
+  }, [key, active]);
   return q;
+}
+
+/** Header search button: opens the instrument search. */
+export function SearchButton() {
+  return <IconButton icon="search" label="Search instruments" onPress={() => router.push('/search')} />;
+}
+
+const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void }) {
+  return (
+    <ListRow onPress={() => router.push(`/instrument/${i.id}`)} label={`${shortSymbol(i.symbol)}, open chart`} left={<Mark text={shortSymbol(i.symbol)} />}
+      title={<Row gap={6}><T w="600" numberOfLines={1}>{shortSymbol(i.symbol)}</T><Badge text={`${i.exchange} ${i.segment}`} /></Row>}
+      sub={i.name}
+      right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></View>}
+      action={<IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />} />
+  );
+});
+
+/** Search every instrument; tap to open its chart, + to add it to Watchlist 1. */
+export function SearchView() {
+  const [q, setQ] = useState('');
+  const [res, setRes] = useState<Inst[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const [added, setAdded] = useState<string[]>([]);
+  useEffect(() => {
+    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:50){ id symbol name exchange segment } }`, { q: q.trim() }).then((d) => { setErr(null); setRes(d.searchInstruments); }).catch((e) => { setErr((e as Error).message); setRes([]); }), q ? 180 : 0);
+    return () => clearTimeout(h);
+  }, [q, nonce]);
+  const wl = useQuery<{ watchlist: { instrument: { id: string } }[] }>(`{ watchlist(listIndex:0){ instrument{ id } } }`);
+  const inList = useMemo(() => new Set([...(wl.data?.watchlist ?? []).map((w) => w.instrument.id), ...added]), [wl.data, added]);
+  const quotes = useLiveQuotes((res ?? []).map((i) => i.id));
+  const onAdd = useCallback(async (i: Inst) => {
+    try { await gql(`mutation($i:ID!){ addToWatchlist(listIndex:0, instrumentId:$i) }`, { i: i.id }); setAdded((a) => [...a, i.id]); tap(); toast(`${shortSymbol(i.symbol)} added to Watchlist 1`); }
+    catch (e) { toast((e as Error).message, true); }
+  }, []);
+  return (
+    <Screen back title="Search" scroll={false}>
+      <VList data={res ?? []} keyOf={(i) => i.id}
+        header={<SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. RELIANCE" autoFocus />}
+        empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={`No instruments match “${q}”`}>Try the symbol, like NIFTY or SBIN.</Empty>}
+        render={(i) => <SearchRow i={i} qq={quotes[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
+    </Screen>
+  );
 }
 
 /** Bell with unread count, used in headers; the theme switch sits beside it. */
@@ -107,7 +162,8 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const [touched, setTouched] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const key = useMemo(newKey, []);
+  // A new key whenever the amount changes: a retry of the same request is safe, a different amount is a new request.
+  const key = useMemo(newKey, [amount]);
   const fmt = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
   const over = type === 'WITHDRAWAL' && !!available && fmt && Number(amount) > Number(available);
   const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : over ? `You can withdraw up to ₹${inr(available)}` : null);
@@ -156,8 +212,39 @@ export function Movers() {
 
 /* ====================================================================== watchlist */
 interface WEntry { id: string; instrument: Inst }
-export function WatchlistBlock({ limit }: { limit?: number }) {
+
+/** One watchlist row. Memoised: re-renders only when its own quote changes. */
+const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove }: { e: WEntry; qq?: Quote; detailed: boolean; onRemove: (e: WEntry) => void }) {
   const t = useTheme();
+  const sym = shortSymbol(e.instrument.symbol);
+  const row = detailed ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
+      <Pressable onPress={() => router.push(`/instrument/${e.instrument.id}`)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens the chart. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Row gap={6}><T w="700" numberOfLines={1}>{sym}</T><Badge text={e.instrument.segment} /></Row>
+        <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
+      </Pressable>
+      {(['SELL', 'BUY'] as const).map((sd) => (
+        <Pressable key={sd} onPress={() => { tap(); router.push(`/instrument/${e.instrument.id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${sd === 'BUY' ? qq?.ask : qq?.bid}`} style={{ alignItems: 'center', gap: 2 }}>
+          <View style={{ minWidth: 76, paddingVertical: 6, paddingHorizontal: 8, borderRadius: R.md, backgroundColor: sd === 'BUY' ? t.posSoft : t.negSoft, alignItems: 'center' }}>
+            <T v="num" c={sd === 'BUY' ? 'pos' : 'neg'}>{inr(sd === 'BUY' ? qq?.ask : qq?.bid)}</T>
+          </View>
+          <T v="xs">{sd === 'BUY' ? `H: ${inr(qq?.high)}` : `L: ${inr(qq?.low)}`}</T>
+        </Pressable>
+      ))}
+    </View>
+  ) : (
+    <ListRow onPress={() => router.push(`/instrument/${e.instrument.id}`)} label={`${sym}, ₹${qq?.ltp ?? ''}`} title={sym} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
+      right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} /></View>} />
+  );
+  return (
+    <SwipeRow action={() => onRemove(e)} actionLabel="Remove">
+      <Flash value={qq?.ltp}>{row}</Flash>
+    </SwipeRow>
+  );
+});
+
+/** Watchlists. `limit` = compact preview (Home); otherwise the full, virtualised list for the Watchlist tab. */
+export function WatchlistBlock({ limit, header }: { limit?: number; header?: ReactNode }) {
   const { settings } = useAuth();
   const { prefs } = usePrefs();
   const [list, setList] = useState('0');
@@ -168,55 +255,53 @@ export function WatchlistBlock({ limit }: { limit?: number }) {
   const shown = Math.min(max, Math.max(3, ...used.map((c) => c.listIndex + 1), Number(list) + 1) + extra);
   const detailed = !limit && prefs.watchlistView === 'detailed';
   const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: Number(list) });
-  const entries = (data?.watchlist ?? []).slice(0, limit ?? 100);
+  const entries = useMemo(() => (data?.watchlist ?? []).slice(0, limit ?? 100), [data, limit]);
   const q = useLiveQuotes(entries.map((e) => e.instrument.id));
   const [search, setSearch] = useState(false);
-  const [manage, setManage] = useState<WEntry | null>(null);
-  return (
-    <View style={{ gap: S[2] }}>
+  const [removing, setRemoving] = useState<WEntry | null>(null);
+  const onRemove = useCallback((e: WEntry) => setRemoving(e), []);
+  const remove = async (e: WEntry) => {
+    setRemoving(null);
+    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: Number(list), i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); } catch (err) { toast((err as Error).message, true); }
+    void refetch(); void counts.refetch();
+  };
+  const top = (
+    <>
+      {header}
       <Tabs scroll value={list} onChange={setList} items={Array.from({ length: shown }, (_, k) => ({ k: String(k), label: `Watchlist ${k + 1}` }))}
         right={<Row gap={0}>{!limit && shown < max && <IconButton icon="plus" label="New watchlist" onPress={() => { setExtra((x) => x + 1); setList(String(shown)); }} />}<IconButton icon="search" label="Add script" onPress={() => setSearch(true)} /></Row>} />
       {!limit && <T v="xs" c="text2">{entries.length} script{entries.length === 1 ? '' : 's'} · Watchlist {Number(list) + 1}</T>}
-      {loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
-        <Empty icon="eye" title="Nothing in this list" action={<Button size="sm" title="Add instruments" onPress={() => setSearch(true)} />}>Track prices by adding instruments.</Empty>
-      ) : entries.map((e) => {
-        const qq = q[e.instrument.id];
-        if (detailed) return (
-          <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
-            <Pressable onPress={() => router.push(`/instrument/${e.instrument.id}`)} onLongPress={() => setManage(e)} accessibilityRole="button" accessibilityLabel={`${shortSymbol(e.instrument.symbol)}, ${qq?.ltp ?? ''}`} accessibilityHint="Long press to remove" style={{ flex: 1, minWidth: 0, gap: 2 }}>
-              <Row gap={6}><T w="700" numberOfLines={1}>{shortSymbol(e.instrument.symbol)}</T><Badge text={e.instrument.segment} /></Row>
-              <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
-            </Pressable>
-            {(['SELL', 'BUY'] as const).map((sd) => (
-              <Pressable key={sd} onPress={() => router.push(`/instrument/${e.instrument.id}?side=${sd}`)} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${sd === 'BUY' ? qq?.ask : qq?.bid}`} style={{ alignItems: 'center', gap: 2 }}>
-                <View style={{ minWidth: 76, paddingVertical: 6, paddingHorizontal: 8, borderRadius: R.md, backgroundColor: sd === 'BUY' ? t.posSoft : t.negSoft, alignItems: 'center' }}>
-                  <T v="num" c={sd === 'BUY' ? 'pos' : 'neg'}>{inr(sd === 'BUY' ? qq?.ask : qq?.bid)}</T>
-                </View>
-                <T v="xs">{sd === 'BUY' ? `H: ${inr(qq?.high)}` : `L: ${inr(qq?.low)}`}</T>
-              </Pressable>
-            ))}
-          </View>
-        );
-        return (
-          <ListRow key={e.id} onPress={() => router.push(`/instrument/${e.instrument.id}`)} label={`${shortSymbol(e.instrument.symbol)}, ₹${qq?.ltp ?? ''}`}
-            title={shortSymbol(e.instrument.symbol)} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
-            right={
-              <Pressable onLongPress={() => setManage(e)} accessibilityHint="Long press to remove" style={{ alignItems: 'flex-end', gap: 2 }}>
-                <T v="num">₹{inr(qq?.ltp)}</T>
-                <Change value={qq?.change} pct={qq?.changePct} />
-              </Pressable>
-            } />
-        );
-      })}
-      {!!entries.length && <T v="xs" style={{ textAlign: 'center' }}>{detailed ? 'Tap a sell or buy price to trade. Long-press a name to remove it.' : 'Long-press a price to remove it from the list.'}</T>}
+    </>
+  );
+  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : (
+    <Empty icon="eye" title="Nothing in this list" action={<Button size="sm" title="Add instruments" onPress={() => setSearch(true)} />}>Track prices by adding instruments.</Empty>
+  );
+  const hint = entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a sell or buy price to trade. Swipe a row left to remove it.' : 'Swipe a row left to remove it.'}</T> : null;
+  const sheets = (
+    <>
       {search && <AddSheet list={Number(list)} onClose={() => { setSearch(false); void refetch(); void counts.refetch(); }} />}
-      <Sheet visible={!!manage} title={manage ? shortSymbol(manage.instrument.symbol) : ''} sub={manage?.instrument.name} onClose={() => setManage(null)}>
-        <Button kind="danger" icon="x" title={`Remove from list ${Number(list) + 1}`} onPress={async () => {
-          if (!manage) return;
-          try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: Number(list), i: manage.instrument.id }); toast('Removed'); } catch (e) { toast((e as Error).message, true); }
-          setManage(null); void refetch();
-        }} />
+      <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
+        <Row>
+          <Button block title="Keep" onPress={() => setRemoving(null)} />
+          <Button block kind="sell" icon="x" title={`Remove from list ${Number(list) + 1}`} onPress={() => removing && void remove(removing)} />
+        </Row>
       </Sheet>
+    </>
+  );
+  if (!limit) {
+    return (
+      <>
+        <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
+          render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} />} />
+        {sheets}
+      </>
+    );
+  }
+  return (
+    <View style={{ gap: S[2] }}>
+      {top}
+      {!entries.length ? state : entries.map((e) => <WatchRow key={e.id} e={e} qq={q[e.instrument.id]} detailed={false} onRemove={onRemove} />)}
+      {sheets}
     </View>
   );
 }
@@ -224,6 +309,8 @@ export function WatchlistBlock({ limit }: { limit?: number }) {
 function AddSheet({ list, onClose }: { list: number; onClose: () => void }) {
   const [q, setQ] = useState('');
   const [res, setRes] = useState<Inst[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
   const [added, setAdded] = useState<string[]>([]);
   useEffect(() => {
     const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q }).then((d) => setRes(d.searchInstruments)).catch(() => setRes([])), 180);
@@ -245,27 +332,118 @@ function AddSheet({ list, onClose }: { list: number; onClose: () => void }) {
 /* ====================================================================== orders / positions / ledger */
 const OTYPE: Record<string, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
 interface Order { id: string; side: string; type: string; quantity: number; limitPrice?: string; triggerPrice?: string; triggeredAt?: string; fillPrice?: string; status: string; venue: string; rejectReason?: string; createdAt: string; instrument?: { symbol: string } }
-export function OrdersList({ userId, statuses, canCancel, emptyTitle = 'No orders', emptyText }: { userId?: string; statuses: string[]; canCancel?: boolean; emptyTitle?: string; emptyText?: string }) {
+
+const OrderRow = memo(function OrderRow({ o, onCancel }: { o: Order; onCancel?: (o: Order) => void }) {
+  return (
+    <ListRow onPress={onCancel && o.status === 'OPEN' ? () => onCancel(o) : undefined} label={onCancel && o.status === 'OPEN' ? 'Cancel this order' : undefined}
+      title={o.instrument ? shortSymbol(o.instrument.symbol) : '—'}
+      sub={<View style={{ gap: 2 }}><Row gap={6}><T v="xs" c={o.side === 'BUY' ? 'pos' : 'neg'} w="600">{o.side === 'BUY' ? 'Buy' : 'Sell'}</T><T v="xs">{o.quantity} qty · {OTYPE[o.type] ?? o.type}{o.triggerPrice ? ` @ ₹${inr(o.triggerPrice)}` : ''} · {when(o.createdAt)}</T></Row>{o.rejectReason ? <T v="xs" c="neg">{o.rejectReason}</T> : null}</View>}
+      right={<View style={{ alignItems: 'flex-end', gap: 4 }}><T v="num">₹{inr(o.fillPrice ?? o.limitPrice ?? o.triggerPrice)}</T><StatusBadge v={o.status} />{onCancel && o.status === 'OPEN' ? <T v="xs" c="neg" w="600">Tap to cancel</T> : null}</View>} />
+  );
+});
+
+/** Orders. With `virtual`, the list scrolls the whole screen (Screen scroll={false}) and `header` sits above it. */
+export function OrdersList({ userId, statuses, canCancel, emptyTitle = 'No orders', emptyText, virtual, header }: { userId?: string; statuses: string[]; canCancel?: boolean; emptyTitle?: string; emptyText?: string; virtual?: boolean; header?: ReactNode }) {
   const { data, error, loading, refetch } = useQuery<{ orders: Order[] }>(`query($u:ID,$s:[OrderStatus!]){ orders(userId:$u, status:$s, limit:100){ id side type quantity limitPrice triggerPrice triggeredAt fillPrice status venue rejectReason createdAt instrument{ symbol } } }`, { u: userId, s: statuses }, 4000);
   const [cancel, setCancel] = useState<Order | null>(null);
   const [busy, setBusy] = useState(false);
+  const onCancel = useCallback((o: Order) => setCancel(o), []);
+  const list = data?.orders ?? [];
+  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="list" title={emptyTitle}>{emptyText}</Empty>;
+  const sheet = (
+    <Sheet visible={!!cancel} title="Cancel this order?" sub={cancel ? `${cancel.side === 'BUY' ? 'Buy' : 'Sell'} ${cancel.quantity} ${shortSymbol(cancel.instrument?.symbol ?? '')}${cancel.triggerPrice ? ' trigger' : ''} at ₹${inr(cancel.limitPrice ?? cancel.triggerPrice)}` : ''} onClose={() => setCancel(null)}>
+      <Row>
+        <Button block title="Keep order" onPress={() => setCancel(null)} />
+        <Button block kind="sell" title="Cancel order" busy={busy} onPress={async () => {
+          if (!cancel) return; setBusy(true);
+          try { await gql(`mutation($id:ID!){ cancelOrder(orderId:$id){ id } }`, { id: cancel.id }); toast('Order cancelled'); } catch (e) { toast((e as Error).message, true); }
+          setBusy(false); setCancel(null); void refetch();
+        }} />
+      </Row>
+    </Sheet>
+  );
+  const render = (o: Order) => <OrderRow o={o} onCancel={canCancel ? onCancel : undefined} />;
+  if (virtual) return <><VList data={list} keyOf={(o) => o.id} header={header} empty={state} render={render} />{sheet}</>;
+  return <View>{header}{!list.length ? state : list.map((o) => <OrderRow key={o.id} o={o} onCancel={canCancel ? onCancel : undefined} />)}{sheet}</View>;
+}
+
+const ORDER_TABS = {
+  open: { label: 'Open', s: ['OPEN'], title: 'No open orders', text: 'Limit, stop-loss and take-profit orders waiting for their price appear here.' },
+  done: { label: 'Executed', s: ['FILLED'], title: 'No executed orders', text: 'Filled orders appear here.' },
+  rej: { label: 'Rejected', s: ['REJECTED', 'CANCELLED'], title: 'Nothing rejected or cancelled', text: 'If an order fails a check, you’ll see the reason here.' },
+} as const;
+type OrderTab = keyof typeof ORDER_TABS;
+/** Orders split into Open / Executed / Rejected, like the web. */
+export function OrdersTabs({ virtual, header, initial = 'open' }: { virtual?: boolean; header?: ReactNode; initial?: OrderTab }) {
+  const [tab, setTab] = useState<OrderTab>(initial);
+  const tb = ORDER_TABS[tab];
+  const tabs = <Tabs value={tab} onChange={setTab} items={(Object.keys(ORDER_TABS) as OrderTab[]).map((k) => ({ k, label: ORDER_TABS[k].label }))} />;
+  return <OrdersList key={tab} virtual={virtual} header={<>{header}{tabs}</>} statuses={[...tb.s]} canCancel={tab === 'open'} emptyTitle={tb.title} emptyText={tb.text} />;
+}
+
+interface Pos { id: string; instrumentId: string; netQty: number; avgPrice: string; realizedPnl: string; unrealizedPnl?: string; ltp?: string; instrument?: { symbol: string } }
+export function PositionsList({ userId, canTrade }: { userId?: string; canTrade?: boolean }) {
+  const { data, error, loading, refetch } = useQuery<{ positions: Pos[] }>(`query($u:ID){ positions(userId:$u){ id instrumentId netQty avgPrice realizedPnl unrealizedPnl ltp instrument{ symbol } } }`, { u: userId }, 3000);
   if (loading && !data) return <Skeleton />;
   if (error && !data) return <ErrorState error={error} retry={refetch} />;
-  if (!data!.orders.length) return <Empty icon="list" title={emptyTitle}>{emptyText}</Empty>;
+  if (!data!.positions.length) return <Empty icon="briefcase" title="No positions" action={canTrade ? <Button size="sm" kind="primary" title="Find instruments" onPress={() => router.push('/search')} /> : undefined}>A position opens when a buy or sell order executes.</Empty>;
+  const total = data!.positions.reduce((a, p) => a + Number(p.unrealizedPnl ?? 0), 0).toFixed(2);
+  const exit = (p: Pos) => router.push(`/instrument/${p.instrumentId}?side=${p.netQty > 0 ? 'SELL' : 'BUY'}&qty=${Math.abs(p.netQty)}`);
   return (
     <View>
-      {data!.orders.map((o) => (
-        <ListRow key={o.id} onPress={canCancel && o.status === 'OPEN' ? () => setCancel(o) : undefined}
-          title={o.instrument ? shortSymbol(o.instrument.symbol) : '—'}
-          sub={<View style={{ gap: 2 }}><Row gap={6}><T v="xs" c={o.side === 'BUY' ? 'pos' : 'neg'} w="600">{o.side === 'BUY' ? 'Buy' : 'Sell'}</T><T v="xs">{o.quantity} qty · {OTYPE[o.type] ?? o.type}{o.triggerPrice ? ` @ ₹${inr(o.triggerPrice)}` : ''} · {when(o.createdAt)}</T></Row>{o.rejectReason ? <T v="xs" c="neg">{o.rejectReason}</T> : null}</View>}
-          right={<View style={{ alignItems: 'flex-end', gap: 4 }}><T v="num">₹{inr(o.fillPrice ?? o.limitPrice ?? o.triggerPrice)}</T><StatusBadge v={o.status} /></View>} />
+      <Spread style={{ paddingVertical: S[3] }}><T c="text2">Total open P&L</T><T v="numLg" c={toneOfValue(total) === 'flat' ? 'text2' : (toneOfValue(total) as 'pos')}>{inr(total, true)}</T></Spread>
+      <Divider />
+      {[...data!.positions].sort((a, b) => Number(b.netQty !== 0) - Number(a.netQty !== 0)).map((p) => (
+        <ListRow key={p.id}
+          onPress={() => router.push(`/instrument/${p.instrumentId}`)}
+          label={`${p.instrument ? shortSymbol(p.instrument.symbol) : ''} chart`}
+          title={p.instrument ? shortSymbol(p.instrument.symbol) : '—'}
+          sub={p.netQty === 0 ? `Closed · LTP ₹${inr(p.ltp)}` : `${p.netQty > 0 ? 'Long' : 'Short'} ${Math.abs(p.netQty)} · avg ₹${inr(p.avgPrice)} · LTP ₹${inr(p.ltp)}`}
+          right={p.netQty === 0
+            ? <View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num" c={toneOfValue(p.realizedPnl) === 'flat' ? 'text2' : (toneOfValue(p.realizedPnl) as 'pos')}>{inr(p.realizedPnl, true)}</T><T v="xs">Booked</T></View>
+            : <View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num" c={toneOfValue(p.unrealizedPnl) === 'flat' ? 'text2' : (toneOfValue(p.unrealizedPnl) as 'pos')}>{inr(p.unrealizedPnl, true)}</T><T v="xs">Booked {inr(p.realizedPnl, true)}</T></View>}
+          action={canTrade && p.netQty !== 0 ? <Button size="sm" kind={p.netQty > 0 ? 'sell' : 'buy'} title="Exit" onPress={() => exit(p)} /> : undefined} />
       ))}
-      <Sheet visible={!!cancel} title="Cancel this order?" sub={cancel ? `${cancel.side === 'BUY' ? 'Buy' : 'Sell'} ${cancel.quantity} ${shortSymbol(cancel.instrument?.symbol ?? '')} ${cancel.triggerPrice ? ' trigger' : ''} at ₹${inr(cancel.limitPrice ?? cancel.triggerPrice)}` : ''} onClose={() => setCancel(null)}>
+    </View>
+  );
+}
+
+const KIND: Record<string, string> = { OPENING_BALANCE: 'Opening balance', DEPOSIT: 'Funds added', WITHDRAWAL: 'Withdrawal', TRADE_PNL: 'Trade P&L', FEE: 'Brokerage', ADJUSTMENT: 'Adjustment', REVERSAL: 'Reversal' };
+interface Led { postingId: string; kind: string; memo: string; amount: string; createdAt: string }
+const LedgerRow = memo(function LedgerRow({ x }: { x: Led }) {
+  const tn = toneOfValue(x.amount);
+  return <ListRow left={<IconMark icon={tn === 'pos' ? 'down' : 'up'} tone={tn === 'pos' ? 'pos' : undefined} />} title={KIND[x.kind] ?? x.kind} sub={`${x.memo} · ${when(x.createdAt)}`}
+    right={<T v="num" c={tn === 'flat' ? 'text2' : (tn as 'pos')}>{inr(x.amount, true)}</T>} />;
+});
+export function LedgerList({ userId, virtual }: { userId?: string; virtual?: boolean }) {
+  const { data, error, loading, refetch } = useQuery<{ ledgerHistory: Led[] }>(`query($u:ID){ ledgerHistory(userId:$u, limit:200){ postingId kind memo amount createdAt } }`, { u: userId });
+  const list = data?.ledgerHistory ?? [];
+  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="file" title="No transactions yet">Trades, charges and fund movements appear here.</Empty>;
+  if (virtual) return <VList data={list} keyOf={(x) => x.postingId} empty={state} render={(x) => <LedgerRow x={x} />} />;
+  if (!list.length) return state;
+  return <View>{list.slice(0, 60).map((x) => <LedgerRow key={x.postingId} x={x} />)}</View>;
+}
+
+interface Pay { id: string; username?: string; type: string; amount: string; status: string; reviewNote?: string; createdAt: string }
+export function RequestsList({ userId, showName, canCancel }: { userId?: string; showName?: boolean; canCancel?: boolean }) {
+  const { data, error, loading, refetch } = useQuery<{ paymentRequests: Pay[] }>(`query($u:ID){ paymentRequests(userId:$u, limit:50){ id username type amount status reviewNote createdAt } }`, { u: userId }, 10000);
+  const [cancel, setCancel] = useState<Pay | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (loading && !data) return <Skeleton />;
+  if (error && !data) return <ErrorState error={error} retry={refetch} />;
+  if (!data!.paymentRequests.length) return <Empty icon="wallet" title="No fund requests" />;
+  return (
+    <View>
+      {data!.paymentRequests.map((p) => (
+        <ListRow key={p.id} title={`${showName && p.username ? `${p.username} · ` : ''}${p.type === 'DEPOSIT' ? 'Add funds' : 'Withdraw'}`} sub={`${when(p.createdAt)}${p.reviewNote ? ` · ${p.reviewNote}` : ''}`}
+          right={<Row gap={S[2]}><View style={{ alignItems: 'flex-end', gap: 4 }}><T v="num">₹{inr(p.amount)}</T><StatusBadge v={p.status} /></View>{canCancel && p.status === 'REQUESTED' && <Button size="sm" title="Cancel" onPress={() => setCancel(p)} />}</Row>} />
+      ))}
+      <Sheet visible={!!cancel} title="Cancel this request?" sub={cancel ? `${cancel.type === 'DEPOSIT' ? 'Add funds' : 'Withdraw'} ₹${inr(cancel.amount)}` : ''} onClose={() => setCancel(null)}>
         <Row>
-          <Button block title="Keep order" onPress={() => setCancel(null)} />
-          <Button block kind="sell" title="Cancel order" busy={busy} onPress={async () => {
+          <Button block title="Keep request" onPress={() => setCancel(null)} />
+          <Button block kind="sell" title="Cancel request" busy={busy} onPress={async () => {
             if (!cancel) return; setBusy(true);
-            try { await gql(`mutation($id:ID!){ cancelOrder(orderId:$id){ id } }`, { id: cancel.id }); toast('Order cancelled'); } catch (e) { toast((e as Error).message, true); }
+            try { await gql(`mutation($id:ID!){ cancelPayment(id:$id){ id } }`, { id: cancel.id }); toast('Request cancelled'); } catch (e) { toast((e as Error).message, true); }
             setBusy(false); setCancel(null); void refetch();
           }} />
         </Row>
@@ -274,72 +452,18 @@ export function OrdersList({ userId, statuses, canCancel, emptyTitle = 'No order
   );
 }
 
-interface Pos { id: string; instrumentId: string; netQty: number; avgPrice: string; realizedPnl: string; unrealizedPnl?: string; ltp?: string; instrument?: { symbol: string } }
-export function PositionsList({ userId, canTrade }: { userId?: string; canTrade?: boolean }) {
-  const { data, error, loading, refetch } = useQuery<{ positions: Pos[] }>(`query($u:ID){ positions(userId:$u){ id instrumentId netQty avgPrice realizedPnl unrealizedPnl ltp instrument{ symbol } } }`, { u: userId }, 3000);
-  if (loading && !data) return <Skeleton />;
-  if (error && !data) return <ErrorState error={error} retry={refetch} />;
-  if (!data!.positions.length) return <Empty icon="briefcase" title="No positions" action={canTrade ? <Button size="sm" kind="primary" title="Explore instruments" onPress={() => router.push('/(trader)')} /> : undefined}>A position opens when a buy or sell order executes.</Empty>;
-  const total = data!.positions.reduce((a, p) => a + Number(p.unrealizedPnl ?? 0), 0).toFixed(2);
-  return (
-    <View>
-      <Spread style={{ paddingVertical: S[3] }}><T c="text2">Total open P&L</T><T v="numLg" c={toneOfValue(total) === 'flat' ? 'text2' : (toneOfValue(total) as 'pos')}>{inr(total, true)}</T></Spread>
-      <Divider />
-      {data!.positions.map((p) => (
-        <ListRow key={p.id}
-          onPress={canTrade && p.netQty !== 0 ? () => router.push(`/instrument/${p.instrumentId}?side=${p.netQty > 0 ? 'SELL' : 'BUY'}&qty=${Math.abs(p.netQty)}`) : undefined}
-          label={canTrade ? 'Open exit order' : undefined}
-          title={p.instrument ? shortSymbol(p.instrument.symbol) : '—'}
-          sub={`${p.netQty > 0 ? 'Long' : p.netQty < 0 ? 'Short' : 'Closed'} ${Math.abs(p.netQty)} · avg ₹${inr(p.avgPrice)} · LTP ₹${inr(p.ltp)}`}
-          right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num" c={toneOfValue(p.unrealizedPnl) === 'flat' ? 'text2' : (toneOfValue(p.unrealizedPnl) as 'pos')}>{inr(p.unrealizedPnl, true)}</T><T v="xs">Booked {inr(p.realizedPnl, true)}</T></View>} />
-      ))}
-    </View>
-  );
-}
-
-const KIND: Record<string, string> = { OPENING_BALANCE: 'Opening balance', DEPOSIT: 'Funds added', WITHDRAWAL: 'Withdrawal', TRADE_PNL: 'Trade P&L', FEE: 'Brokerage', ADJUSTMENT: 'Adjustment', REVERSAL: 'Reversal' };
-export function LedgerList({ userId }: { userId?: string }) {
-  const { data, error, loading, refetch } = useQuery<{ ledgerHistory: { postingId: string; kind: string; memo: string; amount: string; createdAt: string }[] }>(`query($u:ID){ ledgerHistory(userId:$u, limit:60){ postingId kind memo amount createdAt } }`, { u: userId });
-  if (loading && !data) return <Skeleton />;
-  if (error && !data) return <ErrorState error={error} retry={refetch} />;
-  if (!data!.ledgerHistory.length) return <Empty icon="file" title="No transactions yet">Trades, charges and fund movements appear here.</Empty>;
-  return (
-    <View>
-      {data!.ledgerHistory.map((x) => {
-        const tn = toneOfValue(x.amount);
-        return <ListRow key={x.postingId} left={<IconMark icon={tn === 'pos' ? 'down' : 'up'} tone={tn === 'pos' ? 'pos' : undefined} />} title={KIND[x.kind] ?? x.kind} sub={`${x.memo} · ${when(x.createdAt)}`}
-          right={<T v="num" c={tn === 'flat' ? 'text2' : (tn as 'pos')}>{inr(x.amount, true)}</T>} />;
-      })}
-    </View>
-  );
-}
-
-interface Pay { id: string; username?: string; type: string; amount: string; status: string; reviewNote?: string; createdAt: string }
-export function RequestsList({ userId, showName }: { userId?: string; showName?: boolean }) {
-  const { data, error, loading, refetch } = useQuery<{ paymentRequests: Pay[] }>(`query($u:ID){ paymentRequests(userId:$u, limit:50){ id username type amount status reviewNote createdAt } }`, { u: userId }, 10000);
-  if (loading && !data) return <Skeleton />;
-  if (error && !data) return <ErrorState error={error} retry={refetch} />;
-  if (!data!.paymentRequests.length) return <Empty icon="wallet" title="No fund requests" />;
-  return (
-    <View>
-      {data!.paymentRequests.map((p) => (
-        <ListRow key={p.id} title={`${showName && p.username ? `${p.username} · ` : ''}${p.type === 'DEPOSIT' ? 'Add funds' : 'Withdraw'}`} sub={`${when(p.createdAt)}${p.reviewNote ? ` · ${p.reviewNote}` : ''}`}
-          right={<View style={{ alignItems: 'flex-end', gap: 4 }}><T v="num">₹{inr(p.amount)}</T><StatusBadge v={p.status} /></View>} />
-      ))}
-    </View>
-  );
-}
-
 /* ====================================================================== profile / notifications */
 interface Sess { id: string; deviceName?: string; ip?: string; lastUsedAt: string; current: boolean }
 export function ProfileView() {
   const t = useTheme();
-  const { me, signOut, settings } = useAuth();
+  const { me, signOut, settings, quick } = useAuth();
   const sessions = useQuery<{ mySessions: Sess[] }>(`{ mySessions { id deviceName ip lastUsedAt current } }`);
   const [pw, setPw] = useState(false);
+  const [mfa, setMfa] = useState(false);
+  const [others, setOthers] = useState(false);
   const [terms, setTerms] = useState(false);
   const role = me?.role === 'SUPER_ADMIN' ? 'Super Admin' : me?.role === 'BROKER' ? 'Broker' : 'Trader';
-  const Item = ({ icon, label, sub, onPress }: { icon: 'key' | 'book' | 'chat' | 'shield' | 'file' | 'alert' | 'download' | 'activity' | 'device' | 'lock'; label: string; sub?: string; onPress?: () => void }) => (
+  const Item = ({ icon, label, sub, onPress }: { icon: 'key' | 'book' | 'chat' | 'shield' | 'file' | 'alert' | 'download' | 'activity' | 'device' | 'lock' | 'fingerprint'; label: string; sub?: string; onPress?: () => void }) => (
     <ListRow onPress={onPress} label={label} left={<IconMark icon={icon} />} title={label} sub={sub} right={onPress ? <Icon name="chevronRight" size={18} color={t.text3} /> : undefined} />
   );
   return (
@@ -349,11 +473,13 @@ export function ProfileView() {
         <View style={{ flex: 1 }}><T v="h2">{me?.displayName}</T><T v="sm" c="text2">{me?.username} · {role}{me?.isDemo ? ' · demo' : ''}</T></View>
       </Row>
       <View>
-        <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On' : 'Off. Set it up on the web portal'} />
+        <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Sign-ins ask for a code from your authenticator app' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
         {!me?.isDemo && <Item icon="key" label="Change password" onPress={() => setPw(true)} />}
+        {!me?.isDemo && me?.role !== 'SUPER_ADMIN' && <Item icon="fingerprint" label="MPIN & fingerprint" sub={quick?.owner.userId === me?.id ? (quick?.owner.biometric ? 'On: MPIN and fingerprint' : 'On: MPIN') : 'Off. Unlock without your password'} onPress={() => router.push('/quick-settings')} />}
         <Item icon="lock" label="Login history" sub="Sign-ins and failed attempts, and the rules you accepted" onPress={() => router.push('/logins')} />
         <Item icon="activity" label="Account activity" sub="Every action with time, IP and device" onPress={() => router.push('/activity')} />
         {me?.role === 'TRADER' && <>
+          <Item icon="activity" label="Algo trading" sub="Strategies, backtests and automated paper trades" onPress={() => router.push('/algo')} />
           <Item icon="file" label="Ledger history" sub="Every credit and debit on your account" onPress={() => router.push('/ledger')} />
           <Item icon="alert" label="Rejection logs" sub="Rejected and cancelled orders, with the reason" onPress={() => router.push('/rejections')} />
           <Item icon="download" label="Bill download" sub="Statement PDF by week or custom dates" onPress={() => router.push('/statement')} />
@@ -362,7 +488,7 @@ export function ProfileView() {
         {!!settings?.helplineUrl && <Item icon="chat" label="Contact support" sub="Chat with us" onPress={() => void Linking.openURL(settings.helplineUrl)} />}
       </View>
       <Preferences />
-      <Section title="Signed-in devices">
+      <Section title="Signed-in devices" action={(sessions.data?.mySessions.length ?? 0) > 1 ? <Button size="sm" kind="ghost" title="Sign out others" onPress={() => setOthers(true)} /> : undefined}>
         {sessions.error && !sessions.data ? <ErrorState error={sessions.error} retry={sessions.refetch} /> : !sessions.data ? <Skeleton rows={2} /> : sessions.data.mySessions.map((s) => (
           <ListRow key={s.id} left={<IconMark icon="device" />} title={s.deviceName ?? 'Unknown device'} sub={`${s.ip ?? ''} · last active ${when(s.lastUsedAt)}`}
             right={s.current ? <Badge text="This device" tone="ok" /> : <Button size="sm" kind="danger" title="Sign out" onPress={async () => { try { await gql(`mutation($id:ID!){ revokeSession(sessionId:$id) }`, { id: s.id }); toast('Device signed out'); } catch (e) { toast((e as Error).message, true); } void sessions.refetch(); }} />} />
@@ -371,10 +497,52 @@ export function ProfileView() {
       <Button kind="danger" icon="logout" title="Sign out" size="lg" onPress={() => void signOut()} />
       <T v="xs" style={{ textAlign: 'center' }}>{settings?.appName ?? 'The K'} app {APP_VERSION} · API {settings?.apiVersion ?? '—'}</T>
       {pw && <ChangePassword onClose={() => setPw(false)} />}
+      {mfa && <MfaSetupSheet onClose={() => setMfa(false)} />}
+      <Sheet visible={others} title="Sign out other devices?" sub="Everyone signed in as you, except on this phone, will need to sign in again." onClose={() => setOthers(false)}>
+        <Row>
+          <Button block title="Cancel" onPress={() => setOthers(false)} />
+          <Button block kind="sell" title="Sign them out" onPress={async () => {
+            try { const d = await gql<{ revokeOtherSessions: number }>(`mutation { revokeOtherSessions }`); toast(`${d.revokeOtherSessions} device${d.revokeOtherSessions === 1 ? '' : 's'} signed out`); } catch (e) { toast((e as Error).message, true); }
+            setOthers(false); void sessions.refetch();
+          }} />
+        </Row>
+      </Sheet>
       <Sheet visible={terms} title="Rules" onClose={() => setTerms(false)}>
         {settings?.termsRules.map((r, i) => <Row key={i} style={{ alignItems: 'flex-start' }}><T c="brand" w="700">{i + 1}</T><T style={{ flex: 1 }}>{r}</T></Row>)}
       </Sheet>
     </Screen>
+  );
+}
+
+/** Turn on two-step verification: open the authenticator app (or type the key), then enter its 6-digit code. */
+export function MfaSetupSheet({ onClose }: { onClose: () => void }) {
+  const t = useTheme();
+  const { reload } = useAuth();
+  const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    gql<{ beginMfaEnrollment: { secret: string; otpauthUrl: string } }>(`mutation { beginMfaEnrollment { secret otpauthUrl } }`).then((d) => setSetup(d.beginMfaEnrollment)).catch((e) => setErr((e as Error).message));
+  }, []);
+  const key = setup?.secret.replace(/(.{4})/g, '$1 ').trim();
+  return (
+    <Sheet visible title="Two-step verification" sub="Sign-ins and sensitive actions will ask for a code from an authenticator app." onClose={onClose}>
+      <T w="600">1. Add this account to your authenticator app</T>
+      <Button kind="primary" icon="external" title="Open authenticator app" disabled={!setup} onPress={() => setup && void Linking.openURL(setup.otpauthUrl).catch(() => toast('No authenticator app found. Enter the key by hand.', true))} />
+      <View style={{ gap: 4, padding: S[3], borderRadius: R.md, backgroundColor: t.bg2 }}>
+        <T v="xs" c="text2">Or enter this key in the app (time-based):</T>
+        {setup ? <T v="num" style={{ letterSpacing: 1 }} selectable>{key}</T> : <Skeleton rows={1} />}
+      </View>
+      <T w="600">2. Enter the 6-digit code it shows</T>
+      <Field label="Code" keyboardType="number-pad" textContentType="oneTimeCode" maxLength={6} value={code} onChangeText={(v) => setCode(v.replace(/\D/g, ''))} />
+      {err && <Notice tone="err">{err}</Notice>}
+      <Button kind="primary" size="lg" title="Turn on" busy={busy} disabled={code.length !== 6 || !setup} onPress={async () => {
+        setBusy(true); setErr(null);
+        try { await gql(`mutation($c:String!){ confirmMfaEnrollment(code:$c) }`, { c: code }); await reload(); toast('Two-step verification is on'); onClose(); }
+        catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+      }} />
+    </Sheet>
   );
 }
 
@@ -398,18 +566,21 @@ function ChangePassword({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function NotificationsView() {
-  const { data, error, loading, refetch } = useQuery<{ notifications: { id: string; kind: string; title: string; body: string; readAt?: string; createdAt: string }[] }>(`{ notifications(limit:100){ id kind title body readAt createdAt } }`);
-  const unread = data?.notifications.filter((n) => !n.readAt).length ?? 0;
+interface Note { id: string; kind: string; title: string; body: string; readAt?: string; createdAt: string }
+const NoteRow = memo(function NoteRow({ n }: { n: Note }) {
   return (
-    <Screen title="Notifications" back onRefresh={refetch} right={unread ? <Button size="sm" kind="ghost" title="Mark read" onPress={async () => { await gql(`mutation { markNotificationsRead }`).catch(() => undefined); void refetch(); }} /> : undefined}>
-      {loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !data!.notifications.length ? <Empty icon="bell" title="You’re all caught up">Order fills, fund requests and security alerts appear here.</Empty> : (
-        <View>{data!.notifications.map((n) => (
-          <ListRow key={n.id} left={<IconMark icon={n.kind.startsWith('security') ? 'shield' : n.kind.startsWith('payment') ? 'wallet' : n.kind.startsWith('order') ? 'list' : 'bell'} tone={n.readAt ? undefined : 'brand'} />}
-            title={<Spread><T w={n.readAt ? '500' : '700'} style={{ flex: 1 }} numberOfLines={1}>{n.title}</T><T v="xs">{when(n.createdAt)}</T></Spread>}
-            sub={<T v="sm" c="text2">{n.body}</T>} />
-        ))}</View>
-      )}
+    <ListRow left={<IconMark icon={n.kind.startsWith('security') ? 'shield' : n.kind.startsWith('payment') ? 'wallet' : n.kind.startsWith('order') ? 'list' : n.kind.startsWith('algo') ? 'activity' : 'bell'} tone={n.readAt ? undefined : 'brand'} />}
+      title={<Spread><T w={n.readAt ? '500' : '700'} style={{ flex: 1 }} numberOfLines={1}>{n.title}</T><T v="xs">{when(n.createdAt)}</T></Spread>}
+      sub={<T v="sm" c="text2">{n.body}</T>} />
+  );
+});
+export function NotificationsView() {
+  const { data, error, loading, refetch } = useQuery<{ notifications: Note[] }>(`{ notifications(limit:100){ id kind title body readAt createdAt } }`);
+  const unread = data?.notifications.filter((n) => !n.readAt).length ?? 0;
+  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="bell" title="You’re all caught up">Order fills, fund requests and security alerts appear here.</Empty>;
+  return (
+    <Screen title="Notifications" back scroll={false} right={unread ? <Button size="sm" kind="ghost" title="Mark read" onPress={async () => { await gql(`mutation { markNotificationsRead }`).catch(() => undefined); void refetch(); }} /> : undefined}>
+      <VList data={data?.notifications ?? []} keyOf={(n) => n.id} empty={state} render={(n) => <NoteRow n={n} />} />
     </Screen>
   );
 }
@@ -562,7 +733,8 @@ export function Ticker() {
   const t = useTheme();
   const { settings } = useAuth();
   const [now, setNow] = useState(new Date());
-  useEffect(() => { const h = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(h); }, []);
+  const active = useActive();
+  useEffect(() => { if (!active) return; setNow(new Date()); const h = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(h); }, [active]);
   const msgs = (settings?.tickerMessages ?? []).filter(Boolean);
   const text = msgs.join('   •   ');
   return (
@@ -615,11 +787,11 @@ export function StatementBlock() {
       <Chips value={p} onChange={setP} items={[{ k: 'week', label: 'This week' }, { k: 'lastWeek', label: 'Last week' }, { k: 'month', label: 'This month' }, { k: 'custom', label: 'Custom' }]} />
       {p === 'custom' && (
         <Row style={{ alignItems: 'flex-start' }}>
-          <View style={{ flex: 1 }}><Field label="From (YYYY-MM-DD)" value={cf} onChangeText={setCf} maxLength={10} keyboardType="numbers-and-punctuation" /></View>
-          <View style={{ flex: 1 }}><Field label="To (YYYY-MM-DD)" value={ct} onChangeText={setCt} maxLength={10} keyboardType="numbers-and-punctuation" /></View>
+          <DateField label="From" value={cf} max={ct} onChange={setCf} />
+          <DateField label="To" value={ct} min={cf} max={ymd(today)} onChange={setCt} />
         </Row>
       )}
-      <T v="xs" c={bad ? 'neg' : 'text2'}>{bad ? 'Enter dates as YYYY-MM-DD, with the start on or before the end.' : `${from} to ${to}: opening & closing balance, every transaction and trade.`}</T>
+      <T v="xs" c={bad ? 'neg' : 'text2'}>{bad ? 'Pick a start date on or before the end date.' : `${ymdLabel(from)} to ${ymdLabel(to)}: opening & closing balance, every transaction and trade.`}</T>
       <Button kind="primary" icon="download" title="Download statement (PDF)" busy={busy} disabled={bad} onPress={async () => {
         setBusy(true);
         try {

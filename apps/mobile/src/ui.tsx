@@ -2,10 +2,12 @@
  * Native component kit. Every screen composes these; no screen styles its own buttons, inputs or rows.
  */
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import * as Haptics from 'expo-haptics';
+import { useActive } from './active';
 import {
-  ActivityIndicator, Animated, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput,
-  View, type TextInputProps, type TextStyle, type ViewStyle,
+  ActivityIndicator, Animated, Easing, FlatList, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput,
+  View, type RefreshControlProps, type TextInputProps, type TextStyle, type ViewStyle,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError, gql, onLiveState, setStepUpHandler } from './api';
@@ -15,7 +17,7 @@ import { NUM_SCALE, usePrefs } from './prefs';
 
 /* ============================================================== text */
 type TV = 'h1' | 'h2' | 'h3' | 'body' | 'sm' | 'xs' | 'num' | 'numLg' | 'hero';
-export function T({ v = 'body', c, w, style, children, ...p }: { v?: TV; c?: 'text' | 'text2' | 'text3' | 'pos' | 'neg' | 'brand' | 'warn'; w?: '400' | '500' | '600' | '700'; style?: TextStyle; children: ReactNode; numberOfLines?: number; accessibilityRole?: 'header' | 'text' | 'alert' }) {
+export function T({ v = 'body', c, w, style, children, ...p }: { v?: TV; c?: 'text' | 'text2' | 'text3' | 'pos' | 'neg' | 'brand' | 'warn'; w?: '400' | '500' | '600' | '700'; style?: TextStyle; children: ReactNode; numberOfLines?: number; selectable?: boolean; accessibilityRole?: 'header' | 'text' | 'alert' }) {
   const t = useTheme();
   const { prefs } = usePrefs();
   const k = NUM_SCALE[prefs.numberSize];
@@ -37,23 +39,42 @@ export function T({ v = 'body', c, w, style, children, ...p }: { v?: TV; c?: 'te
 }
 
 /* ============================================================== layout */
-/** Screen = safe area + app header + optional pull-to-refresh. */
+/* Pull-to-refresh: every useQuery inside a Screen registers its refetch, so pulling down refreshes the whole screen. */
+type Refresher = () => Promise<unknown>;
+const RegisterCtx = createContext<((f: Refresher) => () => void) | null>(null);
+const ControlCtx = createContext<ReactElement<RefreshControlProps> | undefined>(undefined);
+/** The screen's RefreshControl, for a FlatList that replaces the screen's own scroll view. */
+export const useRefreshControl = () => useContext(ControlCtx);
+
+/** Screen = safe area + app header + pull-to-refresh (always on). With scroll={false}, a child list scrolls instead. */
 export function Screen({ children, onRefresh, title, back, right, scroll = true, footer, pad = true }: { children: ReactNode; onRefresh?: () => Promise<unknown>; title?: string; back?: boolean; right?: ReactNode; scroll?: boolean; footer?: ReactNode; pad?: boolean }) {
   const t = useTheme();
   const [refreshing, setRefreshing] = useState(false);
+  const fns = useRef(new Set<Refresher>());
+  const extra = useRef(onRefresh);
+  extra.current = onRefresh;
+  const register = useCallback((f: Refresher) => { fns.current.add(f); return () => void fns.current.delete(f); }, []);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await Promise.all([extra.current?.(), ...[...fns.current].map((f) => f())]); } catch { /* each query shows its own error */ } finally { setRefreshing(false); }
+  }, []);
+  const control = useMemo(() => <RefreshControl tintColor={t.brand} colors={[t.brand]} refreshing={refreshing} onRefresh={refresh} />, [refreshing, refresh, t.brand]);
   const body = <View style={{ paddingHorizontal: pad ? S[4] : 0, paddingTop: S[4], paddingBottom: S[8], gap: S[5] }}>{children}</View>;
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={['top']}>
-      <Header title={title} back={back} right={right} />
-      <LiveBanner />
-      {scroll ? (
-        <ScrollView keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="automatic"
-          refreshControl={onRefresh ? <RefreshControl tintColor={t.brand} colors={[t.brand]} refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await onRefresh(); setRefreshing(false); }} /> : undefined}>
-          {body}
-        </ScrollView>
-      ) : <View style={{ flex: 1 }}>{body}</View>}
-      {footer}
-    </SafeAreaView>
+    <RegisterCtx.Provider value={register}>
+      <ControlCtx.Provider value={control}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={['top']}>
+          <Header title={title} back={back} right={right} />
+          <LiveBanner />
+          {scroll ? (
+            <ScrollView keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="automatic" refreshControl={control}>
+              {body}
+            </ScrollView>
+          ) : <View style={{ flex: 1 }}>{children}</View>}
+          {footer}
+        </SafeAreaView>
+      </ControlCtx.Provider>
+    </RegisterCtx.Provider>
   );
 }
 
@@ -114,6 +135,88 @@ export function Section({ title, action, children }: { title: string; action?: R
   );
 }
 
+/* ============================================================== feedback */
+/** Light tap feedback for buttons and selections (no-op where the device has no haptics). */
+export const tap = (kind: 'light' | 'select' | 'heavy' = 'light') => {
+  if (Platform.OS === 'web') return;
+  if (kind === 'select') void Haptics.selectionAsync().catch(() => undefined);
+  else void Haptics.impactAsync(kind === 'heavy' ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+};
+
+/* ============================================================== lists */
+/**
+ * Virtualised list that scrolls the whole screen (use inside <Screen scroll={false}>): only rows near the
+ * viewport are mounted. `header` sits above the rows; pull-to-refresh comes from the screen.
+ */
+export function VList<T>({ data, render, keyOf, header, empty, footer }: { data: T[]; render: (item: T, index: number) => ReactElement; keyOf: (item: T) => string; header?: ReactNode; empty?: ReactElement | null; footer?: ReactElement | null }) {
+  const control = useRefreshControl();
+  return (
+    <FlatList
+      data={data}
+      renderItem={({ item, index }) => render(item, index)}
+      keyExtractor={keyOf}
+      ListHeaderComponent={header ? <View style={{ gap: S[4], paddingBottom: S[2] }}>{header}</View> : null}
+      ListEmptyComponent={empty ?? null}
+      ListFooterComponent={footer ?? null}
+      contentContainerStyle={{ paddingHorizontal: S[4], paddingTop: S[4], paddingBottom: S[8] }}
+      refreshControl={control}
+      keyboardShouldPersistTaps="handled"
+      initialNumToRender={12}
+      maxToRenderPerBatch={10}
+      windowSize={7}
+      removeClippedSubviews={Platform.OS === 'android'}
+    />
+  );
+}
+
+/** Swipe a row left to reveal an action (e.g. Remove). A tap anywhere closes it again. */
+export function SwipeRow({ children, action, actionLabel }: { children: ReactNode; action: () => void; actionLabel: string }) {
+  const t = useTheme();
+  const W = 96;
+  const x = useRef(new Animated.Value(0)).current;
+  const open = useRef(false);
+  const settle = (to: number) => { open.current = to !== 0; Animated.spring(x, { toValue: to, useNativeDriver: true, bounciness: 0, speed: 18 }).start(); };
+  const pan = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.6,
+    onPanResponderMove: (_e, g) => x.setValue(Math.max(-W * 1.3, Math.min(0, (open.current ? -W : 0) + g.dx))),
+    onPanResponderRelease: (_e, g) => { const cur = (open.current ? -W : 0) + g.dx; if (cur < -W / 2 || g.vx < -0.5) { settle(-W); tap('select'); } else settle(0); },
+    onPanResponderTerminate: () => settle(open.current ? -W : 0),
+  }), [x]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <View style={{ overflow: 'hidden' }}>
+      <Pressable onPress={() => { settle(0); action(); }} accessibilityRole="button" accessibilityLabel={actionLabel}
+        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: W, backgroundColor: t.neg, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ color: '#fff', fontWeight: '600' }}>{actionLabel}</Text>
+      </Pressable>
+      <Animated.View style={{ transform: [{ translateX: x }], backgroundColor: t.bg }} {...pan.panHandlers} onTouchEnd={() => { if (open.current) settle(0); }}>
+        {children}
+      </Animated.View>
+    </View>
+  );
+}
+
+/** Brief green / red wash behind a row when its price moves (animated on the native thread). */
+export function Flash({ value, children, style }: { value?: string; children: ReactNode; style?: ViewStyle }) {
+  const t = useTheme();
+  const o = useRef(new Animated.Value(0)).current;
+  const prev = useRef(value);
+  const [up, setUp] = useState(true);
+  useEffect(() => {
+    if (value && prev.current && value !== prev.current) {
+      setUp(Number(value) > Number(prev.current));
+      o.setValue(1);
+      Animated.timing(o, { toValue: 0, duration: 700, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+    }
+    prev.current = value;
+  }, [value, o]);
+  return (
+    <View style={style}>
+      <Animated.View style={[StyleSheet.absoluteFill, { pointerEvents: 'none', backgroundColor: up ? t.posSoft : t.negSoft, opacity: o }]} />
+      {children}
+    </View>
+  );
+}
+
 /* ============================================================== controls */
 type BK = 'primary' | 'secondary' | 'buy' | 'sell' | 'danger' | 'ghost';
 export function Button({ title, onPress, kind = 'secondary', disabled, busy, size = 'md', icon, block }: { title: string; onPress: () => void; kind?: BK; disabled?: boolean; busy?: boolean; size?: 'sm' | 'md' | 'lg'; icon?: IconName; block?: boolean }) {
@@ -123,7 +226,7 @@ export function Button({ title, onPress, kind = 'secondary', disabled, busy, siz
   const border = kind === 'secondary' || kind === 'danger' ? t.line2 : 'transparent';
   const h = { sm: CTL.hSm, md: CTL.h, lg: CTL.hLg }[size];
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }} onPress={onPress} disabled={disabled || busy}
+    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }} onPress={() => { if (kind === 'primary' || kind === 'buy' || kind === 'sell') tap(); onPress(); }} disabled={disabled || busy}
       style={({ pressed }) => ({ height: h, minWidth: CTL.tap, paddingHorizontal: size === 'sm' ? S[3] : S[4], borderRadius: R.md, borderWidth: 1, borderColor: border, backgroundColor: pressed ? (kind === 'secondary' || kind === 'danger' || kind === 'ghost' ? t.bg3 : t.brandPressed) : bg, opacity: disabled ? 0.45 : 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: S[2], alignSelf: block ? 'stretch' : undefined, flex: block ? 1 : undefined })}>
       {busy ? <ActivityIndicator color={fg} /> : <>{icon && <Icon name={icon} size={18} color={fg} />}<Text style={{ color: fg, fontWeight: '600', fontSize: size === 'sm' ? FS.sm : size === 'lg' ? FS.lg : FS.md }}>{title}</Text></>}
     </Pressable>
@@ -162,7 +265,7 @@ export function Tabs<K extends string>({ value, onChange, items, scroll, right }
   const inner = items.map((i) => {
     const on = value === i.k;
     return (
-      <Pressable key={i.k} onPress={() => onChange(i.k)} accessibilityRole="tab" accessibilityState={{ selected: on }} style={{ paddingVertical: S[3], marginRight: S[5], borderBottomWidth: 2, borderBottomColor: on ? t.brand : 'transparent', minHeight: CTL.tap, justifyContent: 'center' }}>
+      <Pressable key={i.k} onPress={() => { if (!on) tap('select'); onChange(i.k); }} accessibilityRole="tab" accessibilityState={{ selected: on }} style={{ paddingVertical: S[3], marginRight: S[5], borderBottomWidth: 2, borderBottomColor: on ? t.brand : 'transparent', minHeight: CTL.tap, justifyContent: 'center' }}>
         <T c={on ? 'brand' : 'text2'} w={on ? '600' : '500'}>{i.label}</T>
       </Pressable>
     );
@@ -183,7 +286,7 @@ export function Chips<K extends string>({ value, onChange, items }: { value: K; 
       {items.map((i) => {
         const on = value === i.k;
         return (
-          <Pressable key={i.k} disabled={i.disabled} onPress={() => onChange(i.k)} accessibilityRole="button" accessibilityState={{ selected: on, disabled: !!i.disabled }}
+          <Pressable key={i.k} disabled={i.disabled} onPress={() => { if (!on) tap('select'); onChange(i.k); }} accessibilityRole="button" accessibilityState={{ selected: on, disabled: !!i.disabled }}
             style={({ pressed }) => ({ height: CTL.hSm, paddingHorizontal: S[3], borderRadius: R.pill, borderWidth: 1, borderColor: on ? t.brand : t.line2, backgroundColor: on ? t.brandSoft : pressed ? t.bg3 : t.bg, justifyContent: 'center', opacity: i.disabled ? 0.4 : 1 })}>
             <T v="sm" c={on ? 'brand' : 'text2'} w="500">{i.label}</T>
           </Pressable>
@@ -194,7 +297,8 @@ export function Chips<K extends string>({ value, onChange, items }: { value: K; 
 }
 
 /** Divider-separated pressable row (Groww-style list item). */
-export function ListRow({ left, title, sub, right, onPress, label }: { left?: ReactNode; title: ReactNode; sub?: ReactNode; right?: ReactNode; onPress?: () => void; label?: string }) {
+/** A list row. `action` (a button) sits beside the tappable area, never inside it, so taps don't collide. */
+export function ListRow({ left, title, sub, right, onPress, label, action }: { left?: ReactNode; title: ReactNode; sub?: ReactNode; right?: ReactNode; onPress?: () => void; label?: string; action?: ReactNode }) {
   const t = useTheme();
   const body = (
     <>
@@ -207,7 +311,13 @@ export function ListRow({ left, title, sub, right, onPress, label }: { left?: Re
     </>
   );
   const style = { flexDirection: 'row' as const, alignItems: 'center' as const, gap: S[3], minHeight: CTL.row, paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line };
-  if (!onPress) return <View style={style}>{body}</View>;
+  if (!onPress) return <View style={style}>{body}{action}</View>;
+  if (action) return (
+    <View style={[style, { paddingVertical: 0, marginHorizontal: -S[4], paddingRight: S[4] }]}>
+      <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: S[3], minHeight: CTL.row, paddingVertical: S[3], paddingLeft: S[4], backgroundColor: pressed ? t.bg2 : 'transparent' })}>{body}</Pressable>
+      {action}
+    </View>
+  );
   return <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={({ pressed }) => [style, { backgroundColor: pressed ? t.bg2 : 'transparent', marginHorizontal: -S[4], paddingHorizontal: S[4] }]}>{body}</Pressable>;
 }
 
@@ -343,47 +453,172 @@ export function Notice({ tone = 'info', children }: { tone?: 'info' | 'warn' | '
 export function Sheet({ visible, title, sub, onClose, children, dismissable = true }: { visible: boolean; title: string; sub?: string; onClose: () => void; children: ReactNode; dismissable?: boolean }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const [mounted, setMounted] = useState(visible);
+  const fade = useRef(new Animated.Value(0)).current;
+  const y = useRef(new Animated.Value(600)).current;
+  const height = useRef(600);
+  const closing = useRef(false);
+  const cb = useRef(onClose);
+  cb.current = onClose;
+  const animateIn = useCallback(() => {
+    closing.current = false;
+    y.setValue(height.current);
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 16 }),
+    ]).start();
+  }, [fade, y]);
+  const animateOut = useCallback((then?: () => void) => {
+    if (closing.current) return;
+    closing.current = true;
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(y, { toValue: height.current, duration: 200, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+    ]).start(({ finished }) => { if (!finished) return; setMounted(false); then?.(); });
+  }, [fade, y]);
+  useEffect(() => {
+    if (visible) { setMounted(true); requestAnimationFrame(animateIn); }
+    else if (mounted) animateOut();
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Close with the exit animation, then tell the parent. */
+  const close = useCallback(() => { if (dismissable) animateOut(() => cb.current()); }, [animateOut, dismissable]);
+  // Drag the handle or title down to close.
+  const pan = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_e, g) => dismissable && g.dy > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderMove: (_e, g) => y.setValue(Math.max(0, g.dy)),
+    onPanResponderRelease: (_e, g) => {
+      if (g.dy > Math.min(140, height.current * 0.3) || g.vy > 0.9) close();
+      else Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+    },
+    onPanResponderTerminate: () => Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start(),
+  }), [dismissable, close, y]);
+  if (!mounted) return null;
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={dismissable ? onClose : () => undefined} statusBarTranslucent>
+    <Modal visible transparent animationType="none" onRequestClose={close} statusBarTranslucent>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={dismissable ? onClose : undefined} accessibilityLabel="Close" accessibilityRole="button">
-          <View style={{ flex: 1, backgroundColor: t.overlay }} />
-        </Pressable>
-        <View style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: S[5], paddingTop: S[3], paddingBottom: S[5] + insets.bottom, gap: S[4], maxHeight: '90%' }}>
-          <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: t.line2 }} />
-          <Spread>
-            <View style={{ flex: 1 }}><T v="h2">{title}</T>{sub ? <T v="sm" c="text2" style={{ marginTop: 2 }}>{sub}</T> : null}</View>
-            {dismissable && <IconButton icon="x" label="Close" onPress={onClose} />}
-          </Spread>
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: t.overlay, opacity: fade }]}>
+          <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel="Close" accessibilityRole="button" />
+        </Animated.View>
+        <Animated.View onLayout={(e) => { height.current = e.nativeEvent.layout.height; }}
+          style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: S[5], paddingBottom: S[5] + insets.bottom, gap: S[4], maxHeight: '90%', transform: [{ translateY: y }] }}>
+          <View {...pan.panHandlers} style={{ paddingTop: S[3], gap: S[3] }}>
+            <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: t.line2 }} />
+            <Spread>
+              <View style={{ flex: 1 }}><T v="h2">{title}</T>{sub ? <T v="sm" c="text2" style={{ marginTop: 2 }}>{sub}</T> : null}</View>
+              {dismissable && <IconButton icon="x" label="Close" onPress={close} />}
+            </Spread>
+          </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: S[4] }}>{children}</ScrollView>
-        </View>
+        </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
   );
 }
 
+/* ============================================================== date picker */
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n: number) => String(n).padStart(2, '0');
+export const toYmd = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const parseYmd = (v: string) => { const [y, m, d] = v.split('-').map(Number); return new Date(y, (m ?? 1) - 1, d ?? 1); };
+export const ymdLabel = (v: string) => { const d = parseYmd(v); return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`; };
+
+/** Tappable date field (YYYY-MM-DD value) that opens a month calendar. */
+export function DateField({ label, value, onChange, min, max }: { label: string; value: string; onChange: (v: string) => void; min?: string; max?: string }) {
+  const t = useTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={{ gap: 6, flex: 1 }}>
+      <T v="sm" c="text2" w="500">{label}</T>
+      <Pressable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={`${label}: ${ymdLabel(value)}. Change date`}
+        style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: S[2], height: CTL.h + 4, borderWidth: 1, borderRadius: R.md, borderColor: t.line2, backgroundColor: pressed ? t.bg2 : t.bg, paddingHorizontal: S[3] })}>
+        <Icon name="calendar" size={18} color={t.text3} />
+        <T style={{ flex: 1 }}>{ymdLabel(value)}</T>
+      </Pressable>
+      <DatePickerSheet visible={open} title={label} value={value} min={min} max={max} onClose={() => setOpen(false)} onPick={(v) => { setOpen(false); onChange(v); }} />
+    </View>
+  );
+}
+
+export function DatePickerSheet({ visible, title, value, min, max, onPick, onClose }: { visible: boolean; title: string; value: string; min?: string; max?: string; onPick: (v: string) => void; onClose: () => void }) {
+  const t = useTheme();
+  const init = parseYmd(value);
+  const [month, setMonth] = useState({ y: init.getFullYear(), m: init.getMonth() });
+  useEffect(() => { if (visible) { const d = parseYmd(value); setMonth({ y: d.getFullYear(), m: d.getMonth() }); } }, [visible, value]);
+  const first = new Date(month.y, month.m, 1).getDay();
+  const days = new Date(month.y, month.m + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array(first).fill(null), ...Array.from({ length: days }, (_, k) => k + 1)];
+  while (cells.length % 7) cells.push(null);
+  const ymdOf = (d: number) => `${month.y}-${pad2(month.m + 1)}-${pad2(d)}`;
+  const canPrev = !min || `${month.y}-${pad2(month.m + 1)}-01` > min;
+  const canNext = !max || ymdOf(days) < max;
+  const shift = (n: number) => { tap('select'); setMonth((c) => { const d = new Date(c.y, c.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
+  const today = toYmd(new Date());
+  const W = `${100 / 7}%` as const;
+  return (
+    <Sheet visible={visible} title={title} onClose={onClose}>
+      <Spread>
+        <Pressable disabled={!canPrev} onPress={() => shift(-1)} accessibilityRole="button" accessibilityLabel="Previous month" hitSlop={8} style={{ padding: S[2], opacity: canPrev ? 1 : 0.3 }}><Icon name="chevronLeft" size={20} color={t.text} /></Pressable>
+        <T v="h3">{MONTHS_SHORT[month.m]} {month.y}</T>
+        <Pressable disabled={!canNext} onPress={() => shift(1)} accessibilityRole="button" accessibilityLabel="Next month" hitSlop={8} style={{ padding: S[2], opacity: canNext ? 1 : 0.3 }}><Icon name="chevronRight" size={20} color={t.text} /></Pressable>
+      </Spread>
+      <View>
+        <View style={{ flexDirection: 'row' }}>{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, k) => <View key={k} style={{ width: W, alignItems: 'center', paddingVertical: 4 }}><T v="xs" c="text3">{d}</T></View>)}</View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+          {cells.map((d, k) => {
+            if (d === null) return <View key={k} style={{ width: W, height: 42 }} />;
+            const v = ymdOf(d);
+            const off = (!!min && v < min) || (!!max && v > max);
+            const on = v === value;
+            return (
+              <Pressable key={k} disabled={off} onPress={() => { tap('select'); onPick(v); }} accessibilityRole="button" accessibilityLabel={ymdLabel(v)} accessibilityState={{ selected: on, disabled: off }} style={{ width: W, height: 42, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: on ? t.brand : 'transparent', borderWidth: v === today && !on ? 1 : 0, borderColor: t.brand, opacity: off ? 0.3 : 1 }}>
+                  <Text style={{ color: on ? t.brandInk : t.text, fontWeight: on || v === today ? '600' : '400', fontSize: FS.md }}>{d}</Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </Sheet>
+  );
+}
+
 /* ============================================================== data hook */
-export function useQuery<T>(query: string, variables?: Record<string, unknown>, pollMs?: number) {
+/**
+ * Loading / error / data with optional polling.
+ * - Polls only while the screen is focused and the app is in the foreground; refetches as soon as either comes back.
+ * - Skips the re-render when a poll returns exactly the same data.
+ * - Registers with the screen's pull-to-refresh.
+ */
+export function useQuery<T>(query: string, variables?: Record<string, unknown>, pollMs?: number, skip?: boolean) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const vars = JSON.stringify(variables ?? {});
   const alive = useRef(true);
+  const last = useRef<string | null>(null);
+  const active = useActive();
+  const register = useContext(RegisterCtx);
   const refetch = useCallback(async () => {
     try {
       const d = await gql<T>(query, JSON.parse(vars));
-      if (alive.current) { setData(d); setError(null); }
+      if (!alive.current) return;
+      const j = JSON.stringify(d);
+      if (j !== last.current) { last.current = j; setData(d); }
+      setError(null);
     } catch (e) {
       if (alive.current) setError((e as Error).message);
     } finally { if (alive.current) setLoading(false); }
   }, [query, vars]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => { last.current = null; }, [query, vars]);
+  useEffect(() => (register && !skip ? register(refetch) : undefined), [register, refetch, skip]);
   useEffect(() => {
-    alive.current = true;
-    setLoading(true);
+    if (!active || skip) { if (skip) setLoading(false); return; }
     void refetch();
     const h = pollMs ? setInterval(refetch, pollMs) : undefined;
-    return () => { alive.current = false; if (h) clearInterval(h); };
-  }, [refetch, pollMs]);
+    return () => { if (h) clearInterval(h); };
+  }, [refetch, pollMs, active, skip]);
   return { data, error, loading, refetch };
 }
 
@@ -414,19 +649,32 @@ export function StepUpHost({ mfa }: { mfa: boolean }) {
 /* ============================================================== toast */
 let toastFn: ((m: string, err?: boolean) => void) | null = null;
 export const toast = (m: string, err?: boolean) => toastFn?.(m, err);
+/** One toast at a time; a new one replaces the old and restarts its timer. Slides and fades on the native thread. */
 export function ToastHost() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const [msg, setMsg] = useState<{ m: string; err?: boolean } | null>(null);
+  const a = useRef(new Animated.Value(0)).current;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    toastFn = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 3500); };
-    return () => { toastFn = null; };
-  }, []);
+    toastFn = (m, err) => {
+      if (timer.current) clearTimeout(timer.current);
+      setMsg({ m, err });
+      if (err) tap('heavy');
+      Animated.spring(a, { toValue: 1, useNativeDriver: true, bounciness: 4, speed: 16 }).start();
+      timer.current = setTimeout(() => {
+        Animated.timing(a, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => finished && setMsg(null));
+      }, err ? 4500 : 3000);
+    };
+    return () => { toastFn = null; if (timer.current) clearTimeout(timer.current); };
+  }, [a]);
   if (!msg) return null;
   return (
-    <View pointerEvents="none" accessibilityLiveRegion="polite" style={{ position: 'absolute', left: S[4], right: S[4], bottom: insets.bottom + 72, backgroundColor: msg.err ? t.neg : t.text, borderRadius: R.md, padding: S[3], flexDirection: 'row', gap: S[2], alignItems: 'center' }}>
+    <Animated.View accessibilityLiveRegion="polite"
+      style={{ pointerEvents: 'none', position: 'absolute', left: S[4], right: S[4], bottom: insets.bottom + 72, backgroundColor: msg.err ? t.neg : t.text, borderRadius: R.md, padding: S[3], flexDirection: 'row', gap: S[2], alignItems: 'center',
+        opacity: a, transform: [{ translateY: a.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }], shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 }}>
       <Icon name={msg.err ? 'alert' : 'check'} size={18} color={msg.err ? '#fff' : t.bg} />
       <Text style={{ color: msg.err ? '#fff' : t.bg, fontWeight: '500', flex: 1 }}>{msg.m}</Text>
-    </View>
+    </Animated.View>
   );
 }

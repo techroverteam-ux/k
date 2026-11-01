@@ -103,6 +103,29 @@ class SessionType {
   @Field() mfaVerified: boolean;
 }
 
+@ObjectType()
+class DeviceTrustChallenge {
+  @Field({ description: 'SMS (code sent to the registered mobile), TOTP (authenticator app) or PASSWORD (no mobile on file).' }) method: string;
+  @Field({ nullable: true }) sentTo?: string;
+  @Field(() => Int) resendAfterSec: number;
+  @Field({ nullable: true, description: 'Development only. Always null in production.' }) devCode?: string;
+}
+
+@ObjectType()
+class QuickUnlockEnrollment {
+  @Field(() => ID, { description: 'Keep on the phone; send with quickUnlock.' }) deviceId: string;
+  @Field({ nullable: true, description: 'Only when biometric was asked for. Store behind the phone’s fingerprint/Face ID; it is shown once.' }) bioKey?: string;
+}
+
+@ObjectType()
+class TrustedDevice {
+  @Field(() => ID) id: string;
+  @Field() biometric: boolean;
+  @Field({ nullable: true }) deviceName?: string;
+  @Field() createdAt: Date;
+  @Field({ nullable: true }) lastUsedAt?: Date;
+}
+
 @Resolver()
 export class AuthResolver {
   constructor(
@@ -309,5 +332,60 @@ export class AuthResolver {
   @Mutation(() => Int)
   revokeOtherSessions(@CurrentActor() a: Actor, @Ctx() c: GqlContext) {
     return this.auth.revokeOtherSessions(a, c.ip);
+  }
+
+  // ---------------------------------------------------------------- quick unlock (MPIN / fingerprint, phones only)
+
+  @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
+  @Mutation(() => DeviceTrustChallenge, { description: 'Step 1 of turning on MPIN/fingerprint unlock for this phone: sends a one-time code.' })
+  beginDeviceTrust(@CurrentActor() a: Actor, @Ctx() c: GqlContext) {
+    return this.auth.beginDeviceTrust(a, c.ip);
+  }
+
+  @Throttle({ default: { limit: lim(10), ttl: 60_000 } })
+  @Mutation(() => QuickUnlockEnrollment, { description: 'Step 2: the code from step 1, plus a 4- or 6-digit MPIN. biometric=true also returns a key for fingerprint unlock.' })
+  enableQuickUnlock(
+    @CurrentActor() a: Actor,
+    @Args('code') code: string,
+    @Args('mpin') mpin: string,
+    @Args('biometric', { defaultValue: false }) biometric: boolean,
+    @Args('deviceName', { nullable: true }) deviceName: string,
+    @Ctx() c: GqlContext,
+  ) {
+    if (!this.isMobile(c)) throw unauthenticated();
+    if (code.length > 128 || mpin.length > 6) throw unauthenticated();
+    return this.auth.enableQuickUnlock(a, { code, mpin, biometric, deviceName }, c.ip);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: lim(10), ttl: 60_000 } })
+  @Mutation(() => AuthPayload, { description: 'Sign in on a trusted phone with its MPIN or fingerprint key.' })
+  async quickUnlock(
+    @Args('deviceId', { type: () => ID }) deviceId: string,
+    @Args('mpin', { nullable: true }) mpin: string,
+    @Args('bioKey', { nullable: true }) bioKey: string,
+    @Args('deviceName', { nullable: true }) deviceName: string,
+    @Ctx() c: GqlContext,
+  ) {
+    if (!this.isMobile(c) || (!mpin && !bioKey)) throw unauthenticated();
+    const r = await this.auth.quickUnlock({ deviceId, mpin: mpin || undefined, bioKey: bioKey || undefined }, this.meta(c, deviceName));
+    return this.finish(c, r);
+  }
+
+  @Query(() => TrustedDevice, { nullable: true, description: 'This phone’s quick-unlock setup, or null if it is off.' })
+  trustedDevice(@CurrentActor() a: Actor, @Args('deviceId', { type: () => ID }) id: string) {
+    return this.auth.trustedDevice(a, id);
+  }
+
+  @Mutation(() => Boolean)
+  disableQuickUnlock(@CurrentActor() a: Actor, @Args('deviceId', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
+    return this.auth.disableQuickUnlock(a, id, c.ip);
+  }
+
+  @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
+  @Mutation(() => Boolean)
+  changeMpin(@CurrentActor() a: Actor, @Args('deviceId', { type: () => ID }) id: string, @Args('currentMpin') cur: string, @Args('newMpin') next: string, @Ctx() c: GqlContext) {
+    if (cur.length > 6 || next.length > 6) throw unauthenticated();
+    return this.auth.changeMpin(a, id, cur, next, c.ip);
   }
 }

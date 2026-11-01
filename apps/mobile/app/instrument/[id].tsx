@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { CandleChart } from '@/candle-chart';
 import { Linking, Pressable, View } from 'react-native';
@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gql, newKey } from '@/api';
 import { useLiveQuotes, useSummary } from '@/screens';
 import { inr, R, S, shortSymbol, useTheme } from '@/theme';
-import { Badge, Button, Change, Chips, Divider, Field, Lines, Mark, Notice, Row, Screen, Section, Sheet, Spread, T, toast, useQuery } from '@/ui';
+import { Badge, Button, Change, Chips, Divider, Field, Lines, Mark, Notice, Row, Screen, Section, Sheet, Spread, T, tap, toast, useQuery } from '@/ui';
 
 type Side = 'BUY' | 'SELL';
 interface Preview { price: string; value: string; intradayMargin: string; carryForwardMargin: string; brokerage: string }
@@ -45,6 +45,7 @@ export default function StockScreen() {
         <Row gap={6}><Change value={q?.change} pct={q?.changePct} size="md" /><T v="xs">vs previous close</T></Row>
       </View>
       {prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>}
+      {i && <Button size="sm" icon="activity" title="Automate this instrument" onPress={() => router.push(`/algo/new?instrument=${i.id}`)} />}
       {i && <Button size="sm" icon="external" title="Open in TradingView" onPress={() => void Linking.openURL(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`)} />}
       {i && <T v="xs">TradingView shows real market data, which differs from this simulated feed.</T>}
       <Section title="Performance">
@@ -99,6 +100,8 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [key, setKey] = useState(newKey);
+  // Same order retried after a network error → same key (no duplicate). Changed order → new key.
+  useEffect(() => { setKey(newKey()); }, [i.id, side, type, qty, price]);
   const r = rules.data?.tradingRules;
   const session = r?.sessions.find((x) => x.exchange === i.exchange);
   const held = pos.data?.positions.find((p) => p.instrumentId === i.id)?.netQty ?? 0;
@@ -145,7 +148,14 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
           )}
           <Chips value={type} onChange={(k) => { setType(k); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }, { k: 'TAKE_PROFIT', label: 'TP' }]} />
           <Row style={{ alignItems: 'flex-start' }}>
-            <View style={{ flex: 1 }}><Field label="Quantity" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} error={qtyErr} /></View>
+            <View style={{ flex: 1.2, gap: 6 }}>
+              <Row gap={4} style={{ alignItems: 'flex-end' }}>
+                <Stepper label="Decrease quantity" sign="−" onPress={() => setQty(String(Math.max(1, (n || 1) - 1)))} />
+                <View style={{ flex: 1 }}><Field label="Quantity" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} /></View>
+                <Stepper label="Increase quantity" sign="+" onPress={() => setQty(String((n || 0) + 1))} />
+              </Row>
+              {qtyErr ? <T v="sm" c="neg">{qtyErr}</T> : null}
+            </View>
             <View style={{ flex: 1 }}>
               {type === 'MARKET' ? <Field label="Price" editable={false} value="At market" /> : <Field label={type === 'LIMIT' ? 'Limit price' : 'Trigger (LTP)'} prefix="₹" keyboardType="decimal-pad" value={price} onChangeText={(v) => setPrice(v.replace(/[^\d.]/g, ''))} placeholder={q?.ltp} error={priceErr} />}
             </View>
@@ -190,5 +200,15 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
         </>
       )}
     </Sheet>
+  );
+}
+
+function Stepper({ label, sign, onPress }: { label: string; sign: string; onPress: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={() => { tap('select'); onPress(); }} accessibilityRole="button" accessibilityLabel={label} hitSlop={4}
+      style={({ pressed }) => ({ width: 40, height: 48, borderRadius: R.md, borderWidth: 1, borderColor: t.line2, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? t.bg3 : t.bg })}>
+      <T v="h3" c="text2">{sign}</T>
+    </Pressable>
   );
 }

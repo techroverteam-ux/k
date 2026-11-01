@@ -5,13 +5,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { gql, takeSignedOutReason } from '@/api';
 import { AUTH_FIELDS, ConflictPrompt, type AuthPayload } from '@/conflict';
 import { DEVICE_NAME, homeFor, useAuth } from '@/auth';
+import { skippedQuickSetup } from '@/quick';
 import { Logo } from '@/icons';
 import { S, useTheme } from '@/theme';
 import { Button, Divider, Field, Notice, Row, T, toast } from '@/ui';
 
 export default function Login() {
   const t = useTheme();
-  const { signIn, settings } = useAuth();
+  const { signIn, settings, quick, dropQuick } = useAuth();
   const [u, setU] = useState('');
   const [p, setP] = useState('');
   const [show, setShow] = useState(false);
@@ -25,7 +26,14 @@ export default function Login() {
 
   const finish = async (a: string, r: string) => {
     const me = await signIn(a, r);
-    if (me) { toast(`Signed in. Welcome, ${me.displayName.split(' ')[0]}!`); router.replace(homeFor(me.role)); }
+    if (!me) return;
+    // MPIN unlock set up for someone else on this phone: it isn't theirs to keep.
+    if (quick && quick.owner.userId !== me.id) await dropQuick();
+    toast(`Signed in. Welcome, ${me.displayName.split(' ')[0]}!`);
+    router.replace(homeFor(me.role));
+    // Offer MPIN/fingerprint unlock once per account on this phone (traders and brokers; not demo).
+    const mine = quick?.owner.userId === me.id;
+    if (!mine && me.role !== 'SUPER_ADMIN' && !me.isDemo && !(await skippedQuickSetup(me.id))) router.push('/quick-setup');
   };
   const done = async (p: AuthPayload) => {
     if (p.sessionConflict) { setConflict(p); return; }

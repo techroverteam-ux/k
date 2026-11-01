@@ -78,6 +78,13 @@
       "when": 1793212620123,
       "tag": "0010_automated_strategies",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793298829366,
+      "tag": "0011_quick_unlock",
+      "breakpoints": true
     }
   ]
 }

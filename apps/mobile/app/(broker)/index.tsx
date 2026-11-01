@@ -3,7 +3,8 @@ import { useMemo } from 'react';
 import { useAuth } from '@/auth';
 import { BellButton, RequestsList } from '@/screens';
 import { inr, initials, useTheme } from '@/theme';
-import { Button, Empty, ErrorState, ListRow, Metrics, Screen, Section, Skeleton, StatusBadge, T, useQuery } from '@/ui';
+import { Icon } from '@/icons';
+import { Button, Empty, ErrorState, IconMark, ListRow, Metrics, Screen, Section, Skeleton, StatusBadge, T, useQuery } from '@/ui';
 import { View } from 'react-native';
 
 interface U { id: string; username: string; displayName: string; status: string }
@@ -22,6 +23,7 @@ export default function BrokerHome() {
         { k: 'Awaiting approval', v: tr.data ? items.filter((u) => u.status === 'PENDING').length : '…' },
         { k: 'Commission (month)', v: com.data ? `₹${inr(com.data.commissionReport.total)}` : '…' },
       ]} />
+      <ListRow onPress={() => router.push('/commissions')} label="Commission report" left={<IconMark icon="percent" tone="brand" />} title="Commission report" sub="Month by month, per trader" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
       <Section title="Traders" action={<Button size="sm" kind="ghost" title="See all" onPress={() => router.push('/(broker)/traders')} />}>
         {tr.error && !tr.data ? <ErrorState error={tr.error} retry={tr.refetch} /> : !tr.data ? <Skeleton rows={3} /> : !items.length ? <Empty icon="users" title="No traders yet">Traders assigned to you appear here.</Empty> : items.slice(0, 4).map((u) => (
           <ListRow key={u.id} onPress={() => router.push(`/trader-detail/${u.id}`)} left={<View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: t.brandSoft, alignItems: 'center', justifyContent: 'center' }}><T c="brand" w="600">{initials(u.displayName)}</T></View>} title={u.displayName} sub={u.username} right={<StatusBadge v={u.status} />} />

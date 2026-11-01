@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { BellButton, LedgerList, RequestsList, StatementBlock, SummaryBlock } from '@/screens';
+import { BellButton, LedgerList, RequestsList, SearchButton, StatementBlock, SummaryBlock } from '@/screens';
 import { View } from 'react-native';
 import { inr, toneOfValue } from '@/theme';
-import { Chips, ErrorState, Field, Metrics, Row, Screen, Section, T, Tabs, useQuery } from '@/ui';
+import { Chips, DateField, ErrorState, Metrics, Row, Screen, Section, T, Tabs, useQuery } from '@/ui';
 
 /** Funds: balance, add/withdraw, P&L by period, transaction history. */
 export default function Funds() {
@@ -23,16 +23,16 @@ export default function Funds() {
   const s = useQuery<{ periodSummary: { realizedPnl: string; brokerage: string; trades: number; volume: string } }>(`query($f:DateTime!,$t:DateTime!){ periodSummary(from:$f,to:$t){ realizedPnl brokerage trades volume } }`, r);
   const d = s.data?.periodSummary;
   return (
-    <Screen title="Funds" right={<BellButton />} onRefresh={s.refetch}>
+    <Screen title="Funds" right={<><SearchButton /><BellButton /></>}>
       <SummaryBlock actions title="Available balance" />
       <Section title="Profit & loss" action={<Chips value={p} onChange={setP} items={[{ k: 'd', label: 'Today' }, { k: 'w', label: 'Week' }, { k: 'm', label: 'Month' }, { k: 'c', label: 'Custom' }]} />}>
         {p === 'c' && (
           <View style={{ gap: 4 }}>
             <Row style={{ alignItems: 'flex-start' }}>
-              <View style={{ flex: 1 }}><Field label="From (YYYY-MM-DD)" value={cf} onChangeText={setCf} maxLength={10} keyboardType="numbers-and-punctuation" /></View>
-              <View style={{ flex: 1 }}><Field label="To (YYYY-MM-DD)" value={ct} onChangeText={setCt} maxLength={10} keyboardType="numbers-and-punctuation" /></View>
+              <DateField label="From" value={cf} max={ct} onChange={setCf} />
+              <DateField label="To" value={ct} min={cf} max={ymd(new Date())} onChange={setCt} />
             </Row>
-            {badRange && <T v="xs" c="neg">Enter dates as YYYY-MM-DD, with the start on or before the end.</T>}
+            {badRange && <T v="xs" c="neg">Pick a start date on or before the end date.</T>}
           </View>
         )}
         {s.error && !d ? <ErrorState error={s.error} retry={s.refetch} /> : (
@@ -46,7 +46,7 @@ export default function Funds() {
       </Section>
       <StatementBlock />
       <Tabs value={tab} onChange={setTab} items={[{ k: 'tx', label: 'Transactions' }, { k: 'req', label: 'Fund requests' }]} />
-      {tab === 'tx' ? <LedgerList /> : <RequestsList />}
+      {tab === 'tx' ? <LedgerList /> : <RequestsList canCancel />}
     </Screen>
   );
 }

@@ -8,7 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { PasswordService } from '../auth/password.service';
 import { ConfigService } from '../config-mgmt/config.service';
 import { DbService } from '../db/db';
-import { journalEntries, ledgerAccounts, ledgerPostings, orders, paymentRequests, positions, sessions, users, type Role } from '../db/schema';
+import { journalEntries, ledgerAccounts, ledgerPostings, orders, paymentRequests, positions, sessions, users, type Role, deviceCredentials } from '../db/schema';
 import { LedgerService } from '../ledger/ledger.service';
 import { MarketDataService } from '../market/market-data.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -127,6 +127,7 @@ export class UsersService {
       const [r] = await tx.update(users).set({ status, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
       if (status !== 'ACTIVE') {
         await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: `account_${status.toLowerCase()}` }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+        await tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: `account_${status.toLowerCase()}` }).where(and(eq(deviceCredentials.userId, userId), isNull(deviceCredentials.revokedAt)));
         await tx.update(orders).set({ status: 'CANCELLED', updatedAt: new Date() }).where(and(eq(orders.userId, userId), eq(orders.status, 'OPEN')));
       }
       await this.audit.record(tx, { actor, action: `user.${status.toLowerCase()}`, entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { from: u.status, reason } });
@@ -157,6 +158,7 @@ export class UsersService {
     await this.dbs.db.transaction(async (tx) => {
       await tx.update(users).set({ passwordHash: hash, failedLoginCount: 0, lockedUntil: null, passwordChangedAt: new Date() }).where(eq(users.id, userId));
       await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: 'admin_password_reset' }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+      await tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: 'admin_password_reset' }).where(and(eq(deviceCredentials.userId, userId), isNull(deviceCredentials.revokedAt)));
       await this.audit.record(tx, { actor, action: 'user.password_reset', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip });
       await this.notifications.notify(tx, userId, 'security.password_reset', 'Password reset', 'An administrator reset your password. All devices were signed out.');
     });

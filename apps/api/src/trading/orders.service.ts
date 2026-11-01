@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
-import { AppError, badInput, notFound } from '../common/errors';
+import { AppError, badInput, conflict, notFound } from '../common/errors';
 import { applyBps } from '../common/money';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config-mgmt/config.service';
@@ -155,7 +155,10 @@ export class OrdersService implements OnModuleInit {
 
     const result = await this.dbs.serializable(async (tx) => {
       const [dup] = await tx.select().from(orders).where(and(eq(orders.userId, actor.userId), eq(orders.idempotencyKey, input.idempotencyKey)));
-      if (dup) return { order: dup, replay: true };
+      if (dup) {
+        if (dup.instrumentId !== inst.id || dup.side !== input.side || dup.type !== input.type || dup.quantity !== input.quantity) throw conflict('Idempotency key reused with different order details.');
+        return { order: dup, replay: true };
+      }
 
       const [u] = await tx.select().from(users).where(eq(users.id, actor.userId));
       if (u.mode !== 'SIMULATED') throw new AppError('NOT_ENABLED', 'Live trading is not enabled on this platform.');

@@ -42,6 +42,8 @@ export const ICON_PATHS = {
   bold: 'M7 4h6a4 4 0 0 1 0 8H7z M7 12h7a4 4 0 0 1 0 8H7z',
   download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   calendar: 'M4 6h16v14H4z M4 10h16 M8 3v4M16 3v4',
+  fingerprint: 'M7.5 5.6A7 7 0 0 1 19 11v1 M5 9.5A7 7 0 0 0 5 12v3 M8.5 18.5A10 10 0 0 0 9 15v-3a3 3 0 0 1 6 0v1.5 M12 12v3a13 13 0 0 1-1.5 6 M15 17.5a17 17 0 0 1-.8 3.5 M19 15a20 20 0 0 1-.6 3.5',
+  backspace: 'M21 5H8.5L2.5 12l6 7H21z M11.5 9l6 6 M17.5 9l-6 6',
   activity: 'M3 12h4l3-8 4 16 3-8h4',
 } as const;
 export type IconName = keyof typeof ICON_PATHS;

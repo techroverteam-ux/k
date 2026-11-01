@@ -16,7 +16,7 @@ const store = Platform.OS === 'web'
   : SecureStore;
 
 export class ApiError extends Error {
-  constructor(message: string, public code: string) {
+  constructor(message: string, public code: string, public reason?: string) {
     super(message);
   }
 }
@@ -34,14 +34,29 @@ export const setStepUpHandler = (h: typeof stepUpHandler) => (stepUpHandler = h)
 export const setSignedOutHandler = (h: typeof signedOutHandler) => (signedOutHandler = h);
 export const getAccessToken = () => accessToken;
 
+/**
+ * With MPIN/fingerprint unlock on, the refresh token lives in memory only: a restarted app can't sign
+ * itself in, it has to be unlocked (which opens a new session on the server).
+ */
+let memRefresh: string | null = null;
+let persistRefresh = true;
+export async function setPersistRefresh(persist: boolean) {
+  persistRefresh = persist;
+  if (!persist) await store.deleteItemAsync(RT_KEY).catch(() => undefined);
+}
+
 export async function storeSession(access: string, refresh?: string | null) {
   accessToken = access;
-  if (refresh) await store.setItemAsync(RT_KEY, refresh, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  if (refresh) {
+    memRefresh = refresh;
+    if (persistRefresh) await store.setItemAsync(RT_KEY, refresh, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  }
   resetWs();
 }
 
 export async function clearSession() {
   accessToken = null;
+  memRefresh = null;
   await store.deleteItemAsync(RT_KEY).catch(() => undefined);
   resetWs();
 }
@@ -92,7 +107,7 @@ async function rawFetch(query: string, variables?: Record<string, unknown>, step
 export async function refreshSession(): Promise<boolean> {
   refreshing ??= (async () => {
     try {
-      const rt = await store.getItemAsync(RT_KEY);
+      const rt = memRefresh ?? (persistRefresh ? await store.getItemAsync(RT_KEY) : null);
       if (!rt) return false;
       const r = await raw(`mutation($r:String){ refresh(refreshToken:$r){ accessToken refreshToken } }`, { r: rt });
       const d = r.data?.refresh;
@@ -135,7 +150,7 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     if (t) return gql<T>(query, variables, { ...opts, stepUp: t });
     throw new ApiError('Verification cancelled.', 'CANCELLED');
   }
-  throw new ApiError(e.message, code);
+  throw new ApiError(e.message, code, e.extensions?.reason);
 }
 
 let ws: Client | null = null;

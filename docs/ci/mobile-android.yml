@@ -1,0 +1,82 @@
+# Builds an installable Android APK of the mobile app on GitHub's servers (no Expo account needed).
+# Runs on every push to main that touches apps/mobile, or by hand: Actions → mobile-android → Run workflow.
+# The APK is attached to the run as an artifact ("the-k-android-<commit>").
+#
+# API address: set the repository variable MOBILE_API_URL (Settings → Secrets and variables → Actions →
+# Variables) to override the default. It must be https://.
+#
+# Signing: by default the APK is signed with a throwaway debug key, which is fine for testing on phones but
+# not for the Play Store. To sign for release, add these repository secrets:
+#   ANDROID_KEYSTORE_BASE64 (base64 of the .jks), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+name: mobile-android
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['apps/mobile/**', '.github/workflows/mobile-android.yml']
+permissions: { contents: read }
+concurrency:
+  group: mobile-android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults: { run: { working-directory: apps/mobile } }
+    env:
+      EXPO_NO_TELEMETRY: '1'
+      CI: '1'
+      EXPO_PUBLIC_API_URL: ${{ vars.MOBILE_API_URL || 'https://k-api-wijo.onrender.com' }}
+      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: apps/mobile/package-lock.json }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Generate the native Android project
+        run: npx expo prebuild -p android --no-install --clean
+      - name: Release signing (only when the keystore secrets exist)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS" ]; then echo "No keystore secrets: using the debug key (testing only)."; exit 0; fi
+          echo "$KS" | base64 -d > android/app/release.jks
+          cat >> android/gradle.properties <<PROPS
+          K_RELEASE_STORE_FILE=release.jks
+          K_RELEASE_STORE_PASSWORD=$KS_PASS
+          K_RELEASE_KEY_ALIAS=$KEY_ALIAS
+          K_RELEASE_KEY_PASSWORD=$KEY_PASS
+          PROPS
+          # Add a release signing config and use it for release builds.
+          python3 - <<'PY'
+          import re
+          p = 'android/app/build.gradle'; s = open(p).read()
+          s = s.replace("signingConfigs {", """signingConfigs {
+                  release {
+                      storeFile file(K_RELEASE_STORE_FILE)
+                      storePassword K_RELEASE_STORE_PASSWORD
+                      keyAlias K_RELEASE_KEY_ALIAS
+                      keyPassword K_RELEASE_KEY_PASSWORD
+                  }""", 1)
+          i = s.index("buildTypes {"); j = s.index("release {", i)
+          k = s.index("signingConfig signingConfigs.debug", j)
+          s = s[:k] + "signingConfig signingConfigs.release" + s[k + len("signingConfig signingConfigs.debug"):]
+          open(p, 'w').write(s)
+          PY
+      - name: Build the APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "the-k-${GITHUB_SHA::7}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: the-k-android-${{ github.sha }}
+          path: apps/mobile/the-k-*.apk
+          retention-days: 30

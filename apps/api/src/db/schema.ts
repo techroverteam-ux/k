@@ -110,6 +110,32 @@ export const otpChallenges = pgTable(
   (t) => [index('otp_phone_idx').on(t.phone, t.purpose, t.createdAt)],
 );
 
+/**
+ * Quick unlock on a trusted phone: an MPIN (argon2id hash, checked on the server with an attempt limit) and,
+ * optionally, a biometric key: a random secret that the phone keeps behind its fingerprint/Face ID, stored
+ * here only as a SHA-256 hash. Set up once per device after an OTP; revoked on password change/reset,
+ * admin sign-out, suspension, too many wrong MPINs, or by the user.
+ */
+export const deviceCredentials = pgTable(
+  'device_credentials',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    deviceName: varchar('device_name', { length: 120 }),
+    /** The session this device last opened with quick unlock; replaced on the next unlock. */
+    sessionId: uuid('session_id'),
+    mpinHash: varchar('mpin_hash', { length: 200 }).notNull(),
+    bioKeyHash: char('bio_key_hash', { length: 64 }),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    lastUsedAt: ts('last_used_at'),
+    revokedAt: ts('revoked_at'),
+    revokedReason: varchar('revoked_reason', { length: 64 }),
+  },
+  (t) => [index('device_credentials_user_idx').on(t.userId, t.revokedAt)],
+);
+export type DeviceCredentialRow = typeof deviceCredentials.$inferSelect;
+
 // ---------------- Configuration (versioned, maker-checker) ----------------
 export const configStatusEnum = pgEnum('config_status', ['PENDING', 'APPROVED', 'REJECTED', 'SUPERSEDED']);
 

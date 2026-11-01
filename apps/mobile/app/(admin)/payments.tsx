@@ -1,3 +1,4 @@
+import { AdminMfaGate } from '@/admin-screens';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { gql } from '@/api';
@@ -9,7 +10,7 @@ import { Button, Empty, ErrorState, Field, Lines, ListRow, Notice, Row, Screen, 
 interface P { id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; createdAt: string; requestedById: string }
 export default function Approvals() {
   const { me } = useAuth();
-  const { data, error, loading, refetch } = useQuery<{ paymentRequests: P[] }>(`{ paymentRequests(status:[REQUESTED], limit:100){ id userId username type mode amount status createdAt requestedById } }`, undefined, 10000);
+  const { data, error, loading, refetch } = useQuery<{ paymentRequests: P[] }>(`{ paymentRequests(status:[REQUESTED], limit:100){ id userId username type mode amount status createdAt requestedById } }`, undefined, 10000, !me?.mfaEnabled);
   const [sel, setSel] = useState<P | null>(null);
   const [mode, setMode] = useState<'approve' | 'reject'>('approve');
   const [note, setNote] = useState('');
@@ -25,6 +26,7 @@ export default function Approvals() {
       toast(mode === 'approve' ? 'Approved and posted' : 'Request rejected'); setSel(null); setNote(''); void refetch();
     } catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') setErr((e as Error).message); } finally { setBusy(false); }
   };
+  if (!me?.mfaEnabled) return <AdminMfaGate title="Approvals" />;
   return (
     <Screen title="Approvals" right={<BellButton />} onRefresh={refetch}>
       <T v="sm" c="text2">Approving posts to the ledger straight away. You can’t approve a request you raised.</T>

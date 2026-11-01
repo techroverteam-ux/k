@@ -9,7 +9,7 @@ import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config-mgmt/config.service';
 import { env } from '../config/env';
 import { DbService, type Tx } from '../db/db';
-import { otpChallenges, sessions, users, type UserRow } from '../db/schema';
+import { deviceCredentials, otpChallenges, sessions, users, type UserRow } from '../db/schema';
 import { LedgerService } from '../ledger/ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PasswordService } from './password.service';
@@ -39,6 +39,11 @@ const GENERIC_LOGIN_ERROR = 'Invalid username or password.';
 const OTP_TTL_MS = 5 * 60_000;
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_MAX_PER_WINDOW = 3;
+/** Quick unlock (MPIN / fingerprint) on trusted phones. */
+const MPIN_MAX_ATTEMPTS = 5;
+const MAX_TRUSTED_DEVICES = 3;
+const WEAK_MPINS = new Set(['1234', '4321', '0000', '1111', '1212', '123456', '654321', '000000', '111111', '121212', '112233', '123123']);
+export type LoginMethod = 'password' | 'mfa' | 'otp' | 'quick';
 
 @Injectable()
 export class AuthService {
@@ -374,7 +379,7 @@ export class AuthService {
 
   // ---------------------------------------------------------------- OTP helpers (signup, password reset)
 
-  private async issueOtp(phone: string, purpose: 'signup' | 'reset', ip: string) {
+  private async issueOtp(phone: string, purpose: 'signup' | 'reset' | 'device', ip: string) {
     const since = new Date(Date.now() - 10 * 60_000);
     const [{ c }] = await this.dbs.db
       .select({ c: sql<number>`count(*)::int` })
@@ -388,7 +393,7 @@ export class AuthService {
   }
 
   /** Returns true and consumes the challenge when the code matches; counts a failed attempt otherwise. */
-  private async consumeOtp(tx: Tx, phone: string, purpose: 'signup' | 'reset', code: string): Promise<boolean> {
+  private async consumeOtp(tx: Tx, phone: string, purpose: 'signup' | 'reset' | 'device', code: string): Promise<boolean> {
     if (!/^\d{6}$/.test(code)) return false;
     const [ch] = await tx
       .select()
@@ -494,6 +499,7 @@ export class AuthService {
       if (!(await this.consumeOtp(tx, phone, 'reset', code))) return false;
       await tx.update(users).set({ passwordHash: hash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() }).where(eq(users.id, u.id));
       await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: 'password_reset' }).where(and(eq(sessions.userId, u.id), isNull(sessions.revokedAt)));
+      await this.revokeTrustedDevices(tx, u.id, 'password_reset');
       await this.audit.record(tx, { actor: { userId: u.id, role: u.role }, action: 'auth.password_reset', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip });
       await this.notifications.notify(tx, u.id, 'security.password_reset', 'Password was reset', 'Your password was reset with a code sent to your mobile, and all devices were signed out. If this wasn’t you, contact support.');
       return true;
@@ -518,6 +524,7 @@ export class AuthService {
         .update(sessions)
         .set({ revokedAt: new Date(), revokedReason: REVOKE_REASON.passwordChanged })
         .where(and(eq(sessions.userId, u.id), ne(sessions.id, actor.sessionId), isNull(sessions.revokedAt)));
+      await this.revokeTrustedDevices(tx, u.id, 'password_changed', actor.sessionId);
       await this.audit.record(tx, { actor, action: 'auth.password_changed', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip });
     });
     return true;
@@ -540,6 +547,7 @@ export class AuthService {
 
   async revokeOtherSessions(actor: Actor, ip: string) {
     const r = await this.revokeSessions(and(eq(sessions.userId, actor.userId), ne(sessions.id, actor.sessionId)) as ReturnType<typeof eq>, REVOKE_REASON.user);
+    await this.revokeTrustedDevices(this.dbs.db, actor.userId, 'revoked_by_user', actor.sessionId);
     await this.audit.recordStandalone({ actor, action: 'auth.sessions_revoked_all', outcome: 'SUCCESS', ip, metadata: { count: r.length } });
     return r.length;
   }
@@ -581,7 +589,7 @@ export class AuthService {
    *                   replace_oldest → sign the oldest device(s) out, then continue
    *                   block → refuse
    */
-  async admitSession(u: UserRow, meta: ClientMeta, opts: { mfaVerified: boolean; method: 'password' | 'mfa' | 'otp' }, force = false) {
+  async admitSession(u: UserRow, meta: ClientMeta, opts: { mfaVerified: boolean; method: LoginMethod }, force = false) {
     const pol = policyFor(await this.config.get('security.sessionPolicy'), u.role);
     const active = await this.activeSessions(u.id, pol);
     const over = pol.maxConcurrent > 0 && active.length >= pol.maxConcurrent;
@@ -616,7 +624,7 @@ export class AuthService {
         await this.notifications.notify(tx, u.id, 'security.force_login', 'Signed in on a new device',
           `You signed in from ${meta.deviceName ?? meta.userAgent.slice(0, 60)} (IP ${meta.ip}), so ${out.length === 1 ? 'your other device was' : `${out.length} other devices were`} signed out. If this wasn't you, change your password now.`);
       }
-      await this.audit.record(tx, { ...audit, action: 'auth.login', entityType: 'session', entityId: t.sessionId, outcome: 'SUCCESS', metadata: opts.method === 'otp' ? { via: 'otp' } : { mfa: opts.mfaVerified, ...(force ? { forced: true } : {}) } });
+      await this.audit.record(tx, { ...audit, action: 'auth.login', entityType: 'session', entityId: t.sessionId, outcome: 'SUCCESS', metadata: opts.method === 'otp' || opts.method === 'quick' ? { via: opts.method === 'quick' ? 'quick_unlock' : 'otp' } : { mfa: opts.mfaVerified, ...(force ? { forced: true } : {}) } });
       return t;
     });
     return { tokens } as const;
@@ -624,7 +632,7 @@ export class AuthService {
 
   /** "Sign out the other device and continue here" after a concurrent-login prompt. */
   async forceLogin(conflictToken: string, meta: ClientMeta) {
-    let p: { sub: string; purpose: string; mfa: boolean; method: 'password' | 'mfa' | 'otp'; ua: string };
+    let p: { sub: string; purpose: string; mfa: boolean; method: LoginMethod; ua: string };
     try {
       p = this.jwt.verify(conflictToken, { secret: env().JWT_STEPUP_SECRET, algorithms: ['HS256'], issuer: 'tradedesk' });
     } catch {
@@ -644,6 +652,7 @@ export class AuthService {
   }
   async adminRevokeSessions(actor: Actor, userId: string, sessionId: string | undefined, ip: string) {
     const out = await this.revokeSessions((sessionId ? and(eq(sessions.userId, userId), eq(sessions.id, sessionId)) : eq(sessions.userId, userId)) as ReturnType<typeof eq>, REVOKE_REASON.admin);
+    await this.revokeTrustedDevices(this.dbs.db, userId, 'revoked_by_admin', undefined, sessionId);
     await this.audit.recordStandalone({ actor, action: 'auth.sessions_revoked_by_admin', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { count: out.length, sessionId } });
     if (out.length) await this.notifications.notify(this.dbs.db, userId, 'security.admin_signout', 'Signed out by an administrator', `${out.length === 1 ? 'A device was' : `${out.length} devices were`} signed out of your account by an administrator.`);
     return out.length;
@@ -654,4 +663,164 @@ export class AuthService {
     await this.audit.recordStandalone({ actor, action: 'user.terms_accepted', outcome: 'SUCCESS', ip });
     return true;
   }
+
+  // ---------------------------------------------------------------- quick unlock (MPIN / fingerprint)
+
+  /**
+   * Turn off quick unlock. With `keepSessionId`, the device that opened that session keeps it;
+   * with `onlySessionId`, only that device's credential goes.
+   */
+  async revokeTrustedDevices(tx: Tx | DbService['db'], userId: string, reason: string, keepSessionId?: string, onlySessionId?: string) {
+    const conds = [eq(deviceCredentials.userId, userId), isNull(deviceCredentials.revokedAt)];
+    if (keepSessionId) conds.push(or(isNull(deviceCredentials.sessionId), ne(deviceCredentials.sessionId, keepSessionId))!);
+    if (onlySessionId) conds.push(eq(deviceCredentials.sessionId, onlySessionId));
+    return tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: reason }).where(and(...conds)).returning({ id: deviceCredentials.id });
+  }
+
+  private assertQuickUnlockAllowed(u: UserRow) {
+    if (u.role === 'SUPER_ADMIN') throw new AppError('FORBIDDEN', 'Administrators sign in with a password and an authenticator code every time.');
+    if (u.isDemo) throw new AppError('FORBIDDEN', 'Demo accounts can’t use MPIN or fingerprint unlock.');
+    if (u.status !== 'ACTIVE') throw unauthenticated();
+  }
+
+  /**
+   * Step 1 of trusting this phone: prove it's really the account holder, once. An OTP goes to the
+   * registered mobile; without one, the authenticator app; without either, the account password.
+   */
+  async beginDeviceTrust(actor: Actor, ip: string) {
+    const [u] = await this.dbs.db.select().from(users).where(eq(users.id, actor.userId));
+    this.assertQuickUnlockAllowed(u);
+    const phone = readPhone(u);
+    let method: 'SMS' | 'TOTP' | 'PASSWORD';
+    let devCode: string | null = null;
+    if (phone) {
+      method = 'SMS';
+      const code = await this.issueOtp(phone, 'device', ip);
+      devCode = this.sms.isDev ? code : null;
+    } else {
+      method = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : 'PASSWORD';
+      // No SMS: still a one-time challenge with the same expiry, attempt limit and request rate limit.
+      const key = `user:${u.id}`;
+      const since = new Date(Date.now() - 10 * 60_000);
+      const [{ c }] = await this.dbs.db.select({ c: sql<number>`count(*)::int` }).from(otpChallenges)
+        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'device'), gt(otpChallenges.createdAt, since)));
+      if (c >= OTP_MAX_PER_WINDOW) throw new AppError('RATE_LIMITED', 'Too many attempts. Please wait a few minutes.');
+      await this.dbs.db.insert(otpChallenges).values({ phone: key, purpose: 'device', codeHash: '0'.repeat(64), expiresAt: new Date(Date.now() + OTP_TTL_MS), requestIp: ip });
+    }
+    await this.audit.recordStandalone({ actor, action: 'auth.device_trust_started', outcome: 'SUCCESS', ip, metadata: { method } });
+    return { method, sentTo: phone ? maskPhone(phone) : null, resendAfterSec: 30, devCode };
+  }
+
+  /** Step 2: check the code, then save the MPIN (and, if asked, a fingerprint key) for this phone. */
+  async enableQuickUnlock(actor: Actor, input: { code: string; mpin: string; biometric: boolean; deviceName?: string }, ip: string) {
+    const [u] = await this.dbs.db.select().from(users).where(eq(users.id, actor.userId));
+    this.assertQuickUnlockAllowed(u);
+    const mpin = input.mpin;
+    if (!/^(\d{4}|\d{6})$/.test(mpin)) throw badInput('MPIN must be 4 or 6 digits.');
+    if (WEAK_MPINS.has(mpin) || /^(\d)\1+$/.test(mpin)) throw badInput('That MPIN is too easy to guess. Pick another.');
+    const phone = readPhone(u);
+    const code = input.code.trim();
+    let verified = false;
+    if (phone) verified = await this.dbs.serializable((tx) => this.consumeOtp(tx, phone, 'device', code));
+    else {
+      const ok = u.mfaEnabled && u.mfaSecretEnc ? authenticator.check(code, decryptSecret(u.mfaSecretEnc)) : await this.passwords.verify(u.passwordHash, input.code);
+      verified = await this.dbs.serializable(async (tx) => {
+        const [ch] = await tx.select().from(otpChallenges)
+          .where(and(eq(otpChallenges.phone, `user:${u.id}`), eq(otpChallenges.purpose, 'device'), isNull(otpChallenges.consumedAt), gt(otpChallenges.expiresAt, new Date())))
+          .orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
+        if (!ch || ch.attempts >= OTP_MAX_ATTEMPTS) return false;
+        if (!ok) { await tx.update(otpChallenges).set({ attempts: ch.attempts + 1 }).where(eq(otpChallenges.id, ch.id)); return false; }
+        await tx.update(otpChallenges).set({ consumedAt: new Date() }).where(eq(otpChallenges.id, ch.id));
+        return true;
+      });
+    }
+    if (!verified) {
+      await this.audit.recordStandalone({ actor, action: 'auth.device_trust_failed', outcome: 'FAILURE', ip });
+      throw new AppError('UNAUTHENTICATED', phone ? 'Incorrect or expired code.' : u.mfaEnabled ? 'Invalid authentication code.' : 'Incorrect password.');
+    }
+    const mpinHash = await this.passwords.hash(`mpin:${u.id}:${mpin}`);
+    const bioKey = input.biometric ? randomToken(32) : null;
+    const deviceName = input.deviceName?.slice(0, 120) || null;
+    const row = await this.dbs.db.transaction(async (tx) => {
+      // One credential per session/device: replace this device's old one, and keep at most a few devices.
+      await this.revokeTrustedDevices(tx, u.id, 'replaced', undefined, actor.sessionId);
+      const active = await tx.select({ id: deviceCredentials.id }).from(deviceCredentials)
+        .where(and(eq(deviceCredentials.userId, u.id), isNull(deviceCredentials.revokedAt))).orderBy(asc(deviceCredentials.createdAt));
+      const extra = active.slice(0, Math.max(0, active.length - MAX_TRUSTED_DEVICES + 1)).map((r) => r.id);
+      if (extra.length) await tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: 'device_limit' }).where(inArray(deviceCredentials.id, extra));
+      const [r] = await tx.insert(deviceCredentials).values({ userId: u.id, deviceName, sessionId: actor.sessionId, mpinHash, bioKeyHash: bioKey ? peppered(`bio:${bioKey}`) : null }).returning();
+      await this.audit.record(tx, { actor, action: 'auth.quick_unlock_enabled', entityType: 'device_credential', entityId: r.id, outcome: 'SUCCESS', ip, metadata: { biometric: !!bioKey, device: deviceName } });
+      await this.notifications.notify(tx, u.id, 'security.quick_unlock', 'MPIN unlock turned on', `You can now open the app on ${deviceName ?? 'this phone'} with your MPIN${bioKey ? ' or fingerprint' : ''}. If this wasn’t you, change your password now.`);
+      return r;
+    });
+    return { deviceId: row.id, bioKey };
+  }
+
+  /** Open a new session from a trusted phone with its MPIN or fingerprint key. */
+  async quickUnlock(input: { deviceId: string; mpin?: string; bioKey?: string }, meta: ClientMeta) {
+    const off = (why: string) => new AppError('UNAUTHENTICATED', why, { reason: 'QUICK_UNLOCK_OFF' });
+    if (!/^[0-9a-f-]{36}$/i.test(input.deviceId)) throw off('Sign in with your password.');
+    const r = await this.dbs.db.transaction(async (tx) => {
+      const [d] = await tx.select().from(deviceCredentials).where(eq(deviceCredentials.id, input.deviceId)).limit(1).for('update');
+      if (!d || d.revokedAt) return { error: off('MPIN unlock is off on this phone. Sign in with your password.') };
+      const [u] = await tx.select().from(users).where(eq(users.id, d.userId));
+      requestContext.setActor({ userId: u.id, role: u.role });
+      if (u.status !== 'ACTIVE' || u.role === 'SUPER_ADMIN' || u.isDemo) {
+        await tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: 'account_inactive' }).where(eq(deviceCredentials.id, d.id));
+        return { error: off('Sign in with your password.') };
+      }
+      let ok = false;
+      let via: 'mpin' | 'biometric' = 'mpin';
+      if (input.bioKey && d.bioKeyHash) { via = 'biometric'; ok = input.bioKey.length <= 100 && safeEqualHex(d.bioKeyHash, peppered(`bio:${input.bioKey}`)); }
+      else if (input.mpin && /^\d{4,6}$/.test(input.mpin)) ok = await this.passwords.verify(d.mpinHash, `mpin:${u.id}:${input.mpin}`);
+      if (!ok) {
+        const fails = d.failedAttempts + 1;
+        const revoke = fails >= MPIN_MAX_ATTEMPTS || via === 'biometric';
+        await tx.update(deviceCredentials).set({ failedAttempts: fails, ...(revoke ? { revokedAt: new Date(), revokedReason: via === 'biometric' ? 'bad_bio_key' : 'too_many_attempts' } : {}) }).where(eq(deviceCredentials.id, d.id));
+        await this.audit.record(tx, { actor: { userId: u.id, role: u.role }, action: 'auth.quick_unlock_failed', entityType: 'device_credential', entityId: d.id, outcome: 'FAILURE', ip: meta.ip, metadata: { via, fails, revoked: revoke } });
+        if (revoke) return { error: off(via === 'biometric' ? 'Fingerprint unlock is no longer valid on this phone. Sign in with your password.' : 'Too many wrong MPINs, so MPIN unlock was turned off. Sign in with your password.') };
+        const left = MPIN_MAX_ATTEMPTS - fails;
+        return { error: new AppError('UNAUTHENTICATED', `Wrong MPIN. ${left} ${left === 1 ? 'try' : 'tries'} left.`, { reason: 'WRONG_MPIN', attemptsLeft: left }) };
+      }
+      await tx.update(deviceCredentials).set({ failedAttempts: 0, lastUsedAt: new Date() }).where(eq(deviceCredentials.id, d.id));
+      return { d, u, via };
+    });
+    if ('error' in r) throw r.error;
+    // This phone's previous session is replaced, so reopening the app never counts as a second device.
+    if (r.d.sessionId) await this.revokeSessions(and(eq(sessions.id, r.d.sessionId), eq(sessions.userId, r.u.id)) as ReturnType<typeof eq>, REVOKE_REASON.logout);
+    const out = await this.admitSession(r.u, { ...meta, deviceName: meta.deviceName ?? r.d.deviceName ?? undefined }, { mfaVerified: false, method: 'quick' });
+    if (out.tokens) await this.dbs.db.update(deviceCredentials).set({ sessionId: out.tokens.sessionId }).where(eq(deviceCredentials.id, r.d.id));
+    return { ...out, user: r.u };
+  }
+
+  /** The user turns quick unlock off (this phone, from its settings). */
+  async disableQuickUnlock(actor: Actor, deviceId: string, ip: string) {
+    const r = await this.dbs.db.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: 'revoked_by_user' })
+      .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, actor.userId), isNull(deviceCredentials.revokedAt))).returning({ id: deviceCredentials.id });
+    await this.audit.recordStandalone({ actor, action: 'auth.quick_unlock_disabled', entityType: 'device_credential', entityId: deviceId, outcome: 'SUCCESS', ip });
+    return r.length > 0;
+  }
+
+  /** Change the MPIN (needs the current one). */
+  async changeMpin(actor: Actor, deviceId: string, current: string, next: string, ip: string) {
+    if (!/^(\d{4}|\d{6})$/.test(next)) throw badInput('MPIN must be 4 or 6 digits.');
+    if (WEAK_MPINS.has(next) || /^(\d)\1+$/.test(next)) throw badInput('That MPIN is too easy to guess. Pick another.');
+    const [d] = await this.dbs.db.select().from(deviceCredentials).where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, actor.userId), isNull(deviceCredentials.revokedAt)));
+    if (!d) throw notFound('Trusted device');
+    if (!(await this.passwords.verify(d.mpinHash, `mpin:${actor.userId}:${current}`))) {
+      const fails = d.failedAttempts + 1;
+      await this.dbs.db.update(deviceCredentials).set({ failedAttempts: fails, ...(fails >= MPIN_MAX_ATTEMPTS ? { revokedAt: new Date(), revokedReason: 'too_many_attempts' } : {}) }).where(eq(deviceCredentials.id, d.id));
+      throw badInput(fails >= MPIN_MAX_ATTEMPTS ? 'Too many wrong MPINs, so MPIN unlock was turned off.' : 'Current MPIN is incorrect.');
+    }
+    await this.dbs.db.update(deviceCredentials).set({ mpinHash: await this.passwords.hash(`mpin:${actor.userId}:${next}`), failedAttempts: 0 }).where(eq(deviceCredentials.id, d.id));
+    await this.audit.recordStandalone({ actor, action: 'auth.mpin_changed', entityType: 'device_credential', entityId: d.id, outcome: 'SUCCESS', ip });
+    return true;
+  }
+
+  /** Is quick unlock still on for this phone? (Settings screen.) */
+  async trustedDevice(actor: Actor, deviceId: string) {
+    const [d] = await this.dbs.db.select().from(deviceCredentials).where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, actor.userId)));
+    return d && !d.revokedAt ? { id: d.id, biometric: !!d.bioKeyHash, deviceName: d.deviceName ?? undefined, createdAt: d.createdAt, lastUsedAt: d.lastUsedAt ?? undefined } : null;
+  }
+
 }

@@ -1,11 +1,10 @@
-import { BellButton, HelplineButton, Ticker, WatchlistBlock } from '@/screens';
+import { BellButton, HelplineButton, SearchButton, Ticker, WatchlistBlock } from '@/screens';
 import { Screen } from '@/ui';
 
 export default function Watchlist() {
   return (
-    <Screen title="Watchlist" right={<><HelplineButton /><BellButton /></>}>
-      <Ticker />
-      <WatchlistBlock />
+    <Screen title="Watchlist" scroll={false} right={<><SearchButton /><HelplineButton /><BellButton /></>}>
+      <WatchlistBlock header={<Ticker />} />
     </Screen>
   );
 }

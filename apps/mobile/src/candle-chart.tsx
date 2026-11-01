@@ -306,6 +306,21 @@ function Plot(p: {
   };
   const wRef = useRef(0);
   wRef.current = w;
+  // Gesture moves arrive faster than the screen redraws: apply at most one view/crosshair update per frame.
+  const pendingRef = useRef<{ view?: { end: number; count: number }; cross?: number | null }>({});
+  const rafRef = useRef<number | null>(null);
+  const schedule = (u: { view?: { end: number; count: number }; cross?: number | null }) => {
+    Object.assign(pendingRef.current, u);
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const pd = pendingRef.current;
+      pendingRef.current = {};
+      if (pd.view) { const v = pd.view; live.current.setView(() => v); }
+      if ('cross' in pd) live.current.setCross(pd.cross ?? null);
+    });
+  };
+  useEffect(() => () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); }, []);
   const dist = (e: GestureResponderEvent) => {
     const [a, b] = e.nativeEvent.touches;
     return a && b ? Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY) : 0;
@@ -343,17 +358,17 @@ function Plot(p: {
             const n = live.current.bars.length;
             const count = Math.min(Math.max((s.count0 * s.dist0) / d, MIN_COUNT), Math.max(n + 4, MIN_COUNT));
             const latest = s.end0 >= n;
-            live.current.setView(() => ({ count, end: latest ? s.end0 : s.end0 - (s.count0 - count) / 2 }));
+            schedule({ view: { count, end: latest ? s.end0 : s.end0 - (s.count0 - count) / 2 } });
             return;
           }
-          if (s.mode === 'cross') { live.current.setCross(idxAt(s.x0 + gs.dx)); return; }
+          if (s.mode === 'cross') { schedule({ cross: idxAt(s.x0 + gs.dx) }); return; }
           if (s.mode === 'none' && s.moved) s.mode = 'pan';
           if (s.mode === 'pan') {
             const pw = Math.max(1, wRef.current - AXIS_W);
             const per = pw / s.count0;
             const n = live.current.bars.length;
             const end = Math.min(Math.max(s.end0 - gs.dx / per, Math.min(s.count0, n)), n + s.count0 * 0.5);
-            live.current.setView((v) => ({ ...v, end }));
+            schedule({ view: { count: s.count0, end } });
           }
         },
         onPanResponderRelease: () => {
@@ -374,6 +389,32 @@ function Plot(p: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // All candles drawn as six paths (up/down wicks, bodies and range bars) instead of 3 shapes per candle:
+  // the work per frame stays small even with hundreds of candles on screen.
+  const series = useMemo(() => {
+    if (!scale || !vis.length) return null;
+    const cw = Math.max(1, bw * 0.68);
+    const rw = Math.max(1, bw * 0.7);
+    const rangeH = plotH * 0.12;
+    const f = (n: number) => n.toFixed(1);
+    let wu = '', wd = '', bu = '', bd = '', ru = '', rd = '', ln = '';
+    for (let k = 0; k < vis.length; k++) {
+      const b = vis[k];
+      const cx = x(from + k);
+      const up = b.c >= b.o;
+      const wick = `M${f(cx)} ${f(scale.y(b.h))}V${f(scale.y(b.l))}`;
+      const top = scale.y(Math.max(b.o, b.c));
+      const bh = Math.max(1, Math.abs(scale.y(b.o) - scale.y(b.c)));
+      const body = `M${f(cx - cw / 2)} ${f(top)}h${f(cw)}v${f(bh)}h${f(-cw)}Z`;
+      const rh = ((b.h - b.l) / scale.maxRange) * rangeH;
+      const range = `M${f(cx - rw / 2)} ${f(plotH - rh)}h${f(rw)}v${f(rh)}h${f(-rw)}Z`;
+      if (up) { wu += wick; bu += body; ru += range; } else { wd += wick; bd += body; rd += range; }
+      ln += `${k ? 'L' : 'M'}${f(cx)} ${f(scale.y(b.c))}`;
+    }
+    return { wu, wd, bu, bd, ru, rd, ln };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, vis.length ? vis[vis.length - 1] : null, from, to, bw, startF, plotH]);
 
   const onLayout = (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width);
   const lastBar = bars[bars.length - 1];
@@ -419,29 +460,22 @@ function Plot(p: {
           ))}
           <Line x1={plotW} x2={plotW} y1={0} y2={height} stroke={t.line} />
           <Line x1={0} x2={w} y1={plotH} y2={plotH} stroke={t.line} />
-          {/* range bars (high − low) along the bottom */}
-          {vis.map((b, k) => {
-            const i = from + k;
-            const rh = ((b.h - b.l) / scale.maxRange) * (plotH * 0.12);
-            return <Rect key={`r${b.t}`} x={x(i) - Math.max(1, bw * 0.35)} y={plotH - rh} width={Math.max(1, bw * 0.7)} height={rh} fill={b.c >= b.o ? t.pos : t.neg} opacity={0.22} />;
-          })}
-          {style === 'candles' ? (
-            vis.map((b, k) => {
-              const i = from + k;
-              const up = b.c >= b.o;
-              const col = up ? t.pos : t.neg;
-              const top = scale.y(Math.max(b.o, b.c));
-              const bodyH = Math.max(1, Math.abs(scale.y(b.o) - scale.y(b.c)));
-              const cw = Math.max(1, bw * 0.68);
-              return (
-                <G key={`c${b.t}`}>
-                  <Line x1={x(i)} x2={x(i)} y1={scale.y(b.h)} y2={scale.y(b.l)} stroke={col} strokeWidth={1} />
-                  <Rect x={x(i) - cw / 2} y={top} width={cw} height={bodyH} fill={col} />
-                </G>
-              );
-            })
-          ) : (
-            <Path d={vis.map((b, k) => `${k ? 'L' : 'M'}${x(from + k).toFixed(1)},${scale.y(b.c).toFixed(1)}`).join(' ')} stroke={t.brand} strokeWidth={2} fill="none" strokeLinejoin="round" />
+          {/* range bars (high − low) along the bottom, then the candles or the close line */}
+          {series && (
+            <G>
+              <Path d={series.ru} fill={t.pos} opacity={0.22} />
+              <Path d={series.rd} fill={t.neg} opacity={0.22} />
+              {style === 'candles' ? (
+                <>
+                  <Path d={series.wu} stroke={t.pos} strokeWidth={1} />
+                  <Path d={series.wd} stroke={t.neg} strokeWidth={1} />
+                  <Path d={series.bu} fill={t.pos} />
+                  <Path d={series.bd} fill={t.neg} />
+                </>
+              ) : (
+                <Path d={series.ln} stroke={t.brand} strokeWidth={2} fill="none" strokeLinejoin="round" />
+              )}
+            </G>
           )}
           {/* last price line + label */}
           {lastBar && (() => {
@@ -469,7 +503,7 @@ function Plot(p: {
 
       {/* legend */}
       {shown && p.state === 'ready' ? (
-        <View pointerEvents="none" style={{ position: 'absolute', top: 6, left: 8, right: AXIS_W + 4, flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 0 }}>
+        <View style={{ pointerEvents: 'none', position: 'absolute', top: 6, left: 8, right: AXIS_W + 4, flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 0 }}>
           <T v="xs" c="text2" w="600">{whenLabel(shown.t, interval)}</T>
           <T v="xs">O {fmt(shown.o)}</T>
           <T v="xs">H {fmt(shown.h)}</T>
