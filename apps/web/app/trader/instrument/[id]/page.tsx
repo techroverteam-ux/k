@@ -6,7 +6,7 @@ import { CandleChart } from '@/components/CandleChart';
 import { Icon } from '@/components/icons';
 import { useLiveQuotes, useSummary, type Instrument } from '@/components/trading';
 import { Change, Chips, Confirm, ErrorState, Mark, SkeletonRows, useToast } from '@/components/ui';
-import { gql, newKey } from '@/lib/api';
+import { gql, newKey, pollingPaused } from '@/lib/api';
 import { inr, shortSymbol } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Private, playTone, usePrefs } from '@/lib/prefs';
@@ -163,6 +163,12 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
   const valid = !qtyErr && !priceErr && !!q;
 
   // live margin preview (read-only query)
+  const [previewTick, setPreviewTick] = useState(0);
+  useEffect(() => {
+    if (type !== 'MARKET' || !valid) return;
+    const t = setInterval(() => { if (!document.hidden && !pollingPaused()) setPreviewTick((n) => n + 1); }, 10_000);
+    return () => clearInterval(t);
+  }, [type, valid]);
   useEffect(() => {
     if (!valid) { setPreview(null); return; }
     const h = setTimeout(() => {
@@ -170,7 +176,8 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         .then((d) => setPreview(d.orderPreview)).catch(() => setPreview(null));
     }, 250);
     return () => clearTimeout(h);
-  }, [i.id, side, n, type, price, valid, type === 'MARKET' ? q?.ask : null]);
+    // Market orders: refresh the estimate every 10 s (not on every tick: that alone was ~60 requests a minute).
+  }, [i.id, side, n, type, price, valid, type === 'MARKET' ? previewTick : 0]);
 
   const available = sum.data?.accountSummary.available;
   const short = preview && available && Number(preview.intradayMargin) + Number(preview.brokerage) > Number(available);

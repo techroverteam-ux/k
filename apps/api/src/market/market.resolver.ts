@@ -49,10 +49,16 @@ export class MarketResolver {
   @Query(() => [MarketPulseItem], { description: 'Public snapshot of a few instruments from the price feed (sign-in screen).' })
   marketPulse(): MarketPulseItem[] {
     const order = ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER', 'CRUDEOIL', 'RELIANCE', 'HDFCBANK', 'TCS', 'INFY', 'SBIN'];
-    const base = (s: string) => s.replace(/\d{2}[A-Z]{3}FUT$/, '');
+    const base = (s: string) => s.replace(/[-_].*$/, '').replace(/\d{2}[A-Z]{3}FUT$/, '');
+    const seen = new Set<string>();
     return this.market
       .all()
-      .filter((q) => order.includes(base(q.symbol)))
+      .filter((q) => {
+        const b = base(q.symbol);
+        if (!order.includes(b) || seen.has(b)) return false;
+        seen.add(b);
+        return true;
+      })
       .sort((a, b) => order.indexOf(base(a.symbol)) - order.indexOf(base(b.symbol)))
       .map((q) => {
         const t = toQuote(q);

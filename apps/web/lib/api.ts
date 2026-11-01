@@ -56,9 +56,17 @@ async function raw<T>(query: string, variables: Record<string, unknown> | undefi
     },
     body: JSON.stringify({ query, variables }),
   });
+  if (res.status === 429) {
+    const after = Number(res.headers.get('retry-after'));
+    pausedUntil = Date.now() + (Number.isFinite(after) && after > 0 ? Math.min(after, 120) : 20) * 1000;
+  }
   if (res.status >= 500 && !res.headers.get('content-type')?.includes('json')) throw new ApiError('The server is unavailable. Try again shortly.', 'NETWORK');
   return res.json();
 }
+
+/** After a 429, background polling pauses until this time (user actions still go through). */
+let pausedUntil = 0;
+export const pollingPaused = () => Date.now() < pausedUntil;
 
 export async function refreshSession(): Promise<boolean> {
   refreshing ??= (async () => {
@@ -104,6 +112,7 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     if (token) return gql<T>(query, variables, { ...opts, stepUp: token });
     throw new ApiError('Verification cancelled.', 'CANCELLED');
   }
+  if (code === 'RATE_LIMITED') throw new ApiError('Too many requests right now. Updates will resume in a few seconds.', code);
   throw new ApiError(err.message, code);
 }
 

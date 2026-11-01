@@ -46,7 +46,9 @@ const schema = z
       .string()
       .default('false')
       .transform((v) => v === 'true'),
-    MARKET_FEED: z.enum(['simulated']).default('simulated'),
+    MARKET_FEED: z.enum(['simulated', 'dhan']).default('simulated'),
+    DHAN_CLIENT_ID: z.string().optional(),
+    DHAN_ACCESS_TOKEN: z.string().optional(),
     /** 'config' = use trading.marketHours; 'always_open' = ignore sessions (development/testing only). */
     MARKET_HOURS: z.enum(['config', 'always_open']).default('config'),
     // How many days of 1-minute candles to keep in Postgres (daily candles are kept for good). ~3 MB per day for 20 instruments.

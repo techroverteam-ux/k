@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, gql } from './api';
+import { ApiError, gql, pollingPaused } from './api';
 
 /** Small data hook: loading / error / data / refetch. */
 export function useQuery<T>(query: string, variables?: Record<string, unknown>, opts: { skip?: boolean; pollMs?: number } = {}) {
@@ -31,10 +31,15 @@ export function useQuery<T>(query: string, variables?: Record<string, unknown>, 
     if (opts.skip) return;
     setLoading(true);
     void refetch();
-    const t = opts.pollMs ? setInterval(refetch, opts.pollMs) : undefined;
+    if (!opts.pollMs) return () => { alive.current = false; };
+    // Poll only while the tab is visible and the API isn't asking us to slow down; catch up when it's back.
+    const t = setInterval(() => { if (!document.hidden && !pollingPaused()) void refetch(); }, opts.pollMs);
+    const onVisible = () => { if (!document.hidden && !pollingPaused()) void refetch(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive.current = false;
-      if (t) clearInterval(t);
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [refetch, opts.skip, opts.pollMs]);
 

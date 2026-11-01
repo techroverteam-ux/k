@@ -82,8 +82,15 @@
     {
       "idx": 11,
       "version": "7",
-      "when": 1793298829366,
-      "tag": "0011_quick_unlock",
+      "when": 1793530000000,
+      "tag": "0011_dhan_instruments",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793547096157,
+      "tag": "0012_quick_unlock",
       "breakpoints": true
     }
   ]

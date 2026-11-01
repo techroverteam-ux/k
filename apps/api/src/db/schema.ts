@@ -276,8 +276,10 @@ export const instruments = pgTable(
     tickMinor: integer('tick_minor').notNull().default(5),
     refPriceMinor: money('ref_price_minor').notNull(),
     active: boolean('active').notNull().default(true),
+    dhanSecurityId: varchar('dhan_security_id', { length: 32 }),
+    dhanSegment: varchar('dhan_segment', { length: 20 }),
   },
-  (t) => [index('instruments_exchange_idx').on(t.exchange, t.segment)],
+  (t) => [index('instruments_exchange_idx').on(t.exchange, t.segment), index('instruments_dhan_idx').on(t.dhanSegment, t.dhanSecurityId)],
 );
 
 // ---------------- Price history (candles) ----------------

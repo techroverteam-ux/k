@@ -4,6 +4,7 @@ import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { inputHygienePlugin, validationPipe } from './common/validation';
 import { GqlExecutionContext, GraphQLModule } from '@nestjs/graphql';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { JwtService } from '@nestjs/jwt';
 import { sql } from 'drizzle-orm';
 import { ConsentResolver } from './consent/consent.resolver';
 import { StatementController } from './statements/statement.controller';
@@ -59,9 +60,22 @@ class GqlThrottlerGuard extends ThrottlerGuard {
     }
     return super.getRequestResponse(ctx);
   }
+  private readonly jwt = new JwtService({});
+  /**
+   * Signed-in requests count per user (so people behind one office NAT, or a misconfigured web relay,
+   * don't share a budget); anonymous ones per IP. The token's signature is checked (cheap HMAC, no DB),
+   * so a forged token can't be used to get a fresh budget; an invalid one falls back to the IP.
+   */
   protected async getTracker(req: Record<string, any>) {
+    const h = req.headers?.authorization;
+    if (typeof h === 'string' && h.startsWith('Bearer ') && h.length < 4096) {
+      try {
+        const p = this.jwt.verify<{ sub: string }>(h.slice(7), { secret: env().JWT_ACCESS_SECRET, algorithms: ['HS256'], issuer: 'tradedesk', audience: 'tradedesk-api' });
+        if (p?.sub) return `u:${p.sub}`;
+      } catch { /* fall through to the IP */ }
+    }
     // Same IP as the logs (also correct for requests relayed by the web app's proxy).
-    return requestContext.get()?.ip ?? req.ip ?? 'unknown';
+    return `ip:${requestContext.get()?.ip ?? req.ip ?? 'unknown'}`;
   }
 }
 

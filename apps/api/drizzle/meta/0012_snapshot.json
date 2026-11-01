@@ -1,5 +1,5 @@
 {
-  "id": "8de8e709-31b4-45ce-b0a0-241e374325be",
+  "id": "d5faec52-4c5f-40f0-8b3f-66bab607e517",
   "prevId": "1616c165-25ba-4f4a-94fa-8ce4b0fffa93",
   "version": "7",
   "dialect": "postgresql",
@@ -880,6 +880,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
+        },
+        "dhan_security_id": {
+          "name": "dhan_security_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dhan_segment": {
+          "name": "dhan_segment",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -894,6 +906,27 @@
             },
             {
               "expression": "segment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "instruments_dhan_idx": {
+          "name": "instruments_dhan_idx",
+          "columns": [
+            {
+              "expression": "dhan_segment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dhan_security_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
