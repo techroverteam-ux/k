@@ -3,6 +3,7 @@ import { PubSub } from 'graphql-subscriptions';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { DbService, type DbOrTx } from '../db/db';
 import { notifications } from '../db/schema';
+import { afterWipe } from '../wipe/visibility';
 
 /**
  * In-process pub/sub for GraphQL subscriptions. For multiple API instances, swap for
@@ -29,14 +30,14 @@ export class NotificationsService {
   }
 
   list(userId: string, limit: number) {
-    return this.dbs.db.select().from(notifications).where(eq(notifications.userId, userId)).orderBy(desc(notifications.createdAt)).limit(limit);
+    return this.dbs.db.select().from(notifications).where(and(eq(notifications.userId, userId), afterWipe(notifications.createdAt, userId))).orderBy(desc(notifications.createdAt)).limit(limit);
   }
 
   async unreadCount(userId: string) {
     const [r] = await this.dbs.db
       .select({ c: sql<number>`count(*)::int` })
       .from(notifications)
-      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)));
+      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt), afterWipe(notifications.createdAt, userId)));
     return r.c;
   }
 

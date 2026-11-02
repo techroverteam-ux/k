@@ -6,8 +6,7 @@ import { inr, shortSymbol, tone, when } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
 import { Private, usePrefs } from '@/lib/prefs';
-import { useAuth } from '@/lib/auth';
-import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, Tabs, useToast } from './ui';
+import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
 
 export interface Quote { instrumentId: string; ltp: string; bid: string; ask: string; high: string; low: string; change: string; changePct: string; ts: string; source: string }
 export interface Instrument { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string }
@@ -55,9 +54,42 @@ export function useSummary(userId?: string) {
 }
 
 /** Portfolio header: one big number, supporting metrics in a divided strip. */
-export function PortfolioSummary({ userId, actions, title = 'Available to trade' }: { userId?: string; actions?: boolean; title?: string }) {
+export function PortfolioSummary({ userId, actions, title = 'Available to trade', compact, detail }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean }) {
   const { data, loading, error, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
+  if (compact) {
+    if (loading && !data) return <div className="panel bal-card"><div className="skeleton" style={{ width: 120, height: 12 }} /><div className="skeleton" style={{ width: 180, height: 26, marginTop: 8 }} /></div>;
+    if (error && !data) return <ErrorState error={error} retry={refetch} />;
+    const c = data!.accountSummary;
+    return (
+      <section className="panel bal-card" aria-label="Account summary">
+        <div className="bal-main">
+          <div className="t2 sm">{title} <span className="badge info" style={{ marginLeft: 4 }}>Virtual ₹</span></div>
+          <div className="bal-v num"><Private width={8}>₹{inr(c.available)}</Private></div>
+          <div className="bal-meta t3 sm">
+            <span>Open P&L <span className={`num w6 ${tone(c.unrealizedPnl)}`}>{inr(c.unrealizedPnl, { sign: true })}</span></span>
+            <span>Booked <span className={`num w6 ${tone(c.realizedPnl)}`}>{inr(c.realizedPnl, { sign: true })}</span></span>
+            <span>Margin <span className="num"><Private>₹{inr(c.marginUsed)}</Private></span></span>
+          </div>
+          {detail && (
+            <div className="bal-meta t3 sm">
+              <span>Ledger balance <span className="num w6"><Private>₹{inr(c.balance)}</Private></span></span>
+              <span>Brokerage paid <span className="num">₹{inr(c.fees)}</span></span>
+              <span>Positions <span className="num w6">{c.openPositions}</span></span>
+              <span>Open orders <span className="num w6">{c.openOrders}</span></span>
+            </div>
+          )}
+        </div>
+        {actions && (
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn btn-sm" onClick={() => setPay('WITHDRAWAL')}>Withdraw</button>
+            <button className="btn btn-sm btn-primary" onClick={() => setPay('DEPOSIT')}><Icon name="plus" size={16} />Add funds</button>
+          </div>
+        )}
+        {pay && <PaymentDialog type={pay} userId={userId} onClose={() => setPay(null)} onDone={refetch} available={c.available} />}
+      </section>
+    );
+  }
   if (loading && !data) return <div className="stack"><div className="skeleton" style={{ width: 180, height: 14 }} /><div className="skeleton" style={{ width: 260, height: 36 }} /><div className="skeleton" style={{ height: 76, borderRadius: 12 }} /></div>;
   if (error && !data) return <ErrorState error={error} retry={refetch} />;
   const s = data!.accountSummary;
@@ -145,46 +177,70 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
 interface WEntry { id: string; instrument: Instrument; quote?: Quote }
 const WL_Q = `query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry lotSize tickSize } quote{ ${QUOTE_FIELDS} } } }`;
 
-/** Watchlist with tabs. `compact` = right-rail variant on Home. */
+/** The watchlist: one list, with a search bar on top that finds instruments and adds them in place. */
 export function Watchlist({ compact }: { compact?: boolean }) {
-  const { settings } = useAuth();
-  const { prefs, set } = usePrefs();
-  const [list, setList] = useState('0');
-  const counts = useQuery<{ watchlistCounts: { listIndex: number; count: number }[] }>(`{ watchlistCounts { listIndex count } }`);
-  const [extra, setExtra] = useState(0);
-  const used = counts.data?.watchlistCounts ?? [];
-  const max = settings?.maxWatchlists ?? 10;
-  const shown = Math.min(max, Math.max(3, ...used.map((c) => c.listIndex + 1), Number(list) + 1) + extra);
-  const countOf = (k: number) => used.find((c) => c.listIndex === k)?.count ?? 0;
-  const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: Number(list) });
+  const { prefs } = usePrefs();
+  const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: 0 });
   const entries = data?.watchlist ?? [];
   const live = useLiveQuotes(entries.map((e) => e.instrument.id));
-  const [adding, setAdding] = useState(false);
   const toast = useToast();
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<Instrument[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const searching = q.trim().length > 0;
+  useEffect(() => {
+    if (!searching) { setHits(null); return; }
+    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q: q.trim() })
+      .then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
+    return () => clearTimeout(t);
+  }, [q, searching]);
+  const inList = new Set(entries.map((e) => e.instrument.id));
+  const add = async (i: Instrument) => {
+    setBusy(i.id);
+    try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: i.id }); toast(`${shortSymbol(i.symbol)} added`); await refetch(); }
+    catch (x) { toast((x as Error).message, true); }
+    finally { setBusy(null); }
+  };
   const remove = async (e: WEntry) => {
-    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: Number(list), i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); void refetch(); }
+    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); void refetch(); }
     catch (x) { toast((x as Error).message, true); }
   };
 
   return (
-    <section className={compact ? 'panel' : ''} aria-label="Watchlist">
-      {compact && <div style={{ padding: '16px 16px 0' }}><h2>Watchlist</h2></div>}
-      <div className="spread" style={{ padding: compact ? '0 16px' : 0, flexWrap: 'nowrap', borderBottom: '1px solid var(--line)' }}>
-        <div className="grow" style={{ marginBottom: -1 }}>
-          <Tabs label="Watchlists" value={list} onChange={setList} items={Array.from({ length: shown }, (_, k) => ({ v: String(k), label: <>List {k + 1}{!compact && countOf(k) > 0 && <span className="t3 xs"> ({countOf(k)})</span>}</> }))} />
+    <section className="panel wl" aria-label="Watchlist">
+      <div className="wl-search">
+        <div className="input-icon grow">
+          <Icon name="search" size={18} />
+          <input className="input" type="search" placeholder="Search and add, e.g. NIFTY, RELIANCE" aria-label="Search instruments to add to your watchlist" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }} />
         </div>
-        {!compact && shown < max && <button className="icon-btn" aria-label="New watchlist" title="New watchlist" onClick={() => { setExtra((x) => x + 1); setList(String(shown)); }}><Icon name="plus" size={18} /></button>}
-        <button className="btn btn-sm btn-ghost" onClick={() => setAdding(true)} aria-label="Add script"><Icon name="search" size={16} /><span className="hide-sm">Add script</span></button>
+        {searching && <button className="btn btn-sm btn-ghost" onClick={() => setQ('')}>Cancel</button>}
       </div>
-      {loading && !data ? <SkeletonRows rows={compact ? 5 : 6} pad={!!compact} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
-        <Empty icon="eye" title="Nothing in this list" action={<button className="btn btn-sm" onClick={() => setAdding(true)}>Add instruments</button>}>Track prices by adding instruments you care about.</Empty>
+      {searching ? (
+        hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? <Empty icon="search" title={`Nothing matches “${q.trim()}”`}>Try the symbol, like NIFTY or SBIN.</Empty> : (
+          <div className="list list-pad">
+            {hits.map((i) => (
+              <div key={i.id} className="list-row">
+                <Mark text={shortSymbol(i.symbol)} />
+                <Link href={`/trader/instrument/${i.id}`} className="grow" style={{ minWidth: 0 }}>
+                  <div className="w6">{shortSymbol(i.symbol)} <span className="t3 xs">{i.exchange} {i.segment}</span></div>
+                  <div className="t3 sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.name}</div>
+                </Link>
+                {inList.has(i.id)
+                  ? <span className="t3 sm row" style={{ gap: 4 }}><Icon name="check" size={16} />Added</span>
+                  : <button className="btn btn-sm" disabled={busy === i.id} onClick={() => void add(i)} aria-label={`Add ${shortSymbol(i.symbol)} to watchlist`}><Icon name="plus" size={16} />Add</button>}
+              </div>
+            ))}
+          </div>
+        )
+      ) : loading && !data ? <SkeletonRows rows={6} pad /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
+        <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>
       ) : compact ? (
         <div className="list list-pad">
           {entries.map((e) => <CompactRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote} />)}
         </div>
       ) : (
         <>
-        <div className="list only-mob">
+        <div className="list list-pad only-mob">
           {entries.map((e) => <CompactRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote} withBidAsk={prefs.watchlistView === 'detailed'} />)}
         </div>
         <div className="table-wrap only-desk">
@@ -195,8 +251,6 @@ export function Watchlist({ compact }: { compact?: boolean }) {
         </div>
         </>
       )}
-      {!compact && entries.length > 0 && <p className="t3 xs" style={{ padding: '8px 0' }}>{entries.length} script{entries.length === 1 ? '' : 's'} · List {Number(list) + 1}</p>}
-      {adding && <AddInstrument list={Number(list)} onClose={() => setAdding(false)} onAdded={() => { void refetch(); void counts.refetch(); }} />}
     </section>
   );
 }
@@ -252,34 +306,6 @@ function FullRow({ e, q, onRemove }: { e: WEntry; q?: Quote; onRemove: () => voi
       </td>
       <td className="r"><button className="icon-btn" aria-label={`Remove ${e.instrument.symbol}`} onClick={onRemove}><Icon name="x" size={18} /></button></td>
     </tr>
-  );
-}
-
-function AddInstrument({ list, onClose, onAdded }: { list: number; onClose: () => void; onAdded: () => void }) {
-  const [q, setQ] = useState('');
-  const [results, setResults] = useState<Instrument[] | null>(null);
-  const [added, setAdded] = useState<string[]>([]);
-  const toast = useToast();
-  useEffect(() => {
-    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q }).then((d) => setResults(d.searchInstruments)).catch(() => setResults([])), 180);
-    return () => clearTimeout(t);
-  }, [q]);
-  return (
-    <Dialog title={`Add to list ${list + 1}`} onClose={onClose}>
-      <div className="input-icon"><Icon name="search" size={18} /><input className="input" placeholder="Search symbol or company" aria-label="Search instruments" value={q} onChange={(e) => setQ(e.target.value)} autoFocus /></div>
-      <div className="list" style={{ marginTop: 8, maxHeight: 340, overflow: 'auto' }}>
-        {results === null ? <SkeletonRows rows={4} pad={false} /> : !results.length ? <Empty icon="search" title={`No results for “${q}”`}>Try a different symbol.</Empty> : results.map((r) => (
-          <div key={r.id} className="list-row">
-            <Mark text={shortSymbol(r.symbol)} />
-            <div className="grow"><div className="w6">{shortSymbol(r.symbol)}</div><div className="t3">{r.name}</div></div>
-            <button className="btn btn-sm" disabled={added.includes(r.id)} onClick={async () => {
-              try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: list, i: r.id }); setAdded((a) => [...a, r.id]); onAdded(); }
-              catch (e) { toast((e as Error).message, true); }
-            }}>{added.includes(r.id) ? <><Icon name="check" size={16} />Added</> : 'Add'}</button>
-          </div>
-        ))}
-      </div>
-    </Dialog>
   );
 }
 

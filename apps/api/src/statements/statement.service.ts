@@ -89,7 +89,9 @@ export class StatementService {
   async render(c: StatementClaims, ip: string): Promise<{ pdf: Buffer; fileName: string }> {
     const [u] = await this.dbs.db.select().from(users).where(eq(users.id, c.uid));
     if (!u) throw new AppError('NOT_FOUND', 'Account not found.');
-    const from = istDayStart(c.from);
+    let from = istDayStart(c.from);
+    // After a wipe-out, the user (and their broker) only get statements of the fresh account; Super Admin gets everything.
+    if (c.role !== 'SUPER_ADMIN' && u.dataSince && from < u.dataSince) from = u.dataSince;
     const to = new Date(istDayStart(c.to).getTime() + 86_400_000);
     const cash = await this.ledger.cashAccount(this.dbs.db, u.id, u.mode);
     const [open] = await this.dbs.db

@@ -1,12 +1,12 @@
 'use client';
-import { PageHead } from '@/components/ui';
-import { PositionsTable } from '@/components/trading';
+import { PortfolioSummary, PositionsTable } from '@/components/trading';
 
+/** Positions with the whole account on top: balance, margin, P&L, brokerage. */
 export default function Positions() {
   return (
-    <>
-      <PageHead title="Positions" sub="Open P&L is marked to the simulated bid for longs and ask for shorts." />
+    <div className="stack home" style={{ gap: 20 }}>
+      <PortfolioSummary compact detail actions={false} title="Available to trade" />
       <section className="panel"><PositionsTable canTrade /></section>
-    </>
+    </div>
   );
 }

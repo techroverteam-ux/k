@@ -312,6 +312,7 @@ export class MarketSession {
 @ObjectType({ description: 'Order limits and market sessions shown on the order screen.' })
 export class TradingRules {
   @Field(() => Int, { description: 'Minimum quantity per order' }) minQty: number;
+  @Field({ description: 'Brokerage in rupees per lot, charged on entry and again on exit.' }) brokeragePerLot: string;
   @Field(() => Int, { description: 'Maximum quantity per order ("punch qty")' }) maxQtyPerOrder: number;
   @Field(() => Int, { description: 'Maximum open quantity per instrument ("total qty")' }) maxQtyPerInstrument: number;
   @Field() marketHoursEnforced: boolean;

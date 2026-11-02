@@ -5,6 +5,7 @@ import { AccountDetail } from '@/components/accounts';
 import { UserActionButtons, useUserActions } from '@/components/admin';
 import { UserLogs } from '@/components/activity';
 import { ConsentHistory, LoginHistory, UserSessions } from '@/components/logins';
+import { AccountWipes } from '@/components/wipe';
 
 export default function AdminUserDetail() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +14,7 @@ export default function AdminUserDetail() {
   return (
     <>
       <AccountDetail key={v} id={id} back={{ href: '/admin/users', label: 'Accounts' }} actions={(u) => <UserActionButtons u={u} open={open} />} />
+      <div style={{ marginTop: 40 }}><AccountWipes key={`w${v}`} userId={id} /></div>
       <div style={{ marginTop: 40 }}><UserLogs key={v} userId={id} /></div>
       <div style={{ marginTop: 40 }}><UserSessions key={`s${v}`} userId={id} /></div>
       <div className="two" style={{ marginTop: 40 }}><LoginHistory userId={id} title="Login audit" /><ConsentHistory userId={id} /></div>

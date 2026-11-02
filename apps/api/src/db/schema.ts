@@ -66,6 +66,8 @@ export const users = pgTable(
     createdById: uuid('created_by_id'),
     /** 'admin' | 'demo' | 'self_signup' */
     signupSource: varchar('signup_source', { length: 20 }),
+    /** "Wipe out": history before this time is hidden from the user (and their broker); Super Admin still sees it. */
+    dataSince: ts('data_since'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
@@ -586,3 +588,86 @@ export const strategyEvents = pgTable(
   (t) => [index('strategy_events_strategy_idx').on(t.strategyId, t.at)],
 );
 export type StrategyEventRow = typeof strategyEvents.$inferSelect;
+
+// ---------------- Wipe out ----------------
+/**
+ * A user's own "wipe out" (fresh start). Nothing is deleted: history before `created_at` is hidden from the
+ * user via users.data_since, the balance is reset with a balanced ADJUSTMENT journal, and positions and the
+ * watchlist (which can't be hidden by date) are copied into `snapshot` before being cleared.
+ */
+export const accountWipes = pgTable(
+  'account_wipes',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    byId: uuid('by_id').notNull(),
+    verifiedWith: varchar('verified_with', { length: 16 }).notNull(),
+    balanceBeforeMinor: money('balance_before_minor').notNull(),
+    balanceAfterMinor: money('balance_after_minor').notNull(),
+    journalId: uuid('journal_id'),
+    snapshot: jsonb('snapshot').notNull(),
+    ip: varchar('ip', { length: 64 }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('account_wipes_user_idx').on(t.userId, t.createdAt)],
+);
+
+/** Super Admin "wipe all trading data": requested by one Super Admin, executed only when a different one approves. */
+export const platformWipes = pgTable('platform_wipes', {
+  id: id(),
+  status: varchar('status', { length: 16 }).notNull().default('PENDING'),
+  requestedById: uuid('requested_by_id').notNull(),
+  requestedIp: varchar('requested_ip', { length: 64 }),
+  reason: varchar('reason', { length: 300 }).notNull(),
+  decidedById: uuid('decided_by_id'),
+  decidedIp: varchar('decided_ip', { length: 64 }),
+  decidedAt: ts('decided_at'),
+  expiresAt: ts('expires_at').notNull(),
+  summary: jsonb('summary'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+});
+
+// ---------------- Fees: company bank & UPI details, and fee payments ----------------
+/**
+ * Where traders pay course / subscription fees (real money; never part of the virtual trading balance).
+ * A Super Admin adds an account; a different Super Admin approves it before anyone sees it (maker-checker),
+ * because a wrong account number sends people's money to the wrong place. Details are never edited: disable and add.
+ */
+export const payeeAccounts = pgTable('payee_accounts', {
+  id: id(),
+  kind: varchar('kind', { length: 8 }).notNull(), // BANK | UPI
+  label: varchar('label', { length: 80 }).notNull(),
+  accountName: varchar('account_name', { length: 120 }).notNull(),
+  bankName: varchar('bank_name', { length: 120 }),
+  accountNumber: varchar('account_number', { length: 20 }),
+  ifsc: varchar('ifsc', { length: 11 }),
+  branch: varchar('branch', { length: 120 }),
+  upiId: varchar('upi_id', { length: 120 }),
+  status: varchar('status', { length: 12 }).notNull().default('PENDING'), // PENDING | ACTIVE | REJECTED | DISABLED
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdById: uuid('created_by_id').notNull(),
+  decidedById: uuid('decided_by_id'),
+  decidedAt: ts('decided_at'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+/** A fee a trader says they paid (with the bank/UPI reference); a Super Admin verifies it against the bank statement. */
+export const feePayments = pgTable(
+  'fee_payments',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    payeeAccountId: uuid('payee_account_id').notNull().references(() => payeeAccounts.id, { onDelete: 'restrict' }),
+    amountMinor: money('amount_minor').notNull(),
+    purpose: varchar('purpose', { length: 120 }).notNull(),
+    utr: varchar('utr', { length: 40 }).notNull().unique(),
+    status: varchar('status', { length: 12 }).notNull().default('SUBMITTED'), // SUBMITTED | VERIFIED | REJECTED
+    reviewNote: varchar('review_note', { length: 300 }),
+    reviewedById: uuid('reviewed_by_id'),
+    reviewedAt: ts('reviewed_at'),
+    ip: varchar('ip', { length: 64 }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('fee_payments_user_idx').on(t.userId, t.createdAt), index('fee_payments_status_idx').on(t.status, t.createdAt)],
+);

@@ -297,6 +297,21 @@ describe('paper trading', () => {
     expect(o.venue).toBe('SIMULATED');
   });
 
+  it('charges brokerage per lot on entry and on exit: 1 lot ₹250 + ₹250, 2 lots ₹500 + ₹500', async () => {
+    const t = await login('trader.two');
+    const fees = async () => Number((await gql(`{ accountSummary { fees } }`, {}, { token: t.accessToken })).data.accountSummary.fees);
+    const pv = await gql(`query($i:ID!){ orderPreview(instrumentId:$i, side:BUY, quantity:3){ brokerage } }`, { i: instrumentId }, { token: t.accessToken });
+    expect(pv.data.orderPreview.brokerage).toBe('750.00');
+    for (const lots of [1, 2]) {
+      const before = await fees();
+      const buy = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: lots, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+      expect(buy.data.placeOrder.status).toBe('FILLED');
+      expect(await fees()).toBeCloseTo(before + 250 * lots, 2); // entry
+      await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: lots, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+      expect(await fees()).toBeCloseTo(before + 500 * lots, 2); // entry + exit
+    }
+  });
+
   it('refuses an idempotency key reused for a different order instead of replaying the first one', async () => {
     const t = await login('trader.two');
     const key = randomUUID();
@@ -1071,5 +1086,137 @@ describe('quick unlock: MPIN and fingerprint on a trusted phone', () => {
     expect((await gql(`mutation($a:String!,$b:String!){ changePassword(currentPassword:$a,newPassword:$b) }`, { a: PW, b: NEWPW }, { token: t.accessToken })).data.changePassword).toBe(true);
     expect((await gql(UNLOCK, { d: d3, m: '7391' })).errors?.[0].message).toMatch(/off on this phone/);
     await gql(`mutation($a:String!,$b:String!){ changePassword(currentPassword:$a,newPassword:$b) }`, { a: NEWPW, b: PW }, { token: t.accessToken });
+  });
+});
+
+describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
+  it('needs a second Super Admin to approve payment details, then traders can pay and an admin verifies', async () => {
+    const admin = await adminLogin('admin');
+    const checker = await adminLogin('checker');
+    const suA = await stepUp(admin.token, 'admin');
+    const suC = await stepUp(checker.token, 'checker');
+    const ADD = `mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`;
+    const bad = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', accountNumber: '50100123456789', ifsc: 'HDFC123' } }, { token: admin.token, stepUp: suA });
+    expect(code(bad)).toBe('BAD_USER_INPUT');
+    expect(code(await gql(ADD, { i: { kind: 'UPI', label: 'UPI', accountName: 'K Training', upiId: 'not-a-upi' } }, { token: admin.token, stepUp: suA }))).toBe('BAD_USER_INPUT');
+    const add = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', bankName: 'HDFC Bank', accountNumber: '50100123456789', ifsc: 'hdfc0001234' } }, { token: admin.token, stepUp: suA });
+    expect(add.data.addPayeeAccount.status).toBe('PENDING');
+    const id = add.data.addPayeeAccount.id;
+
+    const t = await login('trader.one');
+    const visible = async () => (await gql(`{ payeeAccounts { id ifsc } }`, {}, { token: t.accessToken })).data.payeeAccounts.map((p: { id: string }) => p.id);
+    expect(await visible()).not.toContain(id);
+    const APPROVE = `mutation($id:ID!){ approvePayeeAccount(id:$id){ status } }`;
+    expect(code(await gql(APPROVE, { id }, { token: admin.token, stepUp: suA }))).toBe('FORBIDDEN');
+    expect((await gql(APPROVE, { id }, { token: checker.token, stepUp: suC })).data.approvePayeeAccount.status).toBe('ACTIVE');
+    expect(await visible()).toContain(id);
+    expect(code(await gql(ADD, { i: { kind: 'UPI', label: 'UPI', accountName: 'K', upiId: 'k@okhdfc' } }, { token: t.accessToken }))).toBe('FORBIDDEN');
+
+    const balance = async () => (await gql(`{ accountSummary { balance } }`, {}, { token: t.accessToken })).data.accountSummary.balance;
+    const before = await balance();
+    const PAY = `mutation($p:ID!,$a:String!,$u:String!){ submitFeePayment(payeeAccountId:$p, amount:$a, purpose:"Course fee, November batch", utr:$u){ id status amount } }`;
+    expect(code(await gql(PAY, { p: id, a: '4999', u: '12' }, { token: t.accessToken }))).toBe('BAD_USER_INPUT');
+    const utr = `UTR${Date.now()}`;
+    const paid = await gql(PAY, { p: id, a: '4999', u: utr }, { token: t.accessToken });
+    expect(paid.data.submitFeePayment).toMatchObject({ status: 'SUBMITTED', amount: '4999.00' });
+    expect(code(await gql(PAY, { p: id, a: '4999', u: utr.toLowerCase() }, { token: t.accessToken }))).toBe('CONFLICT');
+
+    const REVIEW = `mutation($id:ID!,$v:Boolean!,$n:String){ reviewFeePayment(id:$id, verified:$v, note:$n){ status } }`;
+    expect(code(await gql(REVIEW, { id: paid.data.submitFeePayment.id, v: false }, { token: admin.token }))).toBe('BAD_USER_INPUT');
+    expect((await gql(REVIEW, { id: paid.data.submitFeePayment.id, v: true }, { token: admin.token })).data.reviewFeePayment.status).toBe('VERIFIED');
+    expect(await balance()).toBe(before); // fees never touch the virtual trading balance
+    const mine = (await gql(`{ feePayments { utr status } }`, {}, { token: t.accessToken })).data.feePayments;
+    expect(mine).toContainEqual({ utr, status: 'VERIFIED' });
+  });
+});
+
+describe('wipe out', () => {
+  const PLACE = `mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status } }`;
+  let instrumentId: string;
+  beforeAll(async () => {
+    tokenCache.delete('trader.three');
+    instrumentId = (await pg.query(`SELECT id FROM instruments WHERE symbol = 'ABB26NOVFUT'`)).rows[0].id;
+    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'wipe'`);
+  });
+
+  it('a trader wipes their own account: fresh start for them, full history for Super Admin', async () => {
+    const t = await login('trader.three');
+    const tok = { token: t.accessToken };
+    const buy = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
+    expect(buy.data.placeOrder.status).toBe('FILLED');
+    const pv = await gql(`{ wipePreview { balance resetTo openPositions method } }`, {}, tok);
+    expect(pv.data.wipePreview.openPositions).toBe(1);
+
+    const begin = async () => {
+      const b = await gql(`mutation{ beginAccountWipe{ method devCode } }`, {}, tok);
+      expect(b.errors).toBeUndefined();
+      return b.data.beginAccountWipe.method === 'SMS' ? b.data.beginAccountWipe.devCode : PW;
+    };
+    const WIPE = `mutation($c:String!,$w:String!){ wipeMyAccount(code:$c, confirm:$w){ balance } }`;
+    let code = await begin();
+    expect((await gql(WIPE, { c: code, w: 'WIPE' }, tok)).errors?.[0].message).toMatch(/Exit your open positions/);
+    await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
+
+    expect(code === PW ? 'skip' : (await gql(WIPE, { c: code, w: 'nope' }, tok)).errors?.[0].extensions?.code).toMatch(/skip|BAD_USER_INPUT/);
+    expect((await gql(WIPE, { c: code === PW ? 'wrong-password' : '000000', w: 'WIPE' }, tok)).errors?.[0].extensions?.code).toBe('UNAUTHENTICATED');
+    const before = (await gql(`{ orders(limit:100){ id } }`, {}, tok)).data.orders.length;
+    expect(before).toBeGreaterThan(0);
+    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'wipe'`);
+    code = await begin();
+    const done = await gql(WIPE, { c: code, w: 'WIPE' }, tok);
+    expect(done.errors).toBeUndefined();
+    expect(done.data.wipeMyAccount.balance).toBe(pv.data.wipePreview.resetTo);
+
+    // The trader: empty history, balance back to the opening amount, no fees or P&L shown.
+    expect((await gql(`{ orders(limit:100){ id } }`, {}, tok)).data.orders).toHaveLength(0);
+    const sum = (await gql(`{ accountSummary { balance fees realizedPnl } }`, {}, tok)).data.accountSummary;
+    expect(sum).toEqual({ balance: pv.data.wipePreview.resetTo, fees: '0.00', realizedPnl: '0.00' });
+    const led = (await gql(`{ ledgerHistory(limit:50){ kind memo } }`, {}, tok)).data.ledgerHistory;
+    expect(led.every((l: { kind: string }) => l.kind === 'ADJUSTMENT')).toBe(true);
+    expect((await gql(`{ positions { id } }`, {}, tok)).data.positions).toHaveLength(0);
+
+    // Their broker doesn't see the old history either.
+    const uid = t.user.id;
+    const broker = await login('broker.two');
+    expect((await gql(`query($u:ID){ orders(userId:$u, limit:100){ id } }`, { u: uid }, { token: broker.accessToken })).data.orders).toHaveLength(0);
+
+    // Super Admin sees everything, plus what the wipe cleared.
+    const admin = await adminLogin('admin');
+    expect((await gql(`query($u:ID){ orders(userId:$u, limit:100){ id } }`, { u: uid }, { token: admin.token })).data.orders.length).toBe(before);
+    const wipes = (await gql(`query($u:ID!){ accountWipes(userId:$u){ verifiedWith balanceBefore balanceAfter snapshot } }`, { u: uid }, { token: admin.token })).data.accountWipes;
+    expect(wipes).toHaveLength(1);
+    expect(JSON.parse(wipes[0].snapshot).positions.length).toBeGreaterThan(0);
+    // The ledger stayed balanced and append-only: the reset is one more journal, nothing was deleted.
+    const unbalanced = await pg.query(`SELECT journal_id FROM ledger_postings GROUP BY journal_id HAVING SUM(amount_minor) <> 0`);
+    expect(unbalanced.rows).toHaveLength(0);
+  });
+
+  it('Super Admin full wipe needs a second Super Admin, then deletes all trader and broker data but keeps the audit log', async () => {
+    const admin = await adminLogin('admin');
+    const checker = await adminLogin('checker');
+    const suA = await stepUp(admin.token, 'admin');
+    const suC = await stepUp(checker.token, 'checker');
+    const REQ = `mutation($r:String!,$w:String!){ requestPlatformWipe(reason:$r, confirm:$w){ id status } }`;
+    expect((await gql(REQ, { r: 'End of training batch', w: 'wipe' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
+    const req = await gql(REQ, { r: 'End of training batch', w: 'WIPE ALL DATA' }, { token: admin.token, stepUp: suA });
+    expect(req.data.requestPlatformWipe.status).toBe('PENDING');
+    const id = req.data.requestPlatformWipe.id;
+    const APPROVE = `mutation($id:ID!,$w:String!){ approvePlatformWipe(id:$id, confirm:$w) }`;
+    expect((await gql(APPROVE, { id, w: 'WIPE ALL DATA' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('FORBIDDEN');
+    const auditBefore = Number((await pg.query(`SELECT count(*) FROM audit_events`)).rows[0].count);
+    const ok = await gql(APPROVE, { id, w: 'WIPE ALL DATA' }, { token: checker.token, stepUp: suC });
+    expect(ok.errors).toBeUndefined();
+    const counts = JSON.parse(ok.data.approvePlatformWipe);
+    expect(counts.accounts).toBeGreaterThan(0);
+
+    const left = await pg.query(`SELECT role, count(*)::int n FROM users GROUP BY role`);
+    expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 2 }]);
+    for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries']) {
+      expect((await pg.query(`SELECT count(*)::int n FROM ${tbl}`)).rows[0].n).toBe(0);
+    }
+    expect(Number((await pg.query(`SELECT count(*) FROM audit_events`)).rows[0].count)).toBeGreaterThan(auditBefore);
+    // Outside an approved wipe, the ledger is still append-only.
+    await expect(pg.query(`DELETE FROM audit_events`)).rejects.toThrow(/append-only/);
+    expect((await gql(`{ platformWipes { status summary } }`, {}, { token: admin.token })).data.platformWipes[0].status).toBe('EXECUTED');
   });
 });

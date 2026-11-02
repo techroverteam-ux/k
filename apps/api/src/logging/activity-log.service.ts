@@ -6,6 +6,7 @@ import type { RequestContext } from '../common/request-context';
 import { DbService } from '../db/db';
 import { activityLog, users } from '../db/schema';
 import { jsonLog } from './json-logger';
+import { afterWipe } from '../wipe/visibility';
 
 export interface ActivityInput {
   rc: RequestContext;
@@ -138,7 +139,7 @@ export class ActivityLogService implements OnModuleDestroy {
     return this.dbs.db
       .select()
       .from(activityLog)
-      .where(and(eq(activityLog.userId, userId), eq(activityLog.opType, 'mutation'), sql`${activityLog.opName} IS DISTINCT FROM 'refresh'`, beforeId ? lt(activityLog.id, beforeId) : undefined))
+      .where(and(eq(activityLog.userId, userId), eq(activityLog.opType, 'mutation'), sql`${activityLog.opName} IS DISTINCT FROM 'refresh'`, beforeId ? lt(activityLog.id, beforeId) : undefined, afterWipe(activityLog.at, userId)))
       .orderBy(desc(activityLog.id))
       .limit(limit);
   }

@@ -649,3 +649,19 @@ tr.clickable { cursor: pointer; }
 .events time { flex: none; }
 .algo-title { flex: 1 1 280px; min-width: 0; }
 .nowrap { white-space: nowrap; }
+
+/* ---------- simple trader home (Nov 2026) ---------- */
+.home { max-width: 960px; }
+.home-hi { font-size: var(--fs-xl); font-weight: 600; margin: 0; }
+.bal-card { padding: var(--s4) var(--s5); display: flex; align-items: center; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
+.bal-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bal-v { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; }
+.bal-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 2px; }
+.wl { overflow: hidden; }
+.wl-search { display: flex; align-items: center; gap: var(--s2); padding: var(--s3); border-bottom: 1px solid var(--line); }
+.wl-search .input::-webkit-search-cancel-button { display: none; }
+.wl .table-wrap { border: 0; border-radius: 0; }
+@media (max-width: 640px) { .bal-v { font-size: 22px; } .bal-card { padding: var(--s3) var(--s4); } }
+
+/* ---------- fees ---------- */
+.fee-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s4); }

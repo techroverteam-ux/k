@@ -159,14 +159,14 @@ export interface BacktestResult {
  * - A signal on candle i's close fills at candle i+1's open (no look-ahead).
  * - Stop-loss / take-profit are checked intrabar on later candles. A gap through the level fills at the open.
  *   If both levels fall inside one candle, the stop-loss is assumed to hit first (the cautious choice).
- * - Brokerage is charged per side at `feeBps` of turnover, like the platform's own fills.
+ * - Brokerage is charged per side like the platform's own fills: `fee.perLot` × quantity plus `fee.bps` of turnover.
  * - A position still open at the end is closed at the last close and marked "END".
  */
-export function backtest(bars: Bar[], rules: Rules, quantity: number, feeBps: number, startIndex = 0): BacktestResult {
+export function backtest(bars: Bar[], rules: Rules, quantity: number, feeRule: { perLot: number; bps: number }, startIndex = 0): BacktestResult {
   const ind = new Indicators(bars);
   const long = rules.side === 'LONG';
   const dir = long ? 1 : -1;
-  const fee = (px: number) => Math.round((px * quantity * feeBps) / 10_000);
+  const fee = (px: number) => feeRule.perLot * quantity + Math.round((px * quantity * feeRule.bps) / 10_000);
   const trades: BacktestTrade[] = [];
   const equity: [number, number][] = [];
   let realized = 0;

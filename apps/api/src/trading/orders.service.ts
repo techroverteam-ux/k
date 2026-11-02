@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, notFound } from '../common/errors';
 import { applyBps } from '../common/money';
+import { brokerageMinor, feeRule, type FeeRule } from './brokerage';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config-mgmt/config.service';
 import { DbService, type Tx } from '../db/db';
@@ -16,6 +17,7 @@ import { requestContext } from '../common/request-context';
 import { env } from '../config/env';
 import { ConsentService } from '../consent/consent.service';
 import { sessionStatus, type Sessions } from './market-hours';
+import { afterWipeFor } from '../wipe/visibility';
 
 export interface PlaceOrderInput {
   instrumentId: string;
@@ -118,7 +120,7 @@ export class OrdersService implements OnModuleInit {
       valueMinor: value,
       intradayMarginMinor: applyBps(value, await this.config.get('trading.intradayMarginBps')),
       carryForwardMarginMinor: applyBps(value, await this.config.get('trading.carryForwardMarginBps')),
-      brokerageMinor: applyBps(value, await this.config.get('trading.brokerageBps')),
+      brokerageMinor: brokerageMinor(await feeRule(this.config), price, quantity),
     };
   }
 
@@ -144,12 +146,12 @@ export class OrdersService implements OnModuleInit {
     for (const px of [input.limitPriceMinor, input.triggerPriceMinor])
       if (px && px % BigInt(inst.tickMinor) !== 0n) throw badInput(`Price must be a multiple of the tick size (${Number(inst.tickMinor) / 100}).`);
 
-    const [cfgMin, cfgMax, cfgMaxPos, bps, feeBps, closed] = await Promise.all([
+    const [cfgMin, cfgMax, cfgMaxPos, bps, fees, closed] = await Promise.all([
       this.config.get('trading.minQty'),
       this.config.get('trading.maxQtyPerOrder'),
       this.config.get('trading.maxQtyPerInstrument'),
       this.config.get('trading.intradayMarginBps'),
-      this.config.get('trading.brokerageBps'),
+      feeRule(this.config),
       this.closedReason(inst.exchange),
     ]);
 
@@ -184,7 +186,7 @@ export class OrdersService implements OnModuleInit {
       else if (isTrigger(input.type) && triggerHit(input.type, input.side, input.triggerPriceMinor!, q.ltpMinor))
         reject = `Trigger ${(Number(input.triggerPriceMinor) / 100).toFixed(2)} is already reached (LTP ${(Number(q.ltpMinor) / 100).toFixed(2)}). Use a market order or move the trigger.`;
       if (!reject && exposureIncrease > 0) {
-        const need = applyBps(refPrice * BigInt(exposureIncrease), bps) + applyBps(refPrice * BigInt(input.quantity), feeBps);
+        const need = applyBps(refPrice * BigInt(exposureIncrease), bps) + brokerageMinor(fees, refPrice, input.quantity);
         const balance = await this.ledger.balance(tx, cash);
         const free = balance - (await this.marginUsed(tx, u.id, bps));
         if (need > free) reject = 'Insufficient margin.';
@@ -215,10 +217,10 @@ export class OrdersService implements OnModuleInit {
         .returning();
 
       let final = o;
-      if (!reject && input.type === 'MARKET') final = await this.fill(tx, o, this.venue.marketFillPrice(input.side, q), feeBps);
+      if (!reject && input.type === 'MARKET') final = await this.fill(tx, o, this.venue.marketFillPrice(input.side, q), fees);
       else if (!reject && input.type === 'LIMIT') {
         const px = this.venue.limitFillPrice(input.side, input.limitPriceMinor!, q);
-        if (px !== null) final = await this.fill(tx, o, px, feeBps);
+        if (px !== null) final = await this.fill(tx, o, px, fees);
       }
       await this.audit.record(tx, {
         actor,
@@ -251,7 +253,7 @@ export class OrdersService implements OnModuleInit {
   // ------------------------------------------------------------------ fills
 
   /** Apply a simulated fill: update the order and position, post P&L and fees to the ledger. */
-  private async fill(tx: Tx, o: OrderRow, price: bigint, feeBps: number, triggered = false): Promise<OrderRow> {
+  private async fill(tx: Tx, o: OrderRow, price: bigint, fees: FeeRule, triggered = false): Promise<OrderRow> {
     const [filled] = await tx
       .update(orders)
       .set({ status: 'FILLED', fillPriceMinor: price, filledAt: new Date(), updatedAt: new Date(), ...(triggered ? { triggeredAt: new Date() } : {}) })
@@ -303,7 +305,7 @@ export class OrdersService implements OnModuleInit {
         refId: o.id,
       });
     }
-    const fee = applyBps(price * BigInt(o.quantity), feeBps);
+    const fee = brokerageMinor(fees, price, o.quantity);
     if (fee > 0n) {
       const feeAcct = await this.ledger.systemAccount(tx, 'FEE_INCOME', 'SIMULATED');
       await this.ledger.post(tx, {
@@ -340,7 +342,7 @@ export class OrdersService implements OnModuleInit {
         .where(and(eq(orders.status, 'OPEN'), inArray(orders.type, ['LIMIT', 'STOP_LOSS', 'TAKE_PROFIT']), inArray(orders.instrumentId, ids)))
         .limit(500);
       if (!open.length) return;
-      const feeBps = await this.config.get('trading.brokerageBps');
+      const fees = await feeRule(this.config);
       const sessions = await this.sessions();
       for (const o of open) {
         const q = this.market.quote(o.instrumentId);
@@ -357,7 +359,7 @@ export class OrdersService implements OnModuleInit {
             await this.ledger.lock(tx, cash);
             const [cur] = await tx.select().from(orders).where(eq(orders.id, o.id)).for('update');
             if (cur?.status !== 'OPEN') return null;
-            const f = await this.fill(tx, cur, px, feeBps, trig);
+            const f = await this.fill(tx, cur, px, fees, trig);
             // System action (matcher): no request IP of its own, so record where the order was placed from.
             await this.audit.record(tx, { action: trig ? 'order.triggered' : 'order.filled', entityType: 'order', entityId: o.id, outcome: 'SUCCESS', metadata: { price: px, type: o.type, trigger: o.triggerPriceMinor, venue: 'SIMULATED', userId: o.userId, placedFromIp: o.clientIp, placedSessionId: o.sessionId } });
             return f;
@@ -384,6 +386,7 @@ export class OrdersService implements OnModuleInit {
           eq(orders.userId, userId),
           opts.status?.length ? inArray(orders.status, opts.status) : undefined,
           opts.before ? lt(orders.createdAt, opts.before) : undefined,
+          afterWipeFor(actor, orders.createdAt, orders.userId),
         ),
       )
       .orderBy(desc(orders.createdAt))

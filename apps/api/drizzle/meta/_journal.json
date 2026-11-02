@@ -92,6 +92,20 @@
       "when": 1793547096157,
       "tag": "0012_quick_unlock",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793639206269,
+      "tag": "0013_wipe_out",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793640007807,
+      "tag": "0014_fees",
+      "breakpoints": true
     }
   ]
 }

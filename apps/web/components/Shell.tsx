@@ -38,6 +38,8 @@ const NAV: Record<Role, Item[]> = {
     { href: '/admin/logins', label: 'Login & consent', icon: 'lock' },
     { href: '/admin/audit', label: 'Audit trail', icon: 'file' },
     { href: '/admin/reconciliation', label: 'Reconciliation', icon: 'scale' },
+    { href: '/admin/fees', label: 'Fees · bank & UPI', icon: 'wallet' },
+    { href: '/admin/reset', label: 'Data reset', icon: 'alert' },
   ],
 };
 const ROLE: Record<Role, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };

@@ -17,6 +17,10 @@ import { AuditService } from './audit/audit.service';
 import { AuthGuardDeps } from './auth/auth.deps';
 import { GqlAuthGuard } from './auth/auth.guard';
 import { AuthResolver } from './auth/auth.resolver';
+import { WipeResolver } from './wipe/wipe.resolver';
+import { WipeService } from './wipe/wipe.service';
+import { FeesResolver } from './fees/fees.resolver';
+import { FeesService } from './fees/fees.service';
 import { AuthService } from './auth/auth.service';
 import { PasswordService } from './auth/password.service';
 import { SmsProvider } from './auth/sms.provider';
@@ -217,6 +221,10 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     ReconciliationService,
     LogsResolver,
     LogMaintenanceService,
+    WipeService,
+    WipeResolver,
+    FeesService,
+    FeesResolver,
   ],
 })
 export class AppModule {}

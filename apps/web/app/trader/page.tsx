@@ -1,21 +1,16 @@
 'use client';
-import { Movers, PortfolioSummary, Watchlist } from '@/components/trading';
+import { PortfolioSummary, Watchlist } from '@/components/trading';
 import { useAuth } from '@/lib/auth';
 
+/** Trader home: a slim balance card, then the watchlist. Nothing else. */
 export default function TraderHome() {
   const { me } = useAuth();
   const first = me?.displayName.split(' ')[0];
   return (
-    <div className="cols">
-      <div className="stack" style={{ gap: 40 }}>
-        <div className="stack" style={{ gap: 4 }}>
-          <h1>Hi{first ? `, ${first}` : ''}</h1>
-          <p className="t2">Here’s your trading account.</p>
-        </div>
-        <PortfolioSummary actions />
-        <Movers />
-      </div>
-      <aside className="rail"><Watchlist compact /></aside>
+    <div className="stack home" style={{ gap: 20 }}>
+      <h1 className="home-hi">Hi{first ? `, ${first}` : ''}</h1>
+      <PortfolioSummary actions compact />
+      <Watchlist />
     </div>
   );
 }

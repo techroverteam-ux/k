@@ -98,13 +98,14 @@ export class TradingResolver {
 
   @Query(() => TradingRules)
   async tradingRules(): Promise<TradingRules> {
-    const [minQty, maxQtyPerOrder, maxQtyPerInstrument, s] = await Promise.all([
+    const [minQty, maxQtyPerOrder, maxQtyPerInstrument, s, perLot] = await Promise.all([
       this.config.get('trading.minQty'),
       this.config.get('trading.maxQtyPerOrder'),
       this.config.get('trading.maxQtyPerInstrument'),
       this.orderSvc.sessions(),
+      this.config.get('trading.brokeragePerLot'),
     ]);
-    return { minQty, maxQtyPerOrder, maxQtyPerInstrument, marketHoursEnforced: s.enforced, sessions: s.list.map((x) => ({ ...x, message: x.message ?? undefined })) };
+    return { brokeragePerLot: perLot.toFixed(2), minQty, maxQtyPerOrder, maxQtyPerInstrument, marketHoursEnforced: s.enforced, sessions: s.list.map((x) => ({ ...x, message: x.message ?? undefined })) };
   }
 
   @Mutation(() => Order, { description: 'Places a SIMULATED (paper) order. Rejected orders are returned with status REJECTED.' })
@@ -190,7 +191,7 @@ export class TradingResolver {
   ): Promise<LedgerLine[]> {
     const u = await this.users.get(a, userId ?? a.userId, c.ip);
     const acct = await this.ledger.cashAccount(this.dbs.db, u.id, u.mode);
-    const rows = await this.ledger.history(acct, clampLimit(limit), before);
+    const rows = await this.ledger.history(acct, clampLimit(limit), before, a.role === 'SUPER_ADMIN' ? null : u.dataSince);
     return rows.map((r) => ({ postingId: r.postingId, journalId: r.journalId, kind: r.kind, memo: r.memo, amount: formatMoney(r.amountMinor), createdAt: r.createdAt }));
   }
 

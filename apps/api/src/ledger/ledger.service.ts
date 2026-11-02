@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { badInput, conflict, notFound } from '../common/errors';
 import { DbService, type DbOrTx, type Tx } from '../db/db';
 import {
@@ -126,7 +126,7 @@ export class LedgerService {
     });
   }
 
-  async history(accountId: string, limit: number, before?: Date) {
+  async history(accountId: string, limit: number, before?: Date, notBefore?: Date | null) {
     return this.dbs.db
       .select({
         postingId: ledgerPostings.id,
@@ -140,7 +140,7 @@ export class LedgerService {
       })
       .from(ledgerPostings)
       .innerJoin(journalEntries, eq(journalEntries.id, ledgerPostings.journalId))
-      .where(and(eq(ledgerPostings.accountId, accountId), before ? lt(ledgerPostings.createdAt, before) : undefined))
+      .where(and(eq(ledgerPostings.accountId, accountId), before ? lt(ledgerPostings.createdAt, before) : undefined, notBefore ? gte(ledgerPostings.createdAt, notBefore) : undefined))
       .orderBy(desc(ledgerPostings.createdAt), desc(ledgerPostings.id))
       .limit(limit);
   }

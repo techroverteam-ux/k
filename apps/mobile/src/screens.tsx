@@ -476,6 +476,7 @@ export function ProfileView() {
         <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Sign-ins ask for a code from your authenticator app' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
         {!me?.isDemo && <Item icon="key" label="Change password" onPress={() => setPw(true)} />}
         {!me?.isDemo && me?.role !== 'SUPER_ADMIN' && <Item icon="fingerprint" label="MPIN & fingerprint" sub={quick?.owner.userId === me?.id ? (quick?.owner.biometric ? 'On: MPIN and fingerprint' : 'On: MPIN') : 'Off. Unlock without your password'} onPress={() => router.push('/quick-settings')} />}
+        {me?.role !== 'SUPER_ADMIN' && <Item icon="alert" label="Wipe out account" sub="Fresh start: clear your history and reset the balance" onPress={() => router.push('/wipe')} />}
         <Item icon="lock" label="Login history" sub="Sign-ins and failed attempts, and the rules you accepted" onPress={() => router.push('/logins')} />
         <Item icon="activity" label="Account activity" sub="Every action with time, IP and device" onPress={() => router.push('/activity')} />
         {me?.role === 'TRADER' && <>

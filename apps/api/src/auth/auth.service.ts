@@ -379,7 +379,7 @@ export class AuthService {
 
   // ---------------------------------------------------------------- OTP helpers (signup, password reset)
 
-  private async issueOtp(phone: string, purpose: 'signup' | 'reset' | 'device', ip: string) {
+  private async issueOtp(phone: string, purpose: 'signup' | 'reset' | 'device' | 'wipe', ip: string) {
     const since = new Date(Date.now() - 10 * 60_000);
     const [{ c }] = await this.dbs.db
       .select({ c: sql<number>`count(*)::int` })
@@ -393,7 +393,7 @@ export class AuthService {
   }
 
   /** Returns true and consumes the challenge when the code matches; counts a failed attempt otherwise. */
-  private async consumeOtp(tx: Tx, phone: string, purpose: 'signup' | 'reset' | 'device', code: string): Promise<boolean> {
+  private async consumeOtp(tx: Tx, phone: string, purpose: 'signup' | 'reset' | 'device' | 'wipe', code: string): Promise<boolean> {
     if (!/^\d{6}$/.test(code)) return false;
     const [ch] = await tx
       .select()
@@ -570,6 +570,11 @@ export class AuthService {
       .orderBy(asc(sessions.lastUsedAt));
   }
 
+  /** Tell devices whose sessions are already gone (e.g. their account was deleted) to leave now. */
+  async announceSignedOut(sessionIds: string[], message: string) {
+    setImmediate(() => sessionIds.forEach((id) => void pubsub.publish(TOPIC.session(id), { sessionEvents: { type: 'SIGNED_OUT', reason: 'SESSION_REVOKED', message, at: new Date() } })));
+  }
+
   /** Revoke sessions and tell each signed-out device immediately (WebSocket), with the reason. */
   async revokeSessions(where: ReturnType<typeof eq>, reason: string, tx: Tx | DbService['db'] = this.dbs.db) {
     const r = await tx
@@ -690,25 +695,53 @@ export class AuthService {
   async beginDeviceTrust(actor: Actor, ip: string) {
     const [u] = await this.dbs.db.select().from(users).where(eq(users.id, actor.userId));
     this.assertQuickUnlockAllowed(u);
+    const r = await this.beginChallenge(u, 'device', ip);
+    await this.audit.recordStandalone({ actor, action: 'auth.device_trust_started', outcome: 'SUCCESS', ip, metadata: { method: r.method } });
+    return r;
+  }
+
+  /**
+   * One-time "prove it's you" for a sensitive action (trusting a phone, wiping an account):
+   * the authenticator app when two-step verification is on, else an SMS code to the registered mobile,
+   * else the account password. Every kind is a challenge row: 5-minute expiry, 5 tries, 3 requests per 10 minutes.
+   */
+  async beginChallenge(u: UserRow, purpose: 'device' | 'wipe', ip: string) {
     const phone = readPhone(u);
-    let method: 'SMS' | 'TOTP' | 'PASSWORD';
+    const method: 'TOTP' | 'SMS' | 'PASSWORD' = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : phone ? 'SMS' : 'PASSWORD';
     let devCode: string | null = null;
-    if (phone) {
-      method = 'SMS';
-      const code = await this.issueOtp(phone, 'device', ip);
+    if (method === 'SMS') {
+      const code = await this.issueOtp(phone!, purpose, ip);
       devCode = this.sms.isDev ? code : null;
     } else {
-      method = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : 'PASSWORD';
-      // No SMS: still a one-time challenge with the same expiry, attempt limit and request rate limit.
       const key = `user:${u.id}`;
       const since = new Date(Date.now() - 10 * 60_000);
       const [{ c }] = await this.dbs.db.select({ c: sql<number>`count(*)::int` }).from(otpChallenges)
-        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'device'), gt(otpChallenges.createdAt, since)));
+        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, purpose), gt(otpChallenges.createdAt, since)));
       if (c >= OTP_MAX_PER_WINDOW) throw new AppError('RATE_LIMITED', 'Too many attempts. Please wait a few minutes.');
-      await this.dbs.db.insert(otpChallenges).values({ phone: key, purpose: 'device', codeHash: '0'.repeat(64), expiresAt: new Date(Date.now() + OTP_TTL_MS), requestIp: ip });
+      await this.dbs.db.insert(otpChallenges).values({ phone: key, purpose, codeHash: '0'.repeat(64), expiresAt: new Date(Date.now() + OTP_TTL_MS), requestIp: ip });
     }
-    await this.audit.recordStandalone({ actor, action: 'auth.device_trust_started', outcome: 'SUCCESS', ip, metadata: { method } });
-    return { method, sentTo: phone ? maskPhone(phone) : null, resendAfterSec: 30, devCode };
+    return { method, sentTo: method === 'SMS' ? maskPhone(phone!) : null, resendAfterSec: 30, devCode };
+  }
+
+  /** Check the answer to beginChallenge. Uses up the challenge on success; counts a try on failure. */
+  async checkChallenge(u: UserRow, purpose: 'device' | 'wipe', rawCode: string): Promise<{ ok: boolean; method: 'TOTP' | 'SMS' | 'PASSWORD'; message: string }> {
+    const phone = readPhone(u);
+    const method: 'TOTP' | 'SMS' | 'PASSWORD' = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : phone ? 'SMS' : 'PASSWORD';
+    const message = method === 'SMS' ? 'Incorrect or expired code.' : method === 'TOTP' ? 'Invalid authentication code.' : 'Incorrect password.';
+    const code = method === 'PASSWORD' ? rawCode : rawCode.trim();
+    if (code.length > 128) return { ok: false, method, message };
+    if (method === 'SMS') return { ok: await this.dbs.serializable((tx) => this.consumeOtp(tx, phone!, purpose, code)), method, message };
+    const right = method === 'TOTP' ? authenticator.check(code, decryptSecret(u.mfaSecretEnc!)) : await this.passwords.verify(u.passwordHash, code);
+    const ok = await this.dbs.serializable(async (tx) => {
+      const [ch] = await tx.select().from(otpChallenges)
+        .where(and(eq(otpChallenges.phone, `user:${u.id}`), eq(otpChallenges.purpose, purpose), isNull(otpChallenges.consumedAt), gt(otpChallenges.expiresAt, new Date())))
+        .orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
+      if (!ch || ch.attempts >= OTP_MAX_ATTEMPTS) return false;
+      if (!right) { await tx.update(otpChallenges).set({ attempts: ch.attempts + 1 }).where(eq(otpChallenges.id, ch.id)); return false; }
+      await tx.update(otpChallenges).set({ consumedAt: new Date() }).where(eq(otpChallenges.id, ch.id));
+      return true;
+    });
+    return { ok, method, message };
   }
 
   /** Step 2: check the code, then save the MPIN (and, if asked, a fingerprint key) for this phone. */
@@ -718,25 +751,10 @@ export class AuthService {
     const mpin = input.mpin;
     if (!/^(\d{4}|\d{6})$/.test(mpin)) throw badInput('MPIN must be 4 or 6 digits.');
     if (WEAK_MPINS.has(mpin) || /^(\d)\1+$/.test(mpin)) throw badInput('That MPIN is too easy to guess. Pick another.');
-    const phone = readPhone(u);
-    const code = input.code.trim();
-    let verified = false;
-    if (phone) verified = await this.dbs.serializable((tx) => this.consumeOtp(tx, phone, 'device', code));
-    else {
-      const ok = u.mfaEnabled && u.mfaSecretEnc ? authenticator.check(code, decryptSecret(u.mfaSecretEnc)) : await this.passwords.verify(u.passwordHash, input.code);
-      verified = await this.dbs.serializable(async (tx) => {
-        const [ch] = await tx.select().from(otpChallenges)
-          .where(and(eq(otpChallenges.phone, `user:${u.id}`), eq(otpChallenges.purpose, 'device'), isNull(otpChallenges.consumedAt), gt(otpChallenges.expiresAt, new Date())))
-          .orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
-        if (!ch || ch.attempts >= OTP_MAX_ATTEMPTS) return false;
-        if (!ok) { await tx.update(otpChallenges).set({ attempts: ch.attempts + 1 }).where(eq(otpChallenges.id, ch.id)); return false; }
-        await tx.update(otpChallenges).set({ consumedAt: new Date() }).where(eq(otpChallenges.id, ch.id));
-        return true;
-      });
-    }
-    if (!verified) {
+    const chk = await this.checkChallenge(u, 'device', input.code);
+    if (!chk.ok) {
       await this.audit.recordStandalone({ actor, action: 'auth.device_trust_failed', outcome: 'FAILURE', ip });
-      throw new AppError('UNAUTHENTICATED', phone ? 'Incorrect or expired code.' : u.mfaEnabled ? 'Invalid authentication code.' : 'Incorrect password.');
+      throw new AppError('UNAUTHENTICATED', chk.message);
     }
     const mpinHash = await this.passwords.hash(`mpin:${u.id}:${mpin}`);
     const bioKey = input.biometric ? randomToken(32) : null;

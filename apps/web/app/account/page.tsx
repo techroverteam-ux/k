@@ -12,6 +12,7 @@ import { initials, when } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 import { usePrefs, type Prefs } from '@/lib/prefs';
 import { Dialog } from '@/components/ui';
+import { WipeOutSection } from '@/components/wipe';
 
 interface S { id: string; deviceName?: string; userAgent?: string; ip?: string; createdAt: string; lastUsedAt: string; current: boolean }
 
@@ -95,6 +96,8 @@ export default function Security() {
       )}
 
       <Preferences />
+
+      {me.role !== 'SUPER_ADMIN' && <WipeOutSection />}
 
       <section className="section">
         <SectionHead title="Help" />

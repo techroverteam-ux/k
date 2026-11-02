@@ -32,6 +32,9 @@ const schema = z
     HASH_PEPPER: z.string().min(32),
 
     SMS_PROVIDER: z.enum(['dev', 'msg91', 'twilio']).default('dev'),
+    /** MSG91 (SMS_PROVIDER=msg91): account auth key and the DLT-approved OTP template id. Secrets: never in config tables. */
+    MSG91_AUTH_KEY: z.string().min(8).optional(),
+    MSG91_OTP_TEMPLATE_ID: z.string().min(4).optional(),
     COOKIE_SECURE: z
       .string()
       .default('false')

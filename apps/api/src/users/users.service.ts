@@ -14,6 +14,7 @@ import { MarketDataService } from '../market/market-data.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PolicyService } from '../policy/policy.service';
 import { OrdersService } from '../trading/orders.service';
+import { afterWipeFor } from '../wipe/visibility';
 
 export const USERNAME_RE = /^[a-z][a-z0-9_.]{3,39}$/;
 
@@ -178,7 +179,7 @@ export class UsersService {
         .select({ kind: journalEntries.kind, s: sql<string>`COALESCE(SUM(${ledgerPostings.amountMinor}),0)::text` })
         .from(ledgerPostings)
         .innerJoin(journalEntries, eq(journalEntries.id, ledgerPostings.journalId))
-        .where(eq(ledgerPostings.accountId, cash))
+        .where(and(eq(ledgerPostings.accountId, cash), afterWipeFor(actor, ledgerPostings.createdAt, userId)))
         .groupBy(journalEntries.kind),
       this.dbs.db.select().from(positions).where(eq(positions.userId, userId)),
     ]);
@@ -221,12 +222,12 @@ export class UsersService {
       .select({ kind: journalEntries.kind, s: sql<string>`COALESCE(SUM(${ledgerPostings.amountMinor}),0)::text`, n: sql<number>`count(*)::int` })
       .from(ledgerPostings)
       .innerJoin(journalEntries, eq(journalEntries.id, ledgerPostings.journalId))
-      .where(and(eq(ledgerPostings.accountId, cash), gte(ledgerPostings.createdAt, from), sql`${ledgerPostings.createdAt} < ${to}`))
+      .where(and(eq(ledgerPostings.accountId, cash), gte(ledgerPostings.createdAt, from), sql`${ledgerPostings.createdAt} < ${to}`, afterWipeFor(actor, ledgerPostings.createdAt, userId)))
       .groupBy(journalEntries.kind);
     const [vol] = await this.dbs.db
       .select({ v: sql<string>`COALESCE(SUM(${orders.fillPriceMinor} * ${orders.quantity}),0)::text`, n: sql<number>`count(*)::int` })
       .from(orders)
-      .where(and(eq(orders.userId, userId), eq(orders.status, 'FILLED'), gte(orders.filledAt, from), sql`${orders.filledAt} < ${to}`));
+      .where(and(eq(orders.userId, userId), eq(orders.status, 'FILLED'), gte(orders.filledAt, from), sql`${orders.filledAt} < ${to}`, afterWipeFor(actor, orders.createdAt, userId)));
     const g = (k: string) => rows.find((r) => r.kind === k);
     return {
       realizedPnlMinor: BigInt(g('TRADE_PNL')?.s ?? '0'),

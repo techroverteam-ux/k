@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, forbidden, notFound } from '../common/errors';
 import { ConfigService } from '../config-mgmt/config.service';
+import { feeRule } from '../trading/brokerage';
 import { ConsentService } from '../consent/consent.service';
 import { DbService } from '../db/db';
 import { orders, strategies, strategyEvents, strategyRuns, type StrategyRow } from '../db/schema';
@@ -11,6 +12,7 @@ import { bucketStart, DAY, type Bar, type CandleInterval } from '../market/candl
 import { MarketDataService } from '../market/market-data.service';
 import { backtest, type BacktestResult } from './engine';
 import { conditionLabel, parseRules, warmup, type Rules } from './rules';
+import { afterWipeFor } from '../wipe/visibility';
 
 export type StrategyInterval = 'M1' | 'M5' | 'M15' | 'H1' | 'D1';
 export const IV: Record<StrategyInterval, CandleInterval> = { M1: '1m', M5: '5m', M15: '15m', H1: '1h', D1: '1D' };
@@ -58,7 +60,7 @@ export class AlgoService {
   }
 
   list(actor: Actor) {
-    return this.dbs.db.select().from(strategies).where(eq(strategies.userId, actor.userId)).orderBy(desc(strategies.updatedAt));
+    return this.dbs.db.select().from(strategies).where(and(eq(strategies.userId, actor.userId), afterWipeFor(actor, strategies.createdAt, actor.userId))).orderBy(desc(strategies.updatedAt));
   }
 
   async save(actor: Actor, input: SaveStrategyInput, ip: string): Promise<StrategyRow> {
@@ -144,8 +146,8 @@ export class AlgoService {
     const fromMs = Date.now() - days * DAY;
     const { bars, startIndex } = await this.history(s.instrumentId, interval, fromMs, warmup(rules));
     if (bars.length - startIndex < 10) throw badInput('Not enough candle history for that period at this timeframe. Try a shorter period or a larger timeframe.');
-    const feeBps = await this.config.get('trading.brokerageBps');
-    const result: BacktestResult = backtest(bars, rules, s.quantity, feeBps, startIndex);
+    const fr = await feeRule(this.config);
+    const result: BacktestResult = backtest(bars, rules, s.quantity, { perLot: Number(fr.perLotMinor), bps: fr.bps }, startIndex);
     const [run] = await this.dbs.db
       .insert(strategyRuns)
       .values({

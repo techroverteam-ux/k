@@ -1,12 +1,7 @@
 'use client';
-import { PageHead } from '@/components/ui';
 import { Watchlist } from '@/components/trading';
 
+/** One watchlist with search on top. Prices update live; tap a sell or buy price to trade. */
 export default function WatchlistPage() {
-  return (
-    <>
-      <PageHead title="Watchlist" sub="Prices update live from the simulated feed. Tap a sell or buy price to open the order panel." />
-      <Watchlist />
-    </>
-  );
+  return <div className="home"><Watchlist /></div>;
 }

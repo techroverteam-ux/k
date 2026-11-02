@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PolicyService } from '../policy/policy.service';
 import { OrdersService } from '../trading/orders.service';
 import { requestContext } from '../common/request-context';
+import { afterWipeFor } from '../wipe/visibility';
 
 type PaymentStatus = PaymentRow['status'];
 
@@ -183,6 +184,7 @@ export class PaymentsService {
       where.push(inArray(paymentRequests.userId, this.dbs.db.select({ id: users.id }).from(users).where(eq(users.brokerId, actor.userId))));
     }
     if (opts.status?.length) where.push(inArray(paymentRequests.status, opts.status));
+    where.push(afterWipeFor(actor, paymentRequests.createdAt, paymentRequests.userId));
     return this.dbs.db.select().from(paymentRequests).where(and(...where)).orderBy(desc(paymentRequests.createdAt)).limit(opts.limit);
   }
 }

@@ -23,7 +23,8 @@ export const CONFIG_REGISTRY = {
   'trading.maxQtyPerOrder': { schema: z.number().int().min(1).max(100000), default: 50, description: 'Max quantity in a single order ("punch qty").' },
   'trading.maxQtyPerInstrument': { schema: z.number().int().min(1).max(1000000), default: 150, description: 'Max absolute open position per instrument.' },
   'trading.minQty': { schema: z.number().int().min(1), default: 1, description: 'Minimum order quantity.' },
-  'trading.brokerageBps': { schema: z.number().int().min(0).max(500), default: 3, description: 'Brokerage per side, basis points of turnover.' },
+  'trading.brokeragePerLot': { schema: z.number().min(0).max(100000), default: 250, description: 'Brokerage in rupees per lot, charged on every fill (entry and exit). 1 lot = ₹250 + ₹250.' },
+  'trading.brokerageBps': { schema: z.number().int().min(0).max(500), default: 0, description: 'Extra brokerage per side in basis points of turnover (added to the per-lot fee). 0 = per-lot only.' },
   'trading.enforceMarketHours': { schema: z.boolean(), default: true, description: 'Reject orders outside market sessions (and on weekends and listed holidays).' },
   'trading.marketHolidays': {
     schema: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(100),
