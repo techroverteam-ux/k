@@ -61,14 +61,26 @@ export function Icon({ name, size = 20, ...p }: { name: IconName; size?: number 
   );
 }
 
-/** The K brand mark: a single geometric "K" in a rounded tile. Same paths as the app icon (apps/mobile/assets/images). */
-export const K_STEM = 'M9 8.6C9 7.7 9.7 7 10.6 7h1.3c.9 0 1.6.7 1.6 1.6v14.8c0 .9-.7 1.6-1.6 1.6h-1.3c-.9 0-1.6-.7-1.6-1.6Z';
-export const K_ARMS = 'M13.5 15.1 20.2 7.6c.4-.4.9-.6 1.4-.6h3.2c.5 0 .7.6.4 1l-7 7.8 7.2 8.2c.3.4.1 1-.4 1h-3.2c-.5 0-1.1-.2-1.4-.6l-6.9-7.6Z';
+/**
+ * The K brand mark, "Pulse K": the K's upper arm is a rising price line that ends in a dot, the last traded price.
+ * 100-unit grid, white strokes on the brand tile. At 24 px and below the line straightens so the K stays readable.
+ * Same geometry as the app icon (apps/mobile/assets/images) and the web favicon (app/icon.svg).
+ */
+export const K = {
+  stem: 'M26 16V84', line: 'M26 58 39 47 47 54 68 25', leg: 'M43 53 70 84', dot: { cx: 72, cy: 20, r: 7.8 },
+  w: { stem: 10.5, line: 9.5, leg: 10.5 },
+  small: { stem: 'M26 18V82', line: 'M26 57 70 22', leg: 'M45 52 72 82', w: 14 },
+} as const;
 export function Logo({ size = 32 }: { size?: number }) {
+  const sm = size <= 24;
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="9" fill="var(--brand)" />
-      <g transform="translate(-0.9 0)" fill="#fff"><path d={K_STEM} /><path d={K_ARMS} /></g>
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="28" fill="var(--brand)" />
+      <g stroke="#fff" strokeLinecap="round" strokeLinejoin="round" fill="none">
+        {sm ? <><path d={K.small.stem} strokeWidth={K.small.w} /><path d={K.small.line} strokeWidth={K.small.w - 1} /><path d={K.small.leg} strokeWidth={K.small.w} /></>
+          : <><path d={K.stem} strokeWidth={K.w.stem} /><path d={K.line} strokeWidth={K.w.line} /><path d={K.leg} strokeWidth={K.w.leg} /></>}
+      </g>
+      {!sm && <circle {...K.dot} fill="#fff" />}
     </svg>
   );
 }

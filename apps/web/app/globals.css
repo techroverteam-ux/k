@@ -537,7 +537,11 @@ tr.clickable { cursor: pointer; }
 .k-tile { filter: drop-shadow(0 12px 28px rgba(8, 167, 123, .28)); animation: k-pop .6s cubic-bezier(.2, 1.4, .4, 1) both; }
 .k-bg { fill: var(--brand); }
 .k-stem { transform-origin: 50% 100%; transform-box: fill-box; animation: k-rise .45s .35s cubic-bezier(.2, .9, .3, 1.2) both; }
-.k-arms { transform-origin: 0% 50%; transform-box: fill-box; animation: k-open .5s .7s cubic-bezier(.2, .9, .3, 1.3) both; }
+.k-arms { transform-origin: 0% 0%; transform-box: fill-box; animation: k-open .5s .7s cubic-bezier(.2, .9, .3, 1.3) both; }
+.k-line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: k-draw .55s .65s cubic-bezier(.5, 0, .2, 1) forwards; }
+.k-dot { transform-origin: center; transform-box: fill-box; animation: k-pop .35s 1.15s cubic-bezier(.2, .9, .3, 1.6) both; }
+@keyframes k-draw { to { stroke-dashoffset: 0; } }
+@keyframes k-pop { from { transform: scale(0); } to { transform: scale(1); } }
 .k-ring { position: absolute; top: 56px; left: 50%; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 30px; border: 2px solid var(--brand); animation: k-ring 1.2s .9s ease-out both; }
 .k-name { font-size: 22px; font-weight: 700; letter-spacing: .02em; color: var(--text); animation: k-fade .5s 1.05s ease both; }
 .k-bar { width: 120px; height: 3px; border-radius: 3px; background: var(--bg-3); overflow: hidden; animation: k-fade .3s 1.1s both; }
@@ -549,7 +553,8 @@ tr.clickable { cursor: pointer; }
 @keyframes k-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes k-load { from { transform: translateX(-100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .k-tile, .k-stem, .k-arms, .k-ring, .k-name, .k-bar, .k-bar span { animation: none !important; }
+  .k-tile, .k-stem, .k-arms, .k-line, .k-dot, .k-ring, .k-name, .k-bar, .k-bar span { animation: none !important; }
+  .k-line { stroke-dashoffset: 0; }
 }
 
 /* ---------- trading consent sheet ---------- */

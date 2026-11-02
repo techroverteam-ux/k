@@ -1,5 +1,5 @@
 /** Same original line-icon set as the web app (apps/web/components/icons.tsx). */
-import Svg, { G, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
 import type { ColorValue } from 'react-native';
 
 export const ICON_PATHS = {
@@ -56,14 +56,25 @@ export function Icon({ name, size = 22, color, strokeWidth = 1.75 }: { name: Ico
   );
 }
 
-/** The K brand mark (same paths as the web logo and the app icon). */
-export const K_STEM = 'M9 8.6C9 7.7 9.7 7 10.6 7h1.3c.9 0 1.6.7 1.6 1.6v14.8c0 .9-.7 1.6-1.6 1.6h-1.3c-.9 0-1.6-.7-1.6-1.6Z';
-export const K_ARMS = 'M13.5 15.1 20.2 7.6c.4-.4.9-.6 1.4-.6h3.2c.5 0 .7.6.4 1l-7 7.8 7.2 8.2c.3.4.1 1-.4 1h-3.2c-.5 0-1.1-.2-1.4-.6l-6.9-7.6Z';
+/**
+ * The K brand mark, "Pulse K": the K's upper arm is a rising price line that ends in a dot, the last traded price.
+ * Same geometry as the web logo and the app icon. At 24 px and below the line straightens so the K stays readable.
+ */
+export const K = {
+  stem: 'M26 16V84', line: 'M26 58 39 47 47 54 68 25', leg: 'M43 53 70 84', dot: { cx: 72, cy: 20, r: 7.8 },
+  w: { stem: 10.5, line: 9.5, leg: 10.5 },
+  small: { stem: 'M26 18V82', line: 'M26 57 70 22', leg: 'M45 52 72 82', w: 14 },
+} as const;
 export function Logo({ size = 32, brand }: { size?: number; brand: string }) {
+  const sm = size <= 24;
   return (
-    <Svg width={size} height={size} viewBox="0 0 32 32">
-      <Rect width="32" height="32" rx="9" fill={brand} />
-      <G transform="translate(-0.9 0)" fill="#fff"><Path d={K_STEM} /><Path d={K_ARMS} /></G>
+    <Svg width={size} height={size} viewBox="0 0 100 100">
+      <Rect width="100" height="100" rx="28" fill={brand} />
+      <G stroke="#fff" strokeLinecap="round" strokeLinejoin="round" fill="none">
+        {sm ? <><Path d={K.small.stem} strokeWidth={K.small.w} /><Path d={K.small.line} strokeWidth={K.small.w - 1} /><Path d={K.small.leg} strokeWidth={K.small.w} /></>
+          : <><Path d={K.stem} strokeWidth={K.w.stem} /><Path d={K.line} strokeWidth={K.w.line} /><Path d={K.leg} strokeWidth={K.w.leg} /></>}
+      </G>
+      {!sm && <Circle cx={K.dot.cx} cy={K.dot.cy} r={K.dot.r} fill="#fff" />}
     </Svg>
   );
 }
