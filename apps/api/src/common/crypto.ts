@@ -100,7 +100,7 @@ function decryptLegacy(blob: string, key: Buffer): string {
  * Uses its own key (BLIND_INDEX_KEY, or one derived from HASH_PEPPER with HKDF).
  */
 let blindKey: Buffer | undefined;
-export function blindIndex(value: string, purpose: 'phone' | 'email'): string {
+export function blindIndex(value: string, purpose: 'phone' | 'email' | 'utr'): string {
   blindKey ??= env().BLIND_INDEX_KEY
     ? Buffer.from(env().BLIND_INDEX_KEY!, 'base64')
     : Buffer.from(hkdfSync('sha256', Buffer.from(env().HASH_PEPPER, 'utf8'), Buffer.alloc(0), 'tradedesk/blind-index/v1', 32));
@@ -110,3 +110,9 @@ export function blindIndex(value: string, purpose: 'phone' | 'email'): string {
 /** MFA secrets: same envelope, bound to their column. */
 export const encryptSecret = (plain: string) => encryptField(plain, 'users.mfa_secret');
 export const decryptSecret = (blob: string) => decryptField(blob, 'users.mfa_secret');
+
+/** Encrypt-or-null for optional columns. */
+export const sealOpt = (plain: string | null | undefined, aad: string) => (plain ? encryptField(plain, aad) : null);
+/** Decrypt a column that may still hold a plaintext value written before it was encrypted (backfilled on start). */
+export const openOpt = (blob: string | null | undefined, aad: string) => (!blob ? null : blob.startsWith(PREFIX) ? decryptField(blob, aad) : blob);
+export const isSealed = (blob: string | null | undefined) => !!blob && blob.startsWith(PREFIX);

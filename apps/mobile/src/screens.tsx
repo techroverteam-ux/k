@@ -125,13 +125,45 @@ interface Summary { balance: string; available: string; marginUsed: string; real
 export const SUMMARY = `query($u:ID){ accountSummary(userId:$u){ balance available marginUsed realizedPnl unrealizedPnl openPositions openOrders deposits withdrawals fees } }`;
 export const useSummary = (userId?: string) => useQuery<{ accountSummary: Summary }>(SUMMARY, { u: userId }, 5000);
 
-export function SummaryBlock({ userId, actions, title = 'Available to trade' }: { userId?: string; actions?: boolean; title?: string }) {
+export function SummaryBlock({ userId, actions, title = 'Available to trade', compact, detail }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean }) {
+  const t = useTheme();
   const { data, error, loading, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const priv = usePrivate();
   const s = data?.accountSummary;
   if (loading && !s) return <Skeleton rows={2} />;
   if (error && !s) return <ErrorState error={error} retry={refetch} />;
+  if (compact) {
+    const toneC = (v?: string) => (toneOfValue(v) === 'flat' ? 'text2' : (toneOfValue(v) as 'pos'));
+    return (
+      <View style={{ borderWidth: StyleSheet.hairlineWidth, borderColor: t.line2, borderRadius: 16, padding: S[4], gap: S[3] }}>
+        <View style={{ gap: 2 }}>
+          <Row gap={S[2]}><T v="sm" c="text2">{title}</T><Badge text="Virtual ₹" tone="info" /></Row>
+          <T style={{ fontSize: 24, fontWeight: '700' }} accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: S[3], rowGap: 2 }}>
+            <T v="xs" c="text2">Open P&L <T v="xs" w="600" c={toneC(s?.unrealizedPnl)}>{inr(s?.unrealizedPnl, true)}</T></T>
+            <T v="xs" c="text2">Booked <T v="xs" w="600" c={toneC(s?.realizedPnl)}>{inr(s?.realizedPnl, true)}</T></T>
+            <T v="xs" c="text2">Margin <T v="xs" w="600">{priv(`₹${inr(s?.marginUsed)}`)}</T></T>
+          </View>
+          {detail && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: S[3], rowGap: 2 }}>
+              <T v="xs" c="text2">Ledger <T v="xs" w="600">{priv(`₹${inr(s?.balance)}`)}</T></T>
+              <T v="xs" c="text2">Brokerage paid <T v="xs" w="600">₹{inr(s?.fees)}</T></T>
+              <T v="xs" c="text2">Positions <T v="xs" w="600">{s?.openPositions ?? 0}</T></T>
+              <T v="xs" c="text2">Open orders <T v="xs" w="600">{s?.openOrders ?? 0}</T></T>
+            </View>
+          )}
+        </View>
+        {actions && (
+          <Row gap={S[2]}>
+            <View style={{ flex: 1 }}><Button block size="sm" title="Withdraw" onPress={() => setPay('WITHDRAWAL')} /></View>
+            <View style={{ flex: 1 }}><Button block size="sm" kind="primary" icon="plus" title="Add funds" onPress={() => setPay('DEPOSIT')} /></View>
+          </Row>
+        )}
+        {pay && <PaymentSheet type={pay} userId={userId} available={s?.available} onClose={() => { setPay(null); void refetch(); }} />}
+      </View>
+    );
+  }
   return (
     <View style={{ gap: S[4] }}>
       <View style={{ gap: 2 }}>
@@ -244,90 +276,69 @@ const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove }: { e: WEnt
 });
 
 /** Watchlists. `limit` = compact preview (Home); otherwise the full, virtualised list for the Watchlist tab. */
+/** The watchlist: one list, with a search bar on top that finds instruments and adds them in place. */
 export function WatchlistBlock({ limit, header }: { limit?: number; header?: ReactNode }) {
-  const { settings } = useAuth();
   const { prefs } = usePrefs();
-  const [list, setList] = useState('0');
-  const counts = useQuery<{ watchlistCounts: { listIndex: number; count: number }[] }>(`{ watchlistCounts { listIndex count } }`);
-  const [extra, setExtra] = useState(0);
-  const used = counts.data?.watchlistCounts ?? [];
-  const max = settings?.maxWatchlists ?? 10;
-  const shown = Math.min(max, Math.max(3, ...used.map((c) => c.listIndex + 1), Number(list) + 1) + extra);
   const detailed = !limit && prefs.watchlistView === 'detailed';
-  const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: Number(list) });
+  const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: 0 });
   const entries = useMemo(() => (data?.watchlist ?? []).slice(0, limit ?? 100), [data, limit]);
-  const q = useLiveQuotes(entries.map((e) => e.instrument.id));
-  const [search, setSearch] = useState(false);
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<Inst[] | null>(null);
+  const searching = query.trim().length > 0;
+  useEffect(() => {
+    if (!searching) { setHits(null); return; }
+    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q: query.trim() }).then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
+    return () => clearTimeout(h);
+  }, [query, searching]);
+  const q = useLiveQuotes(searching ? (hits ?? []).map((i) => i.id) : entries.map((e) => e.instrument.id));
+  const inList = useMemo(() => new Set((data?.watchlist ?? []).map((e) => e.instrument.id)), [data]);
+  const onAdd = useCallback(async (i: Inst) => {
+    try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: i.id }); tap(); toast(`${shortSymbol(i.symbol)} added`); void refetch(); }
+    catch (e) { toast((e as Error).message, true); }
+  }, [refetch]);
   const [removing, setRemoving] = useState<WEntry | null>(null);
   const onRemove = useCallback((e: WEntry) => setRemoving(e), []);
   const remove = async (e: WEntry) => {
     setRemoving(null);
-    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: Number(list), i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); } catch (err) { toast((err as Error).message, true); }
-    void refetch(); void counts.refetch();
+    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); } catch (err) { toast((err as Error).message, true); }
+    void refetch();
   };
   const top = (
     <>
       {header}
-      <Tabs scroll value={list} onChange={setList} items={Array.from({ length: shown }, (_, k) => ({ k: String(k), label: `Watchlist ${k + 1}` }))}
-        right={<Row gap={0}>{!limit && shown < max && <IconButton icon="plus" label="New watchlist" onPress={() => { setExtra((x) => x + 1); setList(String(shown)); }} />}<IconButton icon="search" label="Add script" onPress={() => setSearch(true)} /></Row>} />
-      {!limit && <T v="xs" c="text2">{entries.length} script{entries.length === 1 ? '' : 's'} · Watchlist {Number(list) + 1}</T>}
+      <SearchBox value={query} onChangeText={setQuery} placeholder="Search and add, e.g. NIFTY, RELIANCE" />
     </>
   );
-  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : (
-    <Empty icon="eye" title="Nothing in this list" action={<Button size="sm" title="Add instruments" onPress={() => setSearch(true)} />}>Track prices by adding instruments.</Empty>
+  const state = searching
+    ? (hits === null ? <Skeleton rows={4} /> : <Empty icon="search" title={`Nothing matches “${query.trim()}”`}>Try the symbol, like NIFTY or SBIN.</Empty>)
+    : loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>;
+  const hint = !searching && entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a sell or buy price to trade. Swipe a row left to remove it.' : 'Swipe a row left to remove it.'}</T> : null;
+  const sheet = (
+    <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
+      <Row>
+        <Button block title="Keep" onPress={() => setRemoving(null)} />
+        <Button block kind="sell" icon="x" title="Remove" onPress={() => removing && void remove(removing)} />
+      </Row>
+    </Sheet>
   );
-  const hint = entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a sell or buy price to trade. Swipe a row left to remove it.' : 'Swipe a row left to remove it.'}</T> : null;
-  const sheets = (
-    <>
-      {search && <AddSheet list={Number(list)} onClose={() => { setSearch(false); void refetch(); void counts.refetch(); }} />}
-      <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
-        <Row>
-          <Button block title="Keep" onPress={() => setRemoving(null)} />
-          <Button block kind="sell" icon="x" title={`Remove from list ${Number(list) + 1}`} onPress={() => removing && void remove(removing)} />
-        </Row>
-      </Sheet>
-    </>
-  );
-  if (!limit) {
+  if (searching) {
     return (
       <>
-        <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
-          render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} />} />
-        {sheets}
+        <VList data={hits ?? []} keyOf={(i) => i.id} header={top} empty={state}
+          render={(i) => <SearchRow i={i} qq={q[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
+        {sheet}
       </>
     );
   }
   return (
-    <View style={{ gap: S[2] }}>
-      {top}
-      {!entries.length ? state : entries.map((e) => <WatchRow key={e.id} e={e} qq={q[e.instrument.id]} detailed={false} onRemove={onRemove} />)}
-      {sheets}
-    </View>
+    <>
+      <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
+        render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} />} />
+      {sheet}
+    </>
   );
 }
 
-function AddSheet({ list, onClose }: { list: number; onClose: () => void }) {
-  const [q, setQ] = useState('');
-  const [res, setRes] = useState<Inst[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-  const [added, setAdded] = useState<string[]>([]);
-  useEffect(() => {
-    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q }).then((d) => setRes(d.searchInstruments)).catch(() => setRes([])), 180);
-    return () => clearTimeout(h);
-  }, [q]);
-  return (
-    <Sheet visible title={`Add to list ${list + 1}`} onClose={onClose}>
-      <SearchBox value={q} onChangeText={setQ} placeholder="Search symbol or company" autoFocus />
-      {res === null ? <Skeleton rows={3} /> : !res.length ? <Empty icon="search" title={`No results for “${q}”`} /> : res.slice(0, 10).map((r) => (
-        <ListRow key={r.id} left={<Mark text={shortSymbol(r.symbol)} />} title={shortSymbol(r.symbol)} sub={r.name}
-          right={<Button size="sm" title={added.includes(r.id) ? 'Added' : 'Add'} icon={added.includes(r.id) ? 'check' : undefined} disabled={added.includes(r.id)} onPress={async () => {
-            try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: list, i: r.id }); setAdded((a) => [...a, r.id]); } catch (e) { toast((e as Error).message, true); }
-          }} />} />
-      ))}
-    </Sheet>
-  );
-}
 
 /* ====================================================================== orders / positions / ledger */
 const OTYPE: Record<string, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };

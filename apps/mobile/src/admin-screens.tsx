@@ -152,6 +152,7 @@ export function AdminUserScreen({ id }: { id: string }) {
           {x.role === 'TRADER' && <ActionRow icon="briefcase" label="View trading account" sub="Positions, orders, ledger and fund requests" onPress={() => router.push(`/trader-detail/${x.id}`)} />}
         </Section>
       )}
+      <UserWipes userId={x.id} />
       <Tabs value={tab} onChange={setTab} items={[{ k: 'logins', label: 'Sign-ins' }, { k: 'sessions', label: 'Devices' }]} />
       {tab === 'logins' ? <LoginHistoryList userId={x.id} /> : <UserSessions userId={x.id} />}
       {act && <UserActionSheet act={act} u={x} brokers={brokers.data?.users.items ?? []} onClose={() => setAct(null)} onDone={() => { setAct(null); void u.refetch(); }} />}
@@ -319,5 +320,22 @@ export function CommissionsScreen() {
       )}
       <View style={{ height: R.md }} />
     </Screen>
+  );
+}
+
+/** Wipe-outs the account's owner did (fresh starts). Earlier data is hidden from them, not from you. */
+function UserWipes({ userId }: { userId: string }) {
+  const q = useQuery<{ accountWipes: { id: string; verifiedWith: string; balanceBefore: string; balanceAfter: string; snapshot: string; createdAt: string }[] }>(
+    `query($u:ID!){ accountWipes(userId:$u){ id verifiedWith balanceBefore balanceAfter snapshot createdAt } }`, { u: userId });
+  const rows = q.data?.accountWipes ?? [];
+  if (!rows.length) return null;
+  return (
+    <Section title="Wipe-outs">
+      <T v="xs">Everything before each wipe is hidden from the trader and their broker. You still see it.</T>
+      {rows.map((w) => {
+        const s = JSON.parse(w.snapshot) as { positions: { symbol: string }[]; watchlist: unknown[]; cancelledOrders: unknown[]; stoppedStrategies: unknown[] };
+        return <ListRow key={w.id} left={<IconMark icon="alert" tone="warn" />} title={`₹${inr(w.balanceBefore)} → ₹${inr(w.balanceAfter)}`} sub={`${when(w.createdAt)} · via ${w.verifiedWith.toLowerCase()} · cleared ${s.positions.length} positions, ${s.watchlist.length} watchlist items, ${s.cancelledOrders.length} orders`} />;
+      })}
+    </Section>
   );
 }

@@ -639,10 +639,12 @@ export const payeeAccounts = pgTable('payee_accounts', {
   label: varchar('label', { length: 80 }).notNull(),
   accountName: varchar('account_name', { length: 120 }).notNull(),
   bankName: varchar('bank_name', { length: 120 }),
-  accountNumber: varchar('account_number', { length: 20 }),
+  /** AES-256-GCM ciphertext (AAD "payee_accounts.account_number"). */
+  accountNumber: text('account_number'),
   ifsc: varchar('ifsc', { length: 11 }),
   branch: varchar('branch', { length: 120 }),
-  upiId: varchar('upi_id', { length: 120 }),
+  /** AES-256-GCM ciphertext (AAD "payee_accounts.upi_id"). */
+  upiId: text('upi_id'),
   status: varchar('status', { length: 12 }).notNull().default('PENDING'), // PENDING | ACTIVE | REJECTED | DISABLED
   sortOrder: integer('sort_order').notNull().default(0),
   createdById: uuid('created_by_id').notNull(),
@@ -661,7 +663,9 @@ export const feePayments = pgTable(
     payeeAccountId: uuid('payee_account_id').notNull().references(() => payeeAccounts.id, { onDelete: 'restrict' }),
     amountMinor: money('amount_minor').notNull(),
     purpose: varchar('purpose', { length: 120 }).notNull(),
-    utr: varchar('utr', { length: 40 }).notNull().unique(),
+    /** AES-256-GCM ciphertext (AAD "fee_payments.utr"); uniqueness via the keyed blind index below. */
+    utr: text('utr').notNull(),
+    utrHash: varchar('utr_hash', { length: 64 }).unique(),
     status: varchar('status', { length: 12 }).notNull().default('SUBMITTED'), // SUBMITTED | VERIFIED | REJECTED
     reviewNote: varchar('review_note', { length: 300 }),
     reviewedById: uuid('reviewed_by_id'),

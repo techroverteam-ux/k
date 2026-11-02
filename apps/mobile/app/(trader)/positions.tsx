@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BellButton, OrdersTabs, PositionsList, SearchButton } from '@/screens';
+import { BellButton, OrdersTabs, PositionsList, SearchButton, SummaryBlock } from '@/screens';
 import { Screen, Tabs } from '@/ui';
 
 /** Portfolio: positions, and orders split into Open / Executed / Rejected. */
@@ -16,6 +16,7 @@ export default function Portfolio() {
   return (
     <Screen title="Portfolio" right={<><SearchButton /><BellButton /></>}>
       {tabs}
+      <SummaryBlock compact detail />
       <PositionsList canTrade />
     </Screen>
   );

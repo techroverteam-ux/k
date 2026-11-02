@@ -26,6 +26,10 @@ export default function Overview() {
             {o.lastReconciliation && !o.lastReconciliation.ok && <ListRow onPress={() => router.push('/(admin)/security')} left={<IconMark icon="alert" tone="neg" />} title="Reconciliation found problems" sub="Open Security to re-run and review" right={<Icon name="chevronRight" size={18} color={t.text3} />} />}
             {!o.pendingPayments && !o.pendingAccounts && !o.securityEvents24h && (o.lastReconciliation?.ok ?? true) && <Notice tone="ok">All clear. Nothing needs your attention.</Notice>}
           </Section>
+          <Section title="Tools">
+            <ListRow onPress={() => router.push('/admin-fees')} left={<IconMark icon="wallet" tone="brand" />} title="Fees · bank & UPI" sub="Payment details traders pay fees to, and payments to check" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
+            <ListRow onPress={() => router.push('/admin-reset')} left={<IconMark icon="alert" tone="neg" />} title="Data reset" sub="Wipe all trader and broker data (needs a second Super Admin)" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
+          </Section>
           <View><T v="xs" style={{ textAlign: 'center' }}>Configuration changes and log archives are on the web portal.</T></View>
         </>
       )}

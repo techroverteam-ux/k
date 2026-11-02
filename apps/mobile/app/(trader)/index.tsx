@@ -1,21 +1,15 @@
-import { router } from 'expo-router';
-import { AlgoCard } from '@/algo-screens';
+import { View } from 'react-native';
 import { useAuth } from '@/auth';
-import { BellButton, HelplineButton, SearchButton, Ticker, Movers, SummaryBlock, WatchlistBlock } from '@/screens';
-import { Button, Screen, Section, T } from '@/ui';
+import { BellButton, HelplineButton, SummaryBlock, Ticker, WatchlistBlock } from '@/screens';
+import { S } from '@/theme';
+import { Screen } from '@/ui';
 
+/** Home: the ticker, a slim balance card, then the watchlist (with search-and-add on top). Nothing else. */
 export default function Home() {
   const { me } = useAuth();
   return (
-    <Screen title={`Hi, ${me?.displayName.split(' ')[0] ?? ''}`} right={<><SearchButton /><HelplineButton /><BellButton /></>}>
-      <Ticker />
-      <SummaryBlock actions />
-      <AlgoCard />
-      <Movers />
-      <Section title="Watchlist" action={<Button size="sm" kind="ghost" title="See all" onPress={() => router.push('/(trader)/watchlist')} />}>
-        <WatchlistBlock limit={5} />
-      </Section>
-      <T v="xs" style={{ textAlign: 'center' }}>Simulated prices for practice. Nothing is sent to an exchange.</T>
+    <Screen title={`Hi, ${me?.displayName.split(' ')[0] ?? ''}`} scroll={false} right={<><HelplineButton /><BellButton /></>}>
+      <WatchlistBlock header={<View style={{ gap: S[3], marginBottom: S[1] }}><Ticker /><SummaryBlock compact actions /></View>} />
     </Screen>
   );
 }

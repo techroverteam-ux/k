@@ -15,7 +15,19 @@ import type { NextRequest } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const API = (process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
+/**
+ * In production the hop to the API must be encrypted whenever it crosses the public internet: an http:// URL to a
+ * public host (e.g. *.onrender.com) is upgraded to https://. Plain http is kept only for private-network hosts
+ * (no dot, *.internal, 10.x / 172.16–31.x / 192.168.x, localhost), which never leave the provider's network.
+ */
+function secureApiUrl(raw: string): string {
+  const u = new URL(raw.replace(/\/+$/, ''));
+  const h = u.hostname;
+  const privateHost = !h.includes('.') || h.endsWith('.internal') || h === 'localhost' || /^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+  if (process.env.NODE_ENV === 'production' && u.protocol === 'http:' && !privateHost) { u.protocol = 'https:'; if (u.port === '80') u.port = ''; }
+  return u.toString().replace(/\/+$/, '');
+}
+const API = secureApiUrl(process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000');
 const SECRET = process.env.PROXY_SHARED_SECRET;
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 

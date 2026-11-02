@@ -10,9 +10,24 @@ export type Database = NodePgDatabase<typeof schema>;
 export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type DbOrTx = Database | Tx;
 
+/**
+ * TLS to the database. In production every connection to a non-local database is encrypted and the server
+ * certificate is verified, even if the connection string forgot `sslmode` (Neon and other managed Postgres
+ * use publicly trusted certificates). `sslmode=disable` in production is refused.
+ */
+export function dbSsl(url: string, nodeEnv: string | undefined = env().NODE_ENV): { rejectUnauthorized: true } | undefined {
+  const u = new URL(url);
+  const local = ['localhost', '127.0.0.1', '::1', ''].includes(u.hostname) || !u.hostname.includes('.') || u.searchParams.has('host');
+  const mode = u.searchParams.get('sslmode');
+  if (nodeEnv !== 'production' || local) return undefined;
+  if (mode === 'disable' || mode === 'allow' || mode === 'prefer') throw new Error(`DATABASE_URL has sslmode=${mode}; production needs an encrypted connection (sslmode=require or verify-full).`);
+  return mode ? undefined : { rejectUnauthorized: true };
+}
+
 export function createPool(url = databaseUrl({ DATABASE_URL: env().DATABASE_URL, DATABASE_URL_UNPOOLED: env().DATABASE_URL_UNPOOLED }), max = env().DB_POOL_MAX) {
   return new Pool({
     connectionString: url,
+    ssl: dbSsl(url),
     max,
     statement_timeout: 10_000,
     idle_in_transaction_session_timeout: 15_000,
