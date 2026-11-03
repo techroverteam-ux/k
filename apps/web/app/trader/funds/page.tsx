@@ -75,7 +75,7 @@ function Requests() {
       {data!.paymentRequests.map((x) => (
         <div key={x.id} className="list-row">
           <div className="grow">
-            <div className="w5">{x.type === 'DEPOSIT' ? 'Add funds' : 'Withdraw'} <span className="badge info" style={{ marginLeft: 4 }}>Virtual</span></div>
+            <div className="w5">{x.type === 'DEPOSIT' ? 'Add funds' : 'Withdraw'}</div>
             <div className="t3">{when(x.createdAt)}{x.reviewNote ? ` · ${x.reviewNote}` : ''}</div>
           </div>
           <div className="quote-cell" style={{ gap: 4 }}>

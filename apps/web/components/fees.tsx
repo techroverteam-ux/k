@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 import { gql } from '@/lib/api';
 import { inr, when } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
@@ -12,6 +13,21 @@ const PAYEE_FIELDS = 'id kind label accountName bankName accountNumber ifsc bran
 const FEE_FIELDS = 'id userId username displayName payee amount purpose utr status reviewNote reviewedAt createdAt';
 const FEE_STATUS: Record<string, [string, string]> = { SUBMITTED: ['Checking', 'warn'], VERIFIED: ['Received', 'ok'], REJECTED: ['Not confirmed', 'bad'] };
 const PAYEE_STATUS: Record<string, [string, string]> = { PENDING: ['Waiting for approval', 'warn'], ACTIVE: ['Live', 'ok'], REJECTED: ['Rejected', 'bad'], DISABLED: ['Disabled', ''] };
+
+const upiLink = (upiId: string, name: string, note = 'Course fee') =>
+  `upi://pay?pa=${encodeURIComponent(upiId).replace(/%40/g, '@')}&pn=${encodeURIComponent(name)}&cu=INR&tn=${encodeURIComponent(note)}`;
+
+/** Scannable UPI QR (standard upi://pay link), generated in the browser. */
+function UpiQr({ upiId, name }: { upiId: string; name: string }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => { let on = true; void QRCode.toDataURL(upiLink(upiId, name), { margin: 1, width: 360, errorCorrectionLevel: 'M' }).then((u) => on && setSrc(u)); return () => { on = false; }; }, [upiId, name]);
+  return (
+    <div className="stack" style={{ alignItems: 'center', gap: 6 }}>
+      {src ? <img src={src} alt={`UPI QR code for ${upiId}`} width={180} height={180} style={{ borderRadius: 12, background: '#fff', padding: 6, border: '1px solid var(--line)' }} /> : <div className="skeleton" style={{ width: 180, height: 180 }} />}
+      <span className="t3 sm">Scan with any UPI app: GPay, PhonePe, Paytm, BHIM</span>
+    </div>
+  );
+}
 
 function CopyRow({ k, v }: { k: string; v?: string }) {
   const toast = useToast();
@@ -47,8 +63,9 @@ export function PayFees() {
                 <CopyRow k="Name" v={p.accountName} />
                 {p.kind === 'BANK' ? (<><CopyRow k="Account number" v={p.accountNumber} /><CopyRow k="IFSC" v={p.ifsc} /><CopyRow k="Bank" v={[p.bankName, p.branch].filter(Boolean).join(', ') || undefined} /></>) : <CopyRow k="UPI ID" v={p.upiId} />}
               </ul>
+              {p.kind === 'UPI' && p.upiId && <UpiQr upiId={p.upiId} name={p.accountName} />}
               <div className="row" style={{ gap: 8 }}>
-                {p.kind === 'UPI' && <a className="btn btn-sm" href={`upi://pay?pa=${encodeURIComponent(p.upiId!)}&pn=${encodeURIComponent(p.accountName)}&cu=INR&tn=${encodeURIComponent('Course fee')}`}>Pay with UPI app</a>}
+                {p.kind === 'UPI' && <a className="btn btn-sm" href={upiLink(p.upiId!, p.accountName)}>Pay with UPI app</a>}
                 <button className="btn btn-sm btn-primary" onClick={() => setForm(p)}>I’ve paid</button>
               </div>
             </div>

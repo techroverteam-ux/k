@@ -40,6 +40,7 @@ export class MarketResolver {
       marketFeed: env().MARKET_FEED.toUpperCase(),
       signupEnabled: await this.config.get('signup.enabled'),
       maxWatchlists: MAX_LISTS,
+      minDeposit: formatMoney(BigInt(await this.config.get('payments.minDepositMinor'))).replace(/,/g, ''),
       apiVersion: API_VERSION,
     };
   }

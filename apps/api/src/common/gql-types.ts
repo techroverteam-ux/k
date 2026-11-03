@@ -297,6 +297,7 @@ export class AppSettings {
   @Field() marketFeed: string;
   @Field() signupEnabled: boolean;
   @Field(() => Int) maxWatchlists: number;
+  @Field({ description: 'Minimum add-funds request, in rupees (e.g. "50000.00").' }) minDeposit: string;
   @Field() apiVersion: string;
 }
 

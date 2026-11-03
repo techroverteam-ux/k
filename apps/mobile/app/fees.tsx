@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Linking, View } from 'react-native';
 import { gql } from '@/api';
 import { inr, S, useTheme, when } from '@/theme';
+import { QR, upiLink } from '@/qr';
 import { Badge, Button, Empty, ErrorState, Field, ListRow, Notice, Screen, Section, Sheet, Skeleton, T, toast, useQuery } from '@/ui';
 
 interface Payee { id: string; kind: 'BANK' | 'UPI'; label: string; accountName: string; bankName?: string; accountNumber?: string; ifsc?: string; branch?: string; upiId?: string }
@@ -24,8 +25,14 @@ export default function Fees() {
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><T w="700">{p.label}</T><Badge text={p.kind === 'UPI' ? 'UPI' : 'Bank transfer'} /></View>
           <Line k="Name" v={p.accountName} />
           {p.kind === 'BANK' ? (<><Line k="Account number" v={p.accountNumber} /><Line k="IFSC" v={p.ifsc} /><Line k="Bank" v={[p.bankName, p.branch].filter(Boolean).join(', ') || undefined} /></>) : <Line k="UPI ID" v={p.upiId} />}
+          {p.kind === 'UPI' && p.upiId && (
+            <View style={{ alignItems: 'center', gap: S[2], paddingVertical: S[2] }}>
+              <View style={{ padding: 8, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: t.line }}><QR value={upiLink(p.upiId, p.accountName)} size={200} /></View>
+              <T v="sm" c="text2">Scan with any UPI app: GPay, PhonePe, Paytm, BHIM</T>
+            </View>
+          )}
           <View style={{ flexDirection: 'row', gap: S[2], marginTop: S[2] }}>
-            {p.kind === 'UPI' && <View style={{ flex: 1 }}><Button block title="Pay with UPI app" onPress={() => { void Linking.openURL(`upi://pay?pa=${encodeURIComponent(p.upiId!)}&pn=${encodeURIComponent(p.accountName)}&cu=INR&tn=${encodeURIComponent('Course fee')}`).catch(() => toast('No UPI app found on this phone', true)); }} /></View>}
+            {p.kind === 'UPI' && <View style={{ flex: 1 }}><Button block title="Pay with UPI app" onPress={() => { void Linking.openURL(upiLink(p.upiId!, p.accountName)).catch(() => toast('No UPI app found on this phone', true)); }} /></View>}
             <View style={{ flex: 1 }}><Button block kind="primary" title="I’ve paid" onPress={() => setForm(p)} /></View>
           </View>
         </View>

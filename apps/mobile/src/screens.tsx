@@ -138,7 +138,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
     return (
       <View style={{ borderWidth: StyleSheet.hairlineWidth, borderColor: t.line2, borderRadius: 16, padding: S[4], gap: S[3] }}>
         <View style={{ gap: 2 }}>
-          <Row gap={S[2]}><T v="sm" c="text2">{title}</T><Badge text="Virtual ₹" tone="info" /></Row>
+          <T v="sm" c="text2">{title}</T>
           <T style={{ fontSize: 24, fontWeight: '700' }} accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: S[3], rowGap: 2 }}>
             <T v="xs" c="text2">Open P&L <T v="xs" w="600" c={toneC(s?.unrealizedPnl)}>{inr(s?.unrealizedPnl, true)}</T></T>
@@ -167,7 +167,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
   return (
     <View style={{ gap: S[4] }}>
       <View style={{ gap: 2 }}>
-        <Row gap={S[2]}><T c="text2">{title}</T><Badge text="Virtual ₹" tone="info" /></Row>
+        <T c="text2">{title}</T>
         <T v="hero" accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
         <Row gap={6}><T v="sm" c="text2">Open P&L</T><T v="sm" w="600" c={toneOfValue(s?.unrealizedPnl) === 'flat' ? 'text2' : (toneOfValue(s?.unrealizedPnl) as 'pos')}>{inr(s?.unrealizedPnl, true)}</T><T v="sm" c="text3">· Margin {priv(`₹${inr(s?.marginUsed)}`)}</T></Row>
         {actions && <Row gap={6}><T v="xs" c="text2">Deposits</T><T v="xs" c="pos" w="600">{priv(`₹${inr(s?.deposits)}`)}</T><T v="xs" c="text2">· Withdrawals</T><T v="xs" c="neg" w="600">{priv(`₹${inr(s?.withdrawals)}`)}</T></Row>}
@@ -196,17 +196,21 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const [busy, setBusy] = useState(false);
   // A new key whenever the amount changes: a retry of the same request is safe, a different amount is a new request.
   const key = useMemo(newKey, [amount]);
+  const { settings } = useAuth();
+  const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
+  const minLabel = `₹${inr(String(min)).replace('.00', '')}`;
   const fmt = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
+  const under = type === 'DEPOSIT' && fmt && Number(amount) < min;
   const over = type === 'WITHDRAWAL' && !!available && fmt && Number(amount) > Number(available);
-  const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : over ? `You can withdraw up to ₹${inr(available)}` : null);
+  const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : under ? `Minimum to add is ${minLabel}` : over ? `You can withdraw up to ₹${inr(available)}` : null);
   return (
-    <Sheet visible title={type === 'DEPOSIT' ? 'Add virtual funds' : 'Withdraw virtual funds'} sub="A Super Admin reviews every request. Virtual balances have no cash value." onClose={onClose}>
-      <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : undefined} />
-      {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={['10000', '25000', '50000', '100000'].map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
+    <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
+      <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
+      {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={[min, min * 2, min * 4, min * 10].map(String).map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
       {err && <Notice tone="err">{err}</Notice>}
       <Button kind="primary" size="lg" title="Send request" busy={busy} onPress={async () => {
         setTouched(true);
-        if (!fmt || over) return;
+        if (!fmt || over || under) return;
         setBusy(true); setErr(null);
         try { await gql(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } }); toast('Request sent for review'); onClose(); }
         catch (e) { setErr((e as Error).message); } finally { setBusy(false); }

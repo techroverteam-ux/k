@@ -8,7 +8,7 @@ import { requestSplash } from './splash';
 
 export type Role = 'SUPER_ADMIN' | 'BROKER' | 'TRADER';
 export interface Me { id: string; username: string; displayName: string; role: Role; isDemo: boolean; mfaEnabled: boolean; termsAccepted: boolean }
-export interface Settings { appName: string; tickerMessages: string[]; termsRules: string[]; helplineUrl: string; demoEnabled: boolean; signupEnabled: boolean; maxWatchlists: number; apiVersion: string }
+export interface Settings { appName: string; tickerMessages: string[]; termsRules: string[]; helplineUrl: string; demoEnabled: boolean; signupEnabled: boolean; maxWatchlists: number; minDeposit?: string; apiVersion: string }
 
 export const DEVICE_NAME = `${Device.manufacturer ?? ''} ${Device.modelName ?? 'Mobile'}`.trim();
 
@@ -81,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setSignedOutHandler(() => { setMe(null); if (quickRef.current) showLock(); else router.replace('/login'); });
-    gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled signupEnabled maxWatchlists apiVersion } }`).then((d) => setSettings(d.appSettings)).catch(() => undefined);
+    gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled signupEnabled maxWatchlists minDeposit apiVersion } }`).then((d) => setSettings(d.appSettings)).catch(() => undefined);
     (async () => {
       // Quick unlock on: always open locked. Otherwise resume the saved session, if any.
       if (await reloadQuick()) setLocked(true);

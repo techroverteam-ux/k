@@ -1,4 +1,5 @@
 'use client';
+import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { gql, newKey, subscribe } from '@/lib/api';
@@ -64,7 +65,7 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
     return (
       <section className="panel bal-card" aria-label="Account summary">
         <div className="bal-main">
-          <div className="t2 sm">{title} <span className="badge info" style={{ marginLeft: 4 }}>Virtual ₹</span></div>
+          <div className="t2 sm">{title}</div>
           <div className="bal-v num"><Private width={8}>₹{inr(c.available)}</Private></div>
           <div className="bal-meta t3 sm">
             <span>Open P&L <span className={`num w6 ${tone(c.unrealizedPnl)}`}>{inr(c.unrealizedPnl, { sign: true })}</span></span>
@@ -98,7 +99,7 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
     <section className="stack" style={{ gap: 20 }} aria-label="Account summary">
       <div className="spread" style={{ alignItems: 'flex-end' }}>
         <div className="hero-value">
-          <div className="k">{title} <span className="badge info" style={{ marginLeft: 6 }}>Virtual ₹</span></div>
+          <div className="k">{title}</div>
           <div className="v num"><Private width={8}>₹{inr(s.available)}</Private></div>
           <div className="sub t2">
             Open P&L <span className={`num w6 ${today}`}>{inr(s.unrealizedPnl, { sign: true })}</span>
@@ -133,18 +134,22 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
   const key = useMemo(newKey, []);
   const toast = useToast();
   const m = useMutation(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id status } }`);
+  const { settings } = useAuth();
+  const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
+  const minLabel = `₹${inr(String(min), { decimals: false })}`;
   const fmtOk = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
+  const under = type === 'DEPOSIT' && fmtOk && Number(amount) < min;
   const over = type === 'WITHDRAWAL' && available !== undefined && fmtOk && Number(amount) > Number(available);
-  const invalid = touched && (!fmtOk || over);
+  const invalid = touched && (!fmtOk || over || under);
   return (
     <Dialog
-      title={type === 'DEPOSIT' ? 'Add virtual funds' : 'Withdraw virtual funds'}
-      sub="A Super Admin reviews every request. Virtual balances have no cash value."
+      title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'}
+      sub={type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'}
       onClose={onClose}
     >
       <form className="stack" onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
-        if (!fmtOk || over) return;
+        if (!fmtOk || over || under) return;
         const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } });
         if (r) { toast('Request sent for review'); onDone?.(); onClose(); }
       }}>
@@ -155,12 +160,12 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
             <input id="amt" className="input num" style={{ background: 'var(--bg)', borderColor: 'var(--line-2)', paddingLeft: 30, fontSize: 18, height: 48 }} inputMode="decimal" autoFocus value={amount} aria-invalid={invalid} aria-describedby="amt-h" onBlur={() => setTouched(true)} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" />
           </div>
           <span id="amt-h" className={invalid ? 'err' : 'hint'}>
-            {invalid ? (over ? `You can withdraw up to ₹${inr(available)}` : 'Enter an amount with up to 2 decimals') : type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : 'Up to 2 decimal places'}
+            {invalid ? (over ? `You can withdraw up to ₹${inr(available)}` : under ? `Minimum to add is ${minLabel}` : 'Enter an amount with up to 2 decimals') : type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : 'Up to 2 decimal places'}
           </span>
         </div>
         {type === 'DEPOSIT' && (
           <div className="chips" aria-label="Quick amounts">
-            {['10000', '25000', '50000', '100000'].map((v) => <button type="button" key={v} className="chip" aria-pressed={amount === v} onClick={() => setAmount(v)}>+₹{inr(v, { decimals: false })}</button>)}
+            {[min, min * 2, min * 4, min * 10].map(String).map((v) => <button type="button" key={v} className="chip" aria-pressed={amount === v} onClick={() => setAmount(v)}>+₹{inr(v, { decimals: false })}</button>)}
           </div>
         )}
         {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}

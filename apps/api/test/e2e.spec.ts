@@ -226,7 +226,7 @@ describe('payments: idempotency, maker-checker, step-up', () => {
   it('deduplicates retried requests and posts exactly once', async () => {
     const t = await login('trader.one');
     const key = randomUUID();
-    const q = `mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"25000.50", idempotencyKey:$k}){ id status amount } }`;
+    const q = `mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.50", idempotencyKey:$k}){ id status amount } }`;
     const results = await Promise.all(Array.from({ length: 8 }, () => gql(q, { k: key }, { token: t.accessToken })));
     const ids = new Set(results.filter((r) => !r.errors).map((r) => r.data.requestPayment.id));
     expect(ids.size).toBe(1);
@@ -241,14 +241,14 @@ describe('payments: idempotency, maker-checker, step-up', () => {
     const journals = new Set(approvals.filter((r) => !r.errors).map((r) => r.data.approvePayment.journalId));
     expect(journals.size).toBe(1);
     const after = (await gql(SUMMARY, {}, { token: t.accessToken })).data.accountSummary.balance;
-    expect(Number(after) - Number(before)).toBeCloseTo(25000.5, 2);
+    expect(Number(after) - Number(before)).toBeCloseTo(50000.5, 2);
   });
 
   it('blocks a Super Admin from approving a request they created (maker-checker)', async () => {
     const admin = await adminLogin('admin');
     const checker = await adminLogin('checker');
     const t2 = await login('trader.two');
-    const r = await gql(`mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"100.00", idempotencyKey:$k, userId:$u}){ id } }`, { u: t2.user.id, k: randomUUID() }, { token: admin.token });
+    const r = await gql(`mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.00", idempotencyKey:$k, userId:$u}){ id } }`, { u: t2.user.id, k: randomUUID() }, { token: admin.token });
     const id = r.data.requestPayment.id;
     const self = await gql(`mutation($id:ID!){ approvePayment(id:$id){ status } }`, { id }, { token: admin.token, stepUp: await stepUp(admin.token, 'admin') });
     expect(code(self)).toBe('FORBIDDEN');
@@ -260,9 +260,18 @@ describe('payments: idempotency, maker-checker, step-up', () => {
     const b1 = await login('broker.one');
     const t1 = await login('trader.one');
     const t3 = await login('trader.three');
-    const q = `mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"500.00", idempotencyKey:$k, userId:$u}){ id status } }`;
+    const q = `mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"60000.00", idempotencyKey:$k, userId:$u}){ id status } }`;
     expect((await gql(q, { u: t1.user.id, k: randomUUID() }, { token: b1.accessToken })).data.requestPayment.status).toBe('REQUESTED');
     expect(code(await gql(q, { u: t3.user.id, k: randomUUID() }, { token: b1.accessToken }))).toBe('NOT_FOUND');
+  });
+
+  it('refuses add-funds requests below the ₹50,000 minimum', async () => {
+    const t = await login('trader.one');
+    const q = `mutation($a:String!,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:$a, idempotencyKey:$k}){ id } }`;
+    const low = await gql(q, { a: '49999.99', k: randomUUID() }, { token: t.accessToken });
+    expect(code(low)).toBe('BAD_USER_INPUT');
+    expect(low.errors?.[0].message).toContain('₹50,000');
+    expect((await gql(`{ appSettings { minDeposit } }`)).data.appSettings.minDeposit).toBe('50000.00');
   });
 
   it('refuses withdrawals above the withdrawable balance', async () => {
@@ -505,7 +514,7 @@ describe('activity log & audit enrichment', () => {
     const { rows: [act] } = await pg.query(`SELECT op_name, outcome FROM activity_log WHERE request_id = $1`, [reqId]);
     expect(act).toMatchObject({ op_name: 'placeOrder', outcome: 'OK' });
 
-    const p = await gql(`mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"10.00", idempotencyKey:$k}){ id } }`, { k: randomUUID() }, { token: t.accessToken, ua: 'TestPhone/2.0' });
+    const p = await gql(`mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.00", idempotencyKey:$k}){ id } }`, { k: randomUUID() }, { token: t.accessToken, ua: 'TestPhone/2.0' });
     const { rows: [pr] } = await pg.query(`SELECT requested_ip, requested_user_agent, requested_session_id FROM payment_requests WHERE id = $1`, [p.data.requestPayment.id]);
     expect(pr).toMatchObject({ requested_ip: '127.0.0.1', requested_user_agent: 'TestPhone/2.0' });
   });

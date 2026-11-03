@@ -48,6 +48,10 @@ export class PaymentsService {
     const maxKey = input.type === 'DEPOSIT' ? 'payments.maxDepositMinor' : 'payments.maxWithdrawalMinor';
     const max = BigInt(await this.config.get(maxKey));
     if (input.amountMinor > max) throw badInput(`Maximum per request is ₹${formatMoney(max)}.`);
+    if (input.type === 'DEPOSIT') {
+      const min = BigInt(await this.config.get('payments.minDepositMinor'));
+      if (input.amountMinor < min) throw badInput(`Minimum to add is ₹${(Number(min) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}.`);
+    }
 
     return this.dbs.serializable(async (tx) => {
       const [dup] = await tx

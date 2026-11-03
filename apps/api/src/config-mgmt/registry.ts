@@ -36,6 +36,7 @@ export const CONFIG_REGISTRY = {
     default: { NSE: { open: '09:17', close: '15:30' }, MCX: { open: '09:02', close: '23:30' }, INTL: { open: '03:32', close: '02:30' } },
     description: 'Market sessions per exchange (IST, HH:MM). A close earlier than the open means the session runs past midnight.',
   },
+  'payments.minDepositMinor': { schema: minor, default: '5000000', description: 'Minimum single add-funds (deposit) request (paise). Default ₹50,000.' },
   'payments.maxDepositMinor': { schema: minor, default: '1000000000', description: 'Max single deposit request (paise).' },
   'payments.maxWithdrawalMinor': { schema: minor, default: '500000000', description: 'Max single withdrawal request (paise).' },
   'payments.brokerMaySubmit': { schema: z.boolean(), default: true, description: 'Brokers may submit payment requests for their own traders.' },

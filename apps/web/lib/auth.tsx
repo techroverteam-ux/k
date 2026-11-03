@@ -24,6 +24,8 @@ export interface Settings {
   tradingMode: string;
   signupEnabled: boolean;
   maxWatchlists: number;
+  /** Minimum add-funds request in rupees, e.g. "50000.00". */
+  minDeposit?: string;
   apiVersion: string;
 }
 
@@ -64,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       router.replace('/login');
     });
     (async () => {
-      gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled tradingMode signupEnabled maxWatchlists apiVersion } }`)
+      gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled tradingMode signupEnabled maxWatchlists minDeposit apiVersion } }`)
         .then((d) => setSettings(d.appSettings))
         .catch(() => undefined);
       if (await refreshSession()) { requestSplash(); await reload(); }
