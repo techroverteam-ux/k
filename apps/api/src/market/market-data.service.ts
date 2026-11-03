@@ -32,6 +32,9 @@ export interface MarketDataProvider {
   all(): Quote[];
 }
 
+/** Instruments whose history is read or generated per batch on start (keeps memory flat on small servers). */
+const HISTORY_BATCH = 20;
+
 @Injectable()
 export class MarketDataService implements MarketDataProvider, OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('MarketData');
@@ -143,76 +146,84 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
     this.dhanFeed.setSubscriptions([]);
   }
 
+  /**
+   * Load active instruments. History for instruments not loaded yet is read (or, the first time, generated and
+   * saved) in small batches, so memory stays flat even with hundreds of instruments on a small server.
+   */
   async reload() {
     const rows = await this.dbs.db.select().from(instruments).where(eq(instruments.active, true));
-    const fresh = rows.filter((r) => !this.history.has(r.id));
-    // Stored history for instruments not loaded yet: the memory window of minutes, and every daily bar.
     const now = Date.now();
     const since = bucketStart(now, DAY) - (MEMORY_DAYS - 1) * DAY;
-    const storedMin = new Map<string, Bar[]>();
-    const storedDay = new Map<string, Bar[]>();
-    if (this.repo && fresh.length) {
-      try {
-        const ids = new Set(fresh.map((r) => r.id));
-        for (const b of await this.repo.minutesSince(since)) if (ids.has(b.instrumentId)) push(storedMin, b);
-        for (const b of await this.repo.daily()) if (ids.has(b.instrumentId)) push(storedDay, b);
-      } catch (e) {
-        this.log.error(`Couldn't read stored candles, starting from synthetic history: ${(e as Error).message}`);
-      }
-    }
-
-    const toSave: { minutes: StoredBar[]; daily: StoredBar[] } = { minutes: [], daily: [] };
+    const today = bucketStart(now, DAY);
     for (const r of rows) {
       this.meta.set(r.id, r);
-      if (!this.quotes.has(r.id)) {
-        const spread = BigInt(r.tickMinor) * 4n;
-        this.quotes.set(r.id, {
-          instrumentId: r.id,
-          symbol: r.symbol,
-          ltpMinor: r.refPriceMinor,
-          bidMinor: r.refPriceMinor - spread,
-          askMinor: r.refPriceMinor + spread,
-          highMinor: r.refPriceMinor,
-          lowMinor: r.refPriceMinor,
-          prevCloseMinor: (r.refPriceMinor * 97n) / 100n,
-          ts: new Date(),
-          source: 'SIMULATED',
-        });
+      if (this.quotes.has(r.id)) continue;
+      const spread = BigInt(r.tickMinor) * 4n;
+      this.quotes.set(r.id, {
+        instrumentId: r.id,
+        symbol: r.symbol,
+        ltpMinor: r.refPriceMinor,
+        bidMinor: r.refPriceMinor - spread,
+        askMinor: r.refPriceMinor + spread,
+        highMinor: r.refPriceMinor,
+        lowMinor: r.refPriceMinor,
+        prevCloseMinor: (r.refPriceMinor * 97n) / 100n,
+        ts: new Date(),
+        source: 'SIMULATED',
+      });
+    }
+    const fresh = rows.filter((r) => !this.history.has(r.id));
+    let generatedMinutes = 0;
+    for (let i = 0; i < fresh.length; i += HISTORY_BATCH) {
+      const batch = fresh.slice(i, i + HISTORY_BATCH);
+      const ids = batch.map((r) => r.id);
+      const storedMin = new Map<string, Bar[]>();
+      const storedDay = new Map<string, Bar[]>();
+      if (this.repo) {
+        try {
+          for (const b of await this.repo.minutesSince(since, ids)) push(storedMin, b);
+          for (const b of await this.repo.daily(ids)) push(storedDay, b);
+        } catch (e) {
+          this.log.error(`Couldn't read stored candles, starting from synthetic history: ${(e as Error).message}`);
+        }
       }
-      if (this.history.has(r.id)) continue;
-      const q = this.quotes.get(r.id)!;
-      const mins = storedMin.get(r.id) ?? [];
-      const days = storedDay.get(r.id) ?? [];
-      if (mins.length || days.length) {
-        // Continue from stored history: the price picks up where it stopped.
-        this.history.restore(r.id, mins, days);
-        this.resumeQuote(q, r.tickMinor, now);
-        this.unsaved.set(r.id, now);
-      } else {
-        // First run for this instrument: synthetic back-history, saved so it stays the same from now on.
-        const generated = this.history.seed(r.id, Number(q.ltpMinor), Number(q.prevCloseMinor), r.tickMinor);
-        const today = bucketStart(now, DAY);
-        for (const b of generated.filter((x) => x.t >= today)) {
-          if (BigInt(b.h) > q.highMinor) q.highMinor = BigInt(b.h);
-          if (BigInt(b.l) < q.lowMinor) q.lowMinor = BigInt(b.l);
+      const toSave: { minutes: StoredBar[]; daily: StoredBar[] } = { minutes: [], daily: [] };
+      for (const r of batch) {
+        const q = this.quotes.get(r.id)!;
+        const mins = storedMin.get(r.id) ?? [];
+        const days = storedDay.get(r.id) ?? [];
+        if (mins.length || days.length) {
+          // Continue from stored history: the price picks up where it stopped.
+          this.history.restore(r.id, mins, days);
+          this.resumeQuote(q, r.tickMinor, now);
+        } else {
+          // First run for this instrument: synthetic back-history, saved so it stays the same from now on.
+          const generated = this.history.seed(r.id, Number(q.ltpMinor), Number(q.prevCloseMinor), r.tickMinor);
+          for (const b of generated) {
+            if (b.t < today) continue;
+            if (BigInt(b.h) > q.highMinor) q.highMinor = BigInt(b.h);
+            if (BigInt(b.l) < q.lowMinor) q.lowMinor = BigInt(b.l);
+          }
+          if (this.repo) {
+            for (const b of generated) toSave.minutes.push({ ...b, instrumentId: r.id });
+            for (const b of this.history.allDaily(r.id)) toSave.daily.push({ ...b, instrumentId: r.id });
+          }
+          generatedMinutes += generated.length;
         }
-        if (this.repo) {
-          toSave.minutes.push(...generated.map((b) => ({ ...b, instrumentId: r.id })));
-          toSave.daily.push(...this.history.allDaily(r.id).map((b) => ({ ...b, instrumentId: r.id })));
-        }
         this.unsaved.set(r.id, now);
+      }
+      if (this.repo && (toSave.minutes.length || toSave.daily.length)) {
+        try {
+          await this.repo.upsert('candles_1d', toSave.daily);
+          await this.repo.upsert('candles_1m', toSave.minutes);
+        } catch (e) {
+          this.log.error(`Couldn't save synthetic history: ${(e as Error).message}`);
+        }
       }
     }
-    if (this.repo && (toSave.minutes.length || toSave.daily.length)) {
-      try {
-        await this.repo.upsert('candles_1d', toSave.daily);
-        await this.repo.upsert('candles_1m', toSave.minutes);
-        this.log.log(`Saved synthetic history: ${toSave.minutes.length} minute and ${toSave.daily.length} daily candles`);
-      } catch (e) {
-        this.log.error(`Couldn't save synthetic history: ${(e as Error).message}`);
-      }
-    }
+    if (generatedMinutes) this.log.log(`Saved synthetic history: ${generatedMinutes} minute candles for new instruments`);
   }
+
 
   /** After a restore: last stored close becomes the price; previous close and today's range come from the candles. */
   private resumeQuote(q: Quote, tickMinor: number, now: number) {

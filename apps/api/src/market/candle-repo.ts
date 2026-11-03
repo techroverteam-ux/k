@@ -42,17 +42,20 @@ export class CandleRepo {
   }
 
   /** All 1-minute bars at or after `since`, for every instrument, oldest first. */
-  async minutesSince(since: number): Promise<StoredBar[]> {
+  async minutesSince(since: number, ids?: string[]): Promise<StoredBar[]> {
     const { rows } = await this.pool.query<Row>(
-      `SELECT instrument_id, t, o, h, l, c FROM candles_1m WHERE t >= $1 ORDER BY instrument_id, t`,
-      [new Date(since).toISOString()],
+      `SELECT instrument_id, t, o, h, l, c FROM candles_1m WHERE t >= $1 ${ids ? 'AND instrument_id = ANY($2::uuid[])' : ''} ORDER BY instrument_id, t`,
+      ids ? [new Date(since).toISOString(), ids] : [new Date(since).toISOString()],
     );
     return rows.map(toBar);
   }
 
-  /** Every daily bar, oldest first. */
-  async daily(): Promise<StoredBar[]> {
-    const { rows } = await this.pool.query<Row>(`SELECT instrument_id, t, o, h, l, c FROM candles_1d ORDER BY instrument_id, t`);
+  /** Every daily bar (of these instruments), oldest first. */
+  async daily(ids?: string[]): Promise<StoredBar[]> {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT instrument_id, t, o, h, l, c FROM candles_1d ${ids ? 'WHERE instrument_id = ANY($1::uuid[])' : ''} ORDER BY instrument_id, t`,
+      ids ? [ids] : [],
+    );
     return rows.map(toBar);
   }
 

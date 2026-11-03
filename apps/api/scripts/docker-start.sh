@@ -15,4 +15,5 @@ fi
 if [ "$SEED_DEMO_ACCOUNTS" = "true" ] && [ -n "$SEED_PASSWORD" ] && [ "$NODE_ENV" != "production" ]; then
   $TS scripts/seed.ts
 fi
-exec node dist/main.js
+# Render's small instances have 512 MB; let the API use most of it (Node's default heap limit is lower).
+exec node --max-old-space-size=${NODE_HEAP_MB:-400} dist/main.js
