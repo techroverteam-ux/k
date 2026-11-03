@@ -17,7 +17,8 @@ import { PolicyService } from '../policy/policy.service';
 import { OrdersService } from '../trading/orders.service';
 import { afterWipeFor } from '../wipe/visibility';
 
-export const USERNAME_RE = /^[a-z][a-z0-9_.]{3,39}$/;
+/** Stored lower-case; sign-in ignores case. Letters, digits and _ . - @ #, starting with a letter. */
+export const USERNAME_RE = /^[a-z][a-z0-9_.@#-]{3,39}$/;
 
 @Injectable()
 export class UsersService {
@@ -63,7 +64,7 @@ export class UsersService {
    */
   async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string }, ip: string) {
     const username = input.username.trim().toLowerCase();
-    if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 chars, start with a letter, letters/digits/_/. only.');
+    if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     if (input.role === 'SUPER_ADMIN') throw forbidden('Super Admin accounts are provisioned by operations, not via the API.');
     if (actor.role === 'BROKER' && input.role !== 'TRADER') throw forbidden('Brokers can only create trader accounts.');
     const brokerId = actor.role === 'BROKER' ? actor.userId : input.role === 'TRADER' ? input.brokerId : undefined;

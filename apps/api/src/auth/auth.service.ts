@@ -429,7 +429,7 @@ export class AuthService {
     if (!(await this.config.get('signup.enabled'))) throw new AppError('NOT_ENABLED', 'New accounts are not being accepted right now.');
     const phone = this.normalizePhone(input.phone);
     const username = input.username.trim().toLowerCase();
-    if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits, _ and . only.');
+    if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     const displayName = input.displayName.trim().replace(/\s+/g, ' ');
     if (displayName.length < 2 || displayName.length > 120) throw badInput('Enter your full name.');
     const email = input.email?.trim() ? normalizeEmail(input.email) : null;

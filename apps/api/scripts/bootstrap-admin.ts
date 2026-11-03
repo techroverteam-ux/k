@@ -35,7 +35,7 @@ async function main() {
   const resetMfa = process.env.BOOTSTRAP_ADMIN_RESET_MFA === 'true';
   const clearLabel = (process.env.BOOTSTRAP_DELETE_OTHER_ACCOUNTS ?? '').trim().slice(0, 60);
   if (!username) return;
-  if (!USERNAME_RE.test(username)) throw new Error('BOOTSTRAP_ADMIN_USERNAME: 4–40 chars, start with a letter, lowercase letters/digits/_/. only.');
+  if (!USERNAME_RE.test(username)) throw new Error('BOOTSTRAP_ADMIN_USERNAME: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
   const pw = new PasswordService();
   try { pw.assertStrong(password, username); } catch (e) { throw new Error(`BOOTSTRAP_ADMIN_PASSWORD: ${(e as Error).message}`); }
 

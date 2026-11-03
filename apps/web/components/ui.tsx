@@ -36,11 +36,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 /* ======================================================================= dialog / confirm */
 export function Dialog({ title, sub, children, onClose }: { title: string; sub?: string; children: ReactNode; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose without re-running the effect: callers often pass a new function on every render, and
+  // re-running it would move the cursor back to the first field after every keystroke.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.querySelector<HTMLElement>('input,select,textarea,button:not([data-close])')?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') closeRef.current();
       if (e.key === 'Tab' && ref.current) {
         const f = ref.current.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href]');
         if (!f.length) return;
@@ -51,7 +55,7 @@ export function Dialog({ title, sub, children, onClose }: { title: string; sub?:
     };
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); prev?.focus(); };
-  }, [onClose]);
+  }, []);
   // Rendered at the end of <body>, so no sticky panel, chart or other stacking context can cover it.
   const node = (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

@@ -62,7 +62,7 @@ async function main() {
     console.log(`\nConnected to ${databaseHost(url)}. Accounts now: ${roles.map((r) => `${r.n} ${r.role}`).join(', ') || 'none'}.`);
 
     const username = (await ask('Super Admin username to keep (e.g. ashok.admin): ')).toLowerCase();
-    if (!USERNAME_RE.test(username)) throw new Error('Username: 4–40 chars, start with a letter, lowercase letters/digits/_/. only.');
+    if (!USERNAME_RE.test(username)) throw new Error('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     const [existing] = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.username, username));
     if (existing && existing.role !== 'SUPER_ADMIN') throw new Error(`"${username}" exists and is a ${existing.role}, not a Super Admin. Pick another username.`);
 

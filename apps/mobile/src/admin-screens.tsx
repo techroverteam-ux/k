@@ -87,7 +87,7 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const errs = {
-    username: !/^[a-z][a-z0-9_.]{3,39}$/.test(f.username) ? '4–40 characters: lowercase letters, digits, _ or ., starting with a letter' : null,
+    username: !/^[a-z][a-z0-9_.@#-]{3,39}$/.test(f.username.trim().toLowerCase()) ? '4–40 characters starting with a letter: letters, digits and _ . - @ #' : null,
     displayName: !f.displayName.trim() ? 'Enter a name' : null,
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : null,
