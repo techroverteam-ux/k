@@ -2,7 +2,7 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { CreateUserDialog, Person, ROLE_LABEL, USER_FIELDS, type UserRow } from '@/components/accounts';
-import { UserActionButtons, useUserActions } from '@/components/admin';
+import { PendingDeletions, UserActionButtons, useUserActions } from '@/components/admin';
 import { Icon } from '@/components/icons';
 import { Chips, Empty, ErrorState, PageHead, Pager, SkeletonRows, Status, Tabs } from '@/components/ui';
 import { when } from '@/lib/format';
@@ -31,6 +31,7 @@ function Users() {
       <PageHead title="Accounts" sub="Brokers and traders. New accounts need a second Super Admin to approve them.">
         <button className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={18} />Create account</button>
       </PageHead>
+      <PendingDeletions onDone={refetch} />
       <Tabs label="Account type" value={role} onChange={(v) => { setRole(v); reset(); }} items={[{ v: '', label: 'All' }, { v: 'BROKER', label: 'Brokers' }, { v: 'TRADER', label: 'Traders' }, { v: 'SUPER_ADMIN', label: 'Admins' }]} />
       <div className="spread" style={{ margin: '16px 0 12px' }}>
         <div className="input-icon" style={{ width: 'min(320px, 100%)' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search accounts" value={search} onChange={(e) => { setSearch(e.target.value); reset(); }} /></div>

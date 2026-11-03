@@ -2,7 +2,8 @@
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { AccountDetail } from '@/components/accounts';
-import { UserActionButtons, useUserActions } from '@/components/admin';
+import { useRouter } from 'next/navigation';
+import { PendingDeletions, UserActionButtons, useUserActions } from '@/components/admin';
 import { UserLogs } from '@/components/activity';
 import { ConsentHistory, LoginHistory, UserSessions } from '@/components/logins';
 import { AccountWipes } from '@/components/wipe';
@@ -10,9 +11,11 @@ import { AccountWipes } from '@/components/wipe';
 export default function AdminUserDetail() {
   const { id } = useParams<{ id: string }>();
   const [v, setV] = useState(0);
+  const router = useRouter();
   const { open, node } = useUserActions(() => setV((x) => x + 1));
   return (
     <>
+      <PendingDeletions key={`d${v}`} userId={id} onDone={() => router.push('/admin/users')} />
       <AccountDetail key={v} id={id} back={{ href: '/admin/users', label: 'Accounts' }} actions={(u) => <UserActionButtons u={u} open={open} />} />
       <div style={{ marginTop: 40 }}><AccountWipes key={`w${v}`} userId={id} /></div>
       <div style={{ marginTop: 40 }}><UserLogs key={v} userId={id} /></div>

@@ -388,7 +388,6 @@ export default function Login() {
         </div>
       </section>
      </div>
-     <p className="auth-legal">Prices come from the platform’s simulated feed, and orders are never sent to an exchange.</p>
     </div>
   );
 }
