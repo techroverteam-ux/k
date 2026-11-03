@@ -1,4 +1,6 @@
 import { Args, Field, ID, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
+import { soleAdminMayApprove } from '../common/maker-checker';
+import { DbService } from '../db/db';
 import { Throttle } from '@nestjs/throttler';
 import type { Actor, GqlContext } from '../common/context';
 import { Ctx, CurrentActor, lim, RequireStepUp, Roles } from '../common/context';
@@ -66,7 +68,7 @@ const toPlatform = (r: WipeRow): PlatformWipe => ({
 
 @Resolver()
 export class WipeResolver {
-  constructor(private readonly wipe: WipeService) {}
+  constructor(private readonly wipe: WipeService, private readonly dbs: DbService) {}
 
   // ---- a trader or broker wiping their own account
   @Roles('TRADER', 'BROKER')
@@ -108,7 +110,10 @@ export class WipeResolver {
   @RequireStepUp()
   @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete every trader and broker account and all trading data. Another Super Admin must approve within 30 minutes. confirm = "WIPE ALL DATA".' })
   async requestPlatformWipe(@CurrentActor() a: Actor, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
-    return toPlatform(await this.wipe.requestPlatform(a, reason, confirm, c.ip));
+    const r = await this.wipe.requestPlatform(a, reason, confirm, c.ip);
+    // Only one Super Admin (single-admin mode): the wipe runs now.
+    if (await soleAdminMayApprove(this.dbs.db)) { await this.wipe.approvePlatform(a, r.id, confirm, c.ip); return toPlatform(await this.wipe.getWipe(r.id)); }
+    return toPlatform(r);
   }
 
   @Roles('SUPER_ADMIN')
@@ -135,7 +140,10 @@ export class WipeResolver {
   @RequireStepUp()
   @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete one trader or broker and all their data. confirm = their username. Another Super Admin must approve within 30 minutes.' })
   async requestUserDeletion(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) userId: string, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
-    return toPlatform(await this.wipe.requestUserDeletion(a, userId, reason, confirm, c.ip));
+    const r = await this.wipe.requestUserDeletion(a, userId, reason, confirm, c.ip);
+    // Only one Super Admin (single-admin mode): the account is deleted now.
+    if (await soleAdminMayApprove(this.dbs.db)) { await this.wipe.approveUserDeletion(a, r.id, confirm, c.ip); return toPlatform(await this.wipe.getWipe(r.id)); }
+    return toPlatform(r);
   }
 
   @Roles('SUPER_ADMIN')

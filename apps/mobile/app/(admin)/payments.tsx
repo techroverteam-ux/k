@@ -1,4 +1,5 @@
 import { AdminMfaGate } from '@/admin-screens';
+import { useSoleAdmin } from '@/sole-admin';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { gql } from '@/api';
@@ -10,13 +11,14 @@ import { Button, Empty, ErrorState, Field, Lines, ListRow, Notice, Row, Screen, 
 interface P { id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; createdAt: string; requestedById: string }
 export default function Approvals() {
   const { me } = useAuth();
+  const sole = useSoleAdmin();
   const { data, error, loading, refetch } = useQuery<{ paymentRequests: P[] }>(`{ paymentRequests(status:[REQUESTED], limit:100){ id userId username type mode amount status createdAt requestedById } }`, undefined, 10000, !me?.mfaEnabled);
   const [sel, setSel] = useState<P | null>(null);
   const [mode, setMode] = useState<'approve' | 'reject'>('approve');
   const [note, setNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const own = (p: P) => p.requestedById === me?.id || p.userId === me?.id;
+  const own = (p: P) => (p.requestedById === me?.id && !sole) || p.userId === me?.id;
   const act = async () => {
     if (!sel) return;
     setBusy(true); setErr(null);

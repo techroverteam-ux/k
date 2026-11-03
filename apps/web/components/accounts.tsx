@@ -43,7 +43,7 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
         e.preventDefault(); setTouched(true);
         if (bad) return;
         const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword } });
-        if (r) { toast('Account created and sent for approval'); onDone(); onClose(); }
+        if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose(); }
       }}>
         {roles.length > 1 && (
           <div className="field"><label htmlFor="role">Account type</label>

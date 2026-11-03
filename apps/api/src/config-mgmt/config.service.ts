@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { soleAdminMayApprove } from '../common/maker-checker';
 import { and, desc, eq, max } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { badInput, conflict, forbidden, notFound } from '../common/errors';
@@ -98,7 +99,7 @@ export class ConfigService {
       const [row] = await tx.select().from(configVersions).where(eq(configVersions.id, id)).for('update');
       if (!row) throw notFound('Change request');
       if (row.status !== 'PENDING') throw conflict('This change has already been decided.');
-      if (row.makerId === actor.userId) {
+      if (row.makerId === actor.userId && !(await soleAdminMayApprove(tx))) {
         await this.audit.recordStandalone({ actor, action: 'config.self_approval_blocked', entityType: 'config', entityId: row.key, outcome: 'DENIED', ip });
         throw forbidden('Maker-checker: you cannot approve your own change.');
       }

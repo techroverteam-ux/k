@@ -1,4 +1,6 @@
 import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength } from 'class-validator';
+import { soleAdminMayApprove } from '../common/maker-checker';
+import { DbService } from '../db/db';
 import { Transform } from 'class-transformer';
 import { RX } from '../common/validation';
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -30,6 +32,7 @@ export class UsersResolver {
   constructor(
     private readonly users: UsersService,
     private readonly recon: ReconciliationService,
+    private readonly dbs: DbService,
   ) {}
 
   @Roles('SUPER_ADMIN', 'BROKER')
@@ -56,7 +59,10 @@ export class UsersResolver {
   @Roles('SUPER_ADMIN', 'BROKER')
   @Mutation(() => UserType, { description: 'Creates a PENDING account. A different Super Admin must approve it.' })
   async createUser(@CurrentActor() a: Actor, @Args('input') input: CreateUserInput, @Ctx() c: GqlContext) {
-    return UserType.from(await this.users.create(a, input, c.ip), a);
+    const u = await this.users.create(a, input, c.ip);
+    // Only one Super Admin (single-admin mode): accounts they create are active straight away.
+    if (a.role === 'SUPER_ADMIN' && (await soleAdminMayApprove(this.dbs.db))) return UserType.from(await this.users.approve(a, u.id, c.ip), a);
+    return UserType.from(u, a);
   }
 
   @Roles('SUPER_ADMIN')

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { soleAdminMayApprove } from '../common/maker-checker';
 import { and, asc, desc, eq, inArray, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, notFound } from '../common/errors';
@@ -75,7 +76,7 @@ export class FeesService {
         if (p.status !== 'ACTIVE' && p.status !== 'PENDING') throw new AppError('CONFLICT', 'Already inactive.');
       } else {
         if (p.status !== 'PENDING') throw new AppError('CONFLICT', 'This was already decided.');
-        if (action === 'approve' && p.createdById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve details you added.');
+        if (action === 'approve' && p.createdById === actor.userId && !(await soleAdminMayApprove(tx))) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve details you added.');
       }
       const status = action === 'approve' ? 'ACTIVE' : action === 'reject' ? 'REJECTED' : 'DISABLED';
       const [u] = await tx.update(payeeAccounts).set({ status, decidedById: actor.userId, decidedAt: new Date(), updatedAt: new Date() }).where(eq(payeeAccounts.id, id)).returning();

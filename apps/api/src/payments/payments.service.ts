@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { soleAdminMayApprove } from '../common/maker-checker';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, forbidden, notFound } from '../common/errors';
@@ -112,7 +113,7 @@ export class PaymentsService {
       if (!p) throw notFound('Payment request');
       if (p.status === 'POSTED') return p; // idempotent re-approval
       if (p.status !== 'REQUESTED') throw conflict(`Request is ${p.status.toLowerCase()}.`);
-      if (p.requestedById === actor.userId || p.userId === actor.userId) {
+      if (p.userId === actor.userId || (p.requestedById === actor.userId && !(await soleAdminMayApprove(tx)))) {
         await this.audit.recordStandalone({ actor, action: 'payment.self_approval_blocked', entityType: 'payment', entityId: p.id, outcome: 'DENIED', ip });
         throw forbidden('Maker-checker: you cannot approve a request you created or that is for your own account.');
       }

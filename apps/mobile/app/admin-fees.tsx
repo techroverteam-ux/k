@@ -1,4 +1,5 @@
 /** Super Admin → Fees: company bank accounts & UPI IDs (maker-checker) and the fee payments traders report. */
+import { useSoleAdmin } from '@/sole-admin';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { gql } from '@/api';
@@ -12,6 +13,7 @@ const PSTATUS: Record<string, [string, 'warn' | 'ok' | 'bad' | undefined]> = { P
 
 export default function AdminFees() {
   const { me } = useAuth();
+  const sole = useSoleAdmin();
   const [tab, setTab] = useState<'details' | 'payments'>('payments');
   const payees = useQuery<{ payeeAccounts: Payee[] }>(`{ payeeAccounts { id kind label accountName bankName accountNumber ifsc upiId status createdById createdAt } }`);
   const [st, setSt] = useState<'SUBMITTED' | 'VERIFIED' | 'REJECTED'>('SUBMITTED');
@@ -46,7 +48,7 @@ export default function AdminFees() {
                     <T v="xs" c="text2" selectable>{p.accountName} · {p.kind === 'BANK' ? `A/c ${p.accountNumber} · IFSC ${p.ifsc}${p.bankName ? ` · ${p.bankName}` : ''}` : `UPI ${p.upiId}`}</T>
                     <T v="xs" c="text3">Added {when(p.createdAt)}{p.createdById === me?.id ? ' by you' : ''}</T>
                     <Row gap={S[2]}>
-                      {p.status === 'PENDING' && p.createdById !== me?.id && <View style={{ flex: 1 }}><Button block size="sm" kind="primary" title="Approve" onPress={() => void act(`mutation($id:ID!){ approvePayeeAccount(id:$id){ id } }`, p.id, 'Approved: traders can see it now')} /></View>}
+                      {p.status === 'PENDING' && (p.createdById !== me?.id || sole) && <View style={{ flex: 1 }}><Button block size="sm" kind="primary" title="Approve" onPress={() => void act(`mutation($id:ID!){ approvePayeeAccount(id:$id){ id } }`, p.id, 'Approved: traders can see it now')} /></View>}
                       {p.status === 'PENDING' && <View style={{ flex: 1 }}><Button block size="sm" title="Reject" onPress={() => void act(`mutation($id:ID!){ rejectPayeeAccount(id:$id){ id } }`, p.id, 'Rejected')} /></View>}
                       {p.status === 'ACTIVE' && <View style={{ flex: 1 }}><Button block size="sm" kind="sell" title="Disable" onPress={() => void act(`mutation($id:ID!){ disablePayeeAccount(id:$id){ id } }`, p.id, 'Disabled')} /></View>}
                     </Row>
@@ -88,8 +90,8 @@ function AddSheet({ onClose, onDone }: { onClose: () => void; onDone: () => void
         setBusy(true); setErr(null);
         try {
           const i = kind === 'BANK' ? { kind, label: f.label, accountName: f.accountName, bankName: f.bankName || undefined, accountNumber: f.accountNumber, ifsc: f.ifsc } : { kind, label: f.label, accountName: f.accountName, upiId: f.upiId };
-          await gql(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id } }`, { i });
-          toast('Added. Another Super Admin needs to approve it.'); onDone();
+          const d = await gql<{ addPayeeAccount: { status: string } }>(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });
+          toast(d.addPayeeAccount.status === 'ACTIVE' ? 'Added: traders can see it now' : 'Added. Another Super Admin needs to approve it.'); onDone();
         } catch (e) { setErr((e as Error).message); setBusy(false); }
       }} />
     </Sheet>

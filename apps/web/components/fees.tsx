@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { gql } from '@/lib/api';
@@ -119,6 +120,7 @@ function FeeForm({ payee, onClose, onDone }: { payee: Payee; onClose: () => void
 
 /* ================================================================== Super Admin: bank & UPI master + fee payments */
 export function FeesAdmin({ meId }: { meId: string }) {
+  const sole = useSoleAdmin();
   const payees = useQuery<{ payeeAccounts: Payee[] }>(`{ payeeAccounts { ${PAYEE_FIELDS} } }`);
   const [tab, setTab] = useState<'SUBMITTED' | 'VERIFIED' | 'REJECTED'>('SUBMITTED');
   const fees = useQuery<{ feePayments: Fee[] }>(`query($s:[String!]){ feePayments(status:$s, limit:200) { ${FEE_FIELDS} } }`, { s: [tab] }, { pollMs: 20_000 });
@@ -143,7 +145,7 @@ export function FeesAdmin({ meId }: { meId: string }) {
                     <div className="t3 xs">Added {when(p.createdAt)}{p.createdById === meId ? ' by you' : ''}</div>
                   </div>
                   <div className="row" style={{ gap: 8 }}>
-                    {p.status === 'PENDING' && p.createdById !== meId && <button className="btn btn-sm btn-primary" onClick={() => void act(`mutation($id:ID!){ approvePayeeAccount(id:$id){ id } }`, p.id, 'Approved: traders can see it now')}>Approve</button>}
+                    {p.status === 'PENDING' && (p.createdById !== meId || sole) && <button className="btn btn-sm btn-primary" onClick={() => void act(`mutation($id:ID!){ approvePayeeAccount(id:$id){ id } }`, p.id, 'Approved: traders can see it now')}>Approve</button>}
                     {p.status === 'PENDING' && <button className="btn btn-sm" onClick={() => void act(`mutation($id:ID!){ rejectPayeeAccount(id:$id){ id } }`, p.id, 'Rejected')}>Reject</button>}
                     {p.status === 'ACTIVE' && <button className="btn btn-sm btn-danger" onClick={() => void act(`mutation($id:ID!){ disablePayeeAccount(id:$id){ id } }`, p.id, 'Disabled')}>Disable</button>}
                   </div>
@@ -192,8 +194,8 @@ function AddPayee({ onClose, onDone }: { onClose: () => void; onDone: () => void
         e.preventDefault(); setBusy(true); setErr(null);
         try {
           const i = kind === 'BANK' ? { kind, label: f.label, accountName: f.accountName, bankName: f.bankName || undefined, accountNumber: f.accountNumber, ifsc: f.ifsc, branch: f.branch || undefined } : { kind, label: f.label, accountName: f.accountName, upiId: f.upiId };
-          await gql(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id } }`, { i });
-          toast('Added. Another Super Admin needs to approve it.'); onDone();
+          const d = await gql<{ addPayeeAccount: { status: string } }>(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });
+          toast(d.addPayeeAccount.status === 'ACTIVE' ? 'Added: traders can see it now' : 'Added. Another Super Admin needs to approve it.'); onDone();
         } catch (x) { setErr((x as Error).message); setBusy(false); }
       }}>
         <Tabs label="Type" value={kind} onChange={setKind} items={[{ v: 'BANK', label: 'Bank account' }, { v: 'UPI', label: 'UPI ID' }]} />

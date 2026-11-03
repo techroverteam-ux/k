@@ -1277,9 +1277,13 @@ describe('wipe out', () => {
 
     const left = await pg.query(`SELECT role, count(*)::int n FROM users GROUP BY role`);
     expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 2 }]);
-    for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries']) {
+    for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries',
+      'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'candles_1m', 'candles_1d', 'notifications', 'account_wipes']) {
       expect((await pg.query(`SELECT count(*)::int n FROM ${tbl}`)).rows[0].n).toBe(0);
     }
+    // Settings read their defaults again, and both Super Admins can still sign in.
+    expect((await gql(`{ appSettings { minDeposit } }`)).data.appSettings.minDeposit).toBe('50000.00');
+    expect((await freshLogin('admin')).mfaRequired).toBe(true);
     expect(Number((await pg.query(`SELECT count(*) FROM audit_events`)).rows[0].count)).toBeGreaterThan(auditBefore);
     // Outside an approved wipe, the ledger is still append-only.
     await expect(pg.query(`DELETE FROM audit_events`)).rejects.toThrow(/append-only/);

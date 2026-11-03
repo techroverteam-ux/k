@@ -4,6 +4,7 @@
  * commissions report. Sensitive actions ask for step-up verification through the API, like on the web.
  * Configuration changes and log archives stay on the web portal.
  */
+import { useSoleAdmin } from './sole-admin';
 import { router } from 'expo-router';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
@@ -109,8 +110,8 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
         if (bad) return;
         setBusy(true); setErr(null);
         try {
-          await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword } });
-          toast('Account created and sent for approval'); onDone(); onClose();
+          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword } });
+          toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose();
         } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }} />
     </Sheet>
@@ -191,11 +192,12 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
   const [broker, setBroker] = useState(u.brokerId ?? '');
   const [pw, setPw] = useState('');
   const [typed, setTyped] = useState('');
+  const sole = useSoleAdmin();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const run = async (q: string, v: Record<string, unknown>, ok: string) => {
+  const run = async (q: string, v: Record<string, unknown>, ok: string | ((d: Record<string, { status?: string } | undefined>) => string)) => {
     setBusy(true); setErr(null);
-    try { await gql(q, v); toast(ok); onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    try { const d = await gql(q, v); toast(typeof ok === 'string' ? ok : ok(d)); if (act === 'delete' && d?.requestUserDeletion?.status === 'EXECUTED') { router.back(); return; } onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   const title = { approve: 'Approve account?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?' }[act];
   return (
@@ -206,7 +208,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
       {act === 'password' && <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={pw} onChangeText={setPw} hint="At least 10 characters. They’ll be signed out and should change it after signing in." />}
       {act === 'signout' && <T c="text2">Every device signed in as this user is signed out now.</T>}
       {act === 'delete' && (<>
-        <Notice tone="err">{`Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of ${u.username} are erased and can’t be brought back. ${u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}A different Super Admin must approve within 30 minutes.`}</Notice>
+        <Notice tone="err">{`Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of ${u.username} are erased and can’t be brought back. ${u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}${sole ? 'This happens right away.' : 'A different Super Admin must approve within 30 minutes.'}`}</Notice>
         <Field label="Reason (recorded in the audit log)" value={reason} onChangeText={setReason} maxLength={300} hint="10–300 characters" />
         <Field label={`Type ${u.username} to confirm`} autoCapitalize="none" autoCorrect={false} value={typed} onChangeText={setTyped} />
       </>)}
@@ -218,7 +220,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
         {act === 'reactivate' && <Button block kind="primary" title="Reactivate" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$s:UserStatus!,$r:String!){ setUserStatus(userId:$id, status:$s, reason:$r){ id } }`, { id: u.id, s: 'ACTIVE', r: reason.trim() }, 'Account reactivated')} />}
         {act === 'broker' && <Button block kind="primary" title="Save" busy={busy} disabled={broker === (u.brokerId ?? '')} onPress={() => run(`mutation($t:ID!,$b:ID){ assignTraderToBroker(traderId:$t, brokerId:$b){ id } }`, { t: u.id, b: broker || null }, 'Broker updated')} />}
         {act === 'password' && <Button block kind="primary" title="Reset" busy={busy} disabled={pw.length < 10} onPress={() => run(`mutation($id:ID!,$p:String!){ resetUserPassword(userId:$id, tempPassword:$p) }`, { id: u.id, p: pw }, 'Password reset; they were signed out')} />}
-        {act === 'delete' && <Button block kind="sell" title="Ask to delete" busy={busy} disabled={reason.trim().length < 10 || typed.trim().toLowerCase() !== u.username} onPress={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id } }`, { u: u.id, r: reason.trim(), w: typed.trim() }, 'Sent to another Super Admin for approval')} />}
+        {act === 'delete' && <Button block kind="sell" title={sole ? 'Delete now' : 'Ask to delete'} busy={busy} disabled={reason.trim().length < 10 || typed.trim().toLowerCase() !== u.username} onPress={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id status } }`, { u: u.id, r: reason.trim(), w: typed.trim() }, (d) => (d.requestUserDeletion?.status === 'EXECUTED' ? `${u.username} deleted` : 'Sent to another Super Admin for approval'))} />}
         {act === 'signout' && <Button block kind="sell" title="Sign out" busy={busy} onPress={() => run(`mutation($u:ID!,$s:ID){ revokeUserSessions(userId:$u, sessionId:$s) }`, { u: u.id, s: null }, 'Signed out everywhere')} />}
       </Row>
     </Sheet>
@@ -355,6 +357,7 @@ interface Deletion { id: string; status: string; targetUserId: string; targetUse
 export function PendingDeletions({ userId, onDeleted }: { userId?: string; onDeleted?: () => void }) {
   const { me } = useAuth();
   const t = useTheme();
+  const sole = useSoleAdmin();
   const q = useQuery<{ userDeletions: Deletion[] }>(`query($u:ID){ userDeletions(userId:$u){ id status targetUserId targetUsername targetRole reason requestedById expiresAt createdAt } }`, { u: userId }, 30000);
   const [approve, setApprove] = useState<Deletion | null>(null);
   const [typed, setTyped] = useState('');
@@ -377,7 +380,7 @@ export function PendingDeletions({ userId, onDeleted }: { userId?: string; onDel
             <T w="600">{d.targetUsername} · {ROLE[d.targetRole] ?? d.targetRole}</T>
             <T v="xs">{d.reason} · asked {when(d.createdAt)}{mine ? ' by you' : ''} · expires {when(d.expiresAt)}</T>
             <Row gap={S[2]}>
-              {!mine && <View style={{ flex: 1 }}><Button block size="sm" kind="sell" title="Approve delete" onPress={() => { setTyped(''); setErr(null); setApprove(d); }} /></View>}
+              {(!mine || sole) && <View style={{ flex: 1 }}><Button block size="sm" kind="sell" title="Approve delete" onPress={() => { setTyped(''); setErr(null); setApprove(d); }} /></View>}
               <View style={{ flex: 1 }}><Button block size="sm" title={mine ? 'Cancel request' : 'Reject'} busy={busy && !approve} onPress={() => void act(`mutation($id:ID!){ rejectUserDeletion(id:$id){ id } }`, { id: d.id }, mine ? 'Request cancelled' : 'Request rejected')} /></View>
             </Row>
           </View>

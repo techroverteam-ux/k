@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import { useState } from 'react';
 import { Icon } from '@/components/icons';
 import { PAYMENT_FIELDS, type Payment } from '@/components/trading';
@@ -11,6 +12,7 @@ import { useQuery } from '@/lib/hooks';
 type T = 'review' | 'all';
 export default function Transactions() {
   const { me } = useAuth();
+  const sole = useSoleAdmin();
   const [tab, setTab] = useState<T>('review');
   const { data, loading, error, refetch } = useQuery<{ paymentRequests: Payment[] }>(`query($s:[PaymentStatus!]){ paymentRequests(status:$s, limit:100){ ${PAYMENT_FIELDS} } }`, { s: tab === 'review' ? ['REQUESTED'] : undefined }, { pollMs: 10_000 });
   const [approve, setApprove] = useState<Payment | null>(null);
@@ -45,7 +47,7 @@ export default function Transactions() {
                   <td data-label="Status"><Status value={p.status} />{p.reviewNote && <span className="sub" style={{ display: 'block' }}>{p.reviewNote}</span>}</td>
                   <td className="t2 sm num hide-sm">{when(p.createdAt)}</td>
                   <td className="r acts">
-                    {p.status === 'REQUESTED' && (p.requestedById === me?.id || p.userId === me?.id ? <span className="t3">Needs another admin</span> : (
+                    {p.status === 'REQUESTED' && ((p.requestedById === me?.id && !sole) || p.userId === me?.id ? <span className="t3">Needs another admin</span> : (
                       <div className="row" style={{ justifyContent: 'flex-end', gap: 6, flexWrap: 'nowrap' }}>
                         <button className="btn btn-sm btn-danger" onClick={() => { setErr(null); setNote(''); setReject(p); }}>Reject</button>
                         <button className="btn btn-sm btn-primary" onClick={() => { setErr(null); setApprove(p); }}>Approve</button>

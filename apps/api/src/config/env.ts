@@ -35,6 +35,15 @@ const schema = z
     /** MSG91 (SMS_PROVIDER=msg91): account auth key and the DLT-approved OTP template id. Secrets: never in config tables. */
     MSG91_AUTH_KEY: z.string().min(8).optional(),
     MSG91_OTP_TEMPLATE_ID: z.string().min(4).optional(),
+    /**
+     * Single-admin mode (on unless set to "false"): while there is only one active Super Admin, that admin may approve their own
+     * requests (accounts, payments, settings, payment details, deletes). Step-up and the audit log still apply.
+     * As soon as a second Super Admin is active, maker-checker is enforced again.
+     */
+    SINGLE_ADMIN_MODE: z
+      .string()
+      .default('true')
+      .transform((v) => v === 'true'),
     COOKIE_SECURE: z
       .string()
       .default('false')

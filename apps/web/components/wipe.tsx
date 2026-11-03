@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import Link from 'next/link';
 import { useState } from 'react';
 import { gql } from '@/lib/api';
@@ -138,6 +139,7 @@ interface PlatformWipe { id: string; status: string; requestedById: string; reas
 const STATUS: Record<string, string> = { PENDING: 'Waiting for a second Super Admin', EXECUTED: 'Done', REJECTED: 'Rejected', EXPIRED: 'Expired' };
 
 export function PlatformWipePanel({ meId }: { meId: string }) {
+  const sole = useSoleAdmin();
   const { data, loading, error, refetch } = useQuery<{ platformWipes: PlatformWipe[] }>(`{ platformWipes { id status requestedById reason decidedById decidedAt expiresAt summary createdAt } }`, undefined, { pollMs: 15_000 });
   const [dlg, setDlg] = useState<{ kind: 'request' } | { kind: 'approve'; w: PlatformWipe } | null>(null);
   const toast = useToast();
@@ -148,7 +150,7 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
       <div className="notice err" style={{ alignItems: 'flex-start' }}>
         <Icon name="alert" size={18} />
         <span>
-          <b>Wipe all trading data</b> permanently deletes every trader and broker account and all their orders, positions, ledger, fund requests, strategies, watchlists and notifications. Super Admin logins, settings, instruments, price history and the audit log are kept.
+          <b>Wipe all data</b> permanently deletes everything except the Super Admin accounts: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
           One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both re-verify with their authenticator.
         </span>
       </div>
@@ -156,7 +158,7 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
         <div className="panel panel-pad stack" style={{ gap: 10 }}>
           <div className="w6">Pending request · expires {when(pending.expiresAt)}</div>
           <div className="t2 sm">Reason: {pending.reason}</div>
-          {pending.requestedById === meId ? (
+          {pending.requestedById === meId && !sole ? (
             <div className="row"><span className="t3 sm grow">Waiting for another Super Admin to approve.</span><button className="btn" onClick={async () => { try { await gql(`mutation($id:ID!){ rejectPlatformWipe(id:$id){ id } }`, { id: pending.id }); toast('Request cancelled'); void refetch(); } catch (e) { toast((e as Error).message, true); } }}>Cancel request</button></div>
           ) : (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -203,8 +205,8 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
     setBusy(true); setErr(null);
     try {
       if (mode.kind === 'request') {
-        await gql(`mutation($r:String!,$w:String!){ requestPlatformWipe(reason:$r, confirm:$w){ id } }`, { r: reason, w: typed });
-        toast('Request sent. Another Super Admin has 30 minutes to approve it.');
+        const d = await gql<{ requestPlatformWipe: { status: string } }>(`mutation($r:String!,$w:String!){ requestPlatformWipe(reason:$r, confirm:$w){ id status } }`, { r: reason, w: typed });
+        toast(d.requestPlatformWipe.status === 'EXECUTED' ? 'All data wiped. Only Super Admin accounts are left.' : 'Request sent. Another Super Admin has 30 minutes to approve it.');
       } else {
         const d = await gql<{ approvePlatformWipe: string }>(`mutation($id:ID!,$w:String!){ approvePlatformWipe(id:$id, confirm:$w) }`, { id: mode.w.id, w: typed });
         const c = JSON.parse(d.approvePlatformWipe) as Record<string, number>;

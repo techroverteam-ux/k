@@ -9,6 +9,8 @@ import { NotificationsService, pubsub, TOPIC } from '../notifications/notificati
 import { ReconciliationService } from '../reconciliation/reconciliation.service';
 import { ConfigService } from './config.service';
 import { Subscription, Context } from '@nestjs/graphql';
+import { soleAdminMayApprove } from '../common/maker-checker';
+import { DbService } from '../db/db';
 import { unauthenticated } from '../common/errors';
 
 type CfgRow = Awaited<ReturnType<ConfigService['history']>>[number];
@@ -32,7 +34,14 @@ export class AdminResolver {
     private readonly audit: AuditService,
     private readonly recon: ReconciliationService,
     private readonly notifications: NotificationsService,
+    private readonly dbs: DbService,
   ) {}
+
+  @Roles('SUPER_ADMIN')
+  @Query(() => Boolean, { description: 'True when single-admin mode is on and you are the only active Super Admin, so you may approve your own requests.' })
+  soleAdminApprovals() {
+    return soleAdminMayApprove(this.dbs.db);
+  }
 
   // ------------------------------------------------------------ configuration
 
@@ -60,7 +69,9 @@ export class AdminResolver {
     } catch {
       throw badInput('Value must be valid JSON.');
     }
-    return toVersion(await this.config.propose(a, key, value, reason, c.ip));
+    const v = await this.config.propose(a, key, value, reason, c.ip);
+    // Only one Super Admin (single-admin mode): the change takes effect now, no separate approval.
+    return toVersion(await soleAdminMayApprove(this.dbs.db) ? await this.config.decide(a, v.id, true, c.ip) : v);
   }
 
   @Roles('SUPER_ADMIN')
@@ -74,7 +85,8 @@ export class AdminResolver {
   @RequireStepUp()
   @Mutation(() => ConfigVersion)
   async proposeConfigRollback(@CurrentActor() a: Actor, @Args('key') key: string, @Args('toVersion', { type: () => Int }) v: number, @Ctx() c: GqlContext) {
-    return toVersion(await this.config.proposeRollback(a, key, v, c.ip));
+    const r = await this.config.proposeRollback(a, key, v, c.ip);
+    return toVersion(await soleAdminMayApprove(this.dbs.db) ? await this.config.decide(a, r.id, true, c.ip) : r);
   }
 
   // ------------------------------------------------------------ audit

@@ -1,4 +1,6 @@
 import { Args, Field, ID, InputType, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
+import { soleAdminMayApprove } from '../common/maker-checker';
+import { DbService } from '../db/db';
 import { Throttle } from '@nestjs/throttler';
 import { IsIn, IsOptional, Length, MaxLength } from 'class-validator';
 import type { Actor, GqlContext } from '../common/context';
@@ -59,7 +61,7 @@ const toPayee = (p: PayeeRow): PayeeAccount => ({
 
 @Resolver()
 export class FeesResolver {
-  constructor(private readonly fees: FeesService) {}
+  constructor(private readonly fees: FeesService, private readonly dbs: DbService) {}
 
   @Query(() => [PayeeAccount], { description: 'Where to pay fees. Traders and brokers see active ones; Super Admin sees all.' })
   async payeeAccounts(@CurrentActor() a: Actor) {
@@ -70,7 +72,9 @@ export class FeesResolver {
   @RequireStepUp()
   @Mutation(() => PayeeAccount, { description: 'Add a bank account or UPI ID. Traders see it only after a different Super Admin approves it.' })
   async addPayeeAccount(@CurrentActor() a: Actor, @Args('input') input: PayeeAccountInput, @Ctx() c: GqlContext) {
-    return toPayee(await this.fees.addPayee(a, input, c.ip));
+    const p = await this.fees.addPayee(a, input, c.ip);
+    // Only one Super Admin (single-admin mode): live straight away.
+    return toPayee(await soleAdminMayApprove(this.dbs.db) ? await this.fees.decidePayee(a, p.id, 'approve', c.ip) : p);
   }
 
   @Roles('SUPER_ADMIN')

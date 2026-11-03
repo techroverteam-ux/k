@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -134,7 +135,8 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
   const key = useMemo(newKey, []);
   const toast = useToast();
   const m = useMutation(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id status } }`);
-  const { settings } = useAuth();
+  const { settings, me } = useAuth();
+  const sole = useSoleAdmin() && me?.role === 'SUPER_ADMIN';
   const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
   const minLabel = `₹${inr(String(min), { decimals: false })}`;
   const fmtOk = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
@@ -144,14 +146,20 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
   return (
     <Dialog
       title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'}
-      sub={type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'}
+      sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'}
       onClose={onClose}
     >
       <form className="stack" onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
         if (!fmtOk || over || under) return;
-        const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } });
-        if (r) { toast('Request sent for review'); onDone?.(); onClose(); }
+        const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } }) as { requestPayment: { id: string } } | null;
+        if (!r) return;
+        // Only one Super Admin: post it now (asks for the authenticator code), no separate approval step.
+        if (sole) {
+          try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: r.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
+          catch { toast('Request saved. Approve it on Transactions.'); }
+        } else toast('Request sent for review');
+        onDone?.(); onClose();
       }}>
         <div className="field">
           <label htmlFor="amt">Amount</label>

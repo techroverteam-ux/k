@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { soleAdminMayApprove } from '../common/maker-checker';
 import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, notFound } from '../common/errors';
@@ -7,11 +8,13 @@ import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
 import { DbService, type DbOrTx, type Tx } from '../db/db';
 import {
-  accountWipes, deviceCredentials, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders, otpChallenges,
-  paymentRequests, platformWipes, positions, sessions, strategies, strategyEvents, strategyRuns, tradingConsents, users, watchlistItems,
+  accountWipes, candles1d, candles1m, configVersions, deviceCredentials, feePayments, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders,
+  otpChallenges, payeeAccounts, paymentRequests, platformWipes, positions, reconciliationRuns, sessions, strategies, strategyEvents, strategyRuns, tradingConsents, users, watchlistItems,
 } from '../db/schema';
 import { LedgerService } from '../ledger/ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { MarketDataService } from '../market/market-data.service';
+import { ConfigService } from '../config-mgmt/config.service';
 
 export const WIPE_CONFIRM = 'WIPE';
 export const PLATFORM_WIPE_CONFIRM = 'WIPE ALL DATA';
@@ -36,6 +39,73 @@ const jsonSafe = (rows: unknown) => JSON.parse(JSON.stringify(rows, (_k, v) => (
  * One Super Admin requests it, a different one approves it within 30 minutes; both re-verify (step-up) and type the phrase.
  * Super Admin logins, settings, instruments, candles and the audit log (with a record of the wipe) are kept.
  */
+/**
+ * Permanently delete these accounts and everything they own. Must run inside a transaction that has
+ * `SET LOCAL td.platform_wipe = 'on'` (the only way ledger and consent rows can be deleted). The audit log is never touched.
+ * Adds the deleted accounts' session ids to `signedOut` so their open devices can be told to leave.
+ */
+export async function purgeAccounts(tx: Tx, targets: string[], signedOut: string[]): Promise<Record<string, number>> {
+  const n = (rows: unknown[]) => rows.length;
+  const counts: Record<string, number> = { accounts: targets.length };
+  if (!targets.length) return counts;
+  const sess = await tx.select({ id: sessions.id }).from(sessions).where(inArray(sessions.userId, targets));
+  signedOut.push(...sess.map((s) => s.id));
+  const accts = (await tx.select({ id: ledgerAccounts.id }).from(ledgerAccounts).where(inArray(ledgerAccounts.ownerId, targets))).map((a) => a.id);
+  const journals = accts.length
+    ? (await tx.selectDistinct({ id: ledgerPostings.journalId }).from(ledgerPostings).where(inArray(ledgerPostings.accountId, accts))).map((j) => j.id)
+    : [];
+  counts.strategyEvents = n(await tx.delete(strategyEvents).where(inArray(strategyEvents.userId, targets)).returning({ id: strategyEvents.id }));
+  counts.strategyRuns = n(await tx.delete(strategyRuns).where(inArray(strategyRuns.userId, targets)).returning({ id: strategyRuns.id }));
+  counts.strategies = n(await tx.delete(strategies).where(inArray(strategies.userId, targets)).returning({ id: strategies.id }));
+  counts.orders = n(await tx.delete(orders).where(inArray(orders.userId, targets)).returning({ id: orders.id }));
+  counts.positions = n(await tx.delete(positions).where(inArray(positions.userId, targets)).returning({ id: positions.id }));
+  counts.paymentRequests = n(await tx.delete(paymentRequests).where(inArray(paymentRequests.userId, targets)).returning({ id: paymentRequests.id }));
+  for (let i = 0; i < journals.length; i += 5000) {
+    const part = journals.slice(i, i + 5000);
+    counts.ledgerPostings = (counts.ledgerPostings ?? 0) + n(await tx.delete(ledgerPostings).where(inArray(ledgerPostings.journalId, part)).returning({ id: ledgerPostings.id }));
+  }
+  for (let i = 0; i < journals.length; i += 5000) {
+    const part = journals.slice(i, i + 5000);
+    await tx.update(paymentRequests).set({ journalId: null }).where(inArray(paymentRequests.journalId, part));
+    counts.journals = (counts.journals ?? 0) + n(await tx.delete(journalEntries).where(inArray(journalEntries.id, part)).returning({ id: journalEntries.id }));
+  }
+  if (accts.length) await tx.delete(ledgerAccounts).where(inArray(ledgerAccounts.id, accts));
+  counts.consents = n(await tx.delete(tradingConsents).where(inArray(tradingConsents.userId, targets)).returning({ id: tradingConsents.id }));
+  counts.watchlistItems = n(await tx.delete(watchlistItems).where(inArray(watchlistItems.userId, targets)).returning({ id: watchlistItems.id }));
+  counts.notifications = n(await tx.delete(notifications).where(inArray(notifications.userId, targets)).returning({ id: notifications.id }));
+  await tx.delete(deviceCredentials).where(inArray(deviceCredentials.userId, targets));
+  await tx.delete(accountWipes).where(inArray(accountWipes.userId, targets));
+  await tx.delete(sessions).where(inArray(sessions.userId, targets));
+  // Traders assigned to a deleted broker stay, unassigned.
+  await tx.update(users).set({ brokerId: null }).where(inArray(users.brokerId, targets));
+  await tx.update(users).set({ brokerId: null }).where(inArray(users.id, targets));
+  await tx.delete(users).where(inArray(users.id, targets));
+  return counts;
+}
+
+/**
+ * After the accounts are gone: everything else except the Super Admin accounts and the append-only audit and
+ * request logs. Settings go back to their defaults; payment details, market data and the platform's own ledger
+ * accounts are deleted. Must run inside a transaction with `SET LOCAL td.platform_wipe = 'on'`.
+ */
+export async function clearPlatformData(tx: Tx): Promise<Record<string, number>> {
+  const n = (rows: unknown[]) => rows.length;
+  const c: Record<string, number> = {};
+  c.feePayments = n(await tx.delete(feePayments).returning({ id: feePayments.id }));
+  c.payeeAccounts = n(await tx.delete(payeeAccounts).returning({ id: payeeAccounts.id }));
+  c.settings = n(await tx.delete(configVersions).returning({ id: configVersions.id }));
+  c.candles = n(await tx.delete(candles1m).returning({ t: candles1m.instrumentId })) + n(await tx.delete(candles1d).returning({ t: candles1d.instrumentId }));
+  c.instruments = n(await tx.delete(instruments).returning({ id: instruments.id }));
+  c.reconciliationRuns = n(await tx.delete(reconciliationRuns).returning({ id: reconciliationRuns.id }));
+  await tx.delete(ledgerPostings);
+  await tx.delete(journalEntries);
+  await tx.delete(ledgerAccounts);
+  await tx.delete(notifications);
+  await tx.delete(accountWipes);
+  await tx.delete(otpChallenges);
+  return c;
+}
+
 @Injectable()
 export class WipeService {
   constructor(
@@ -44,6 +114,8 @@ export class WipeService {
     private readonly ledger: LedgerService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly market: MarketDataService,
+    private readonly config: ConfigService,
   ) {}
 
   private async self(actor: Actor) {
@@ -144,6 +216,12 @@ export class WipeService {
 
   // ------------------------------------------------------------------ Super Admin: wipe all trading data
 
+  async getWipe(id: string) {
+    const [r] = await this.dbs.db.select().from(platformWipes).where(eq(platformWipes.id, id));
+    if (!r) throw notFound('Request');
+    return r;
+  }
+
   listPlatform() {
     return this.dbs.db.select().from(platformWipes).where(isNull(platformWipes.targetUserId)).orderBy(desc(platformWipes.createdAt)).limit(20);
   }
@@ -181,64 +259,26 @@ export class WipeService {
         await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
         throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
       }
-      if (r.requestedById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
+      if (r.requestedById === actor.userId && !(await soleAdminMayApprove(tx))) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
 
       // The one place append-only ledger and consent rows may be deleted (see migration 0013). Never the audit log.
       await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
       const targets = (await tx.select({ id: users.id }).from(users).where(ne(users.role, 'SUPER_ADMIN'))).map((x) => x.id);
       const counts = await this.purge(tx, targets, signedOut);
-      await tx.delete(otpChallenges);
+      Object.assign(counts, await clearPlatformData(tx));
       await tx.update(platformWipes).set({ status: 'EXECUTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date(), summary: counts }).where(eq(platformWipes.id, id));
       await this.audit.record(tx, { actor, action: 'platform.wiped', entityType: 'platform_wipe', entityId: id, outcome: 'SUCCESS', ip, metadata: { requestedBy: r.requestedById, reason: r.reason, ...counts } });
       return counts;
     });
-    // Tell the deleted accounts' open devices to leave now.
+    // Tell the deleted accounts' open devices to leave now, and drop cached settings and market data.
     await this.auth.announceSignedOut(signedOut, 'Your account no longer exists.');
+    this.config.invalidate();
+    await this.market.clearAll();
     return result;
   }
 
-  /**
-   * Permanently delete these (non-Super-Admin) accounts and everything they own. Must run inside a transaction that has
-   * `SET LOCAL td.platform_wipe = 'on'` (the only way ledger and consent rows can be deleted). The audit log is never touched.
-   * Adds the deleted accounts' session ids to `signedOut` so their open devices can be told to leave.
-   */
-  private async purge(tx: Tx, targets: string[], signedOut: string[]): Promise<Record<string, number>> {
-    const n = (rows: unknown[]) => rows.length;
-    const counts: Record<string, number> = { accounts: targets.length };
-    if (!targets.length) return counts;
-    const sess = await tx.select({ id: sessions.id }).from(sessions).where(inArray(sessions.userId, targets));
-    signedOut.push(...sess.map((s) => s.id));
-    const accts = (await tx.select({ id: ledgerAccounts.id }).from(ledgerAccounts).where(inArray(ledgerAccounts.ownerId, targets))).map((a) => a.id);
-    const journals = accts.length
-      ? (await tx.selectDistinct({ id: ledgerPostings.journalId }).from(ledgerPostings).where(inArray(ledgerPostings.accountId, accts))).map((j) => j.id)
-      : [];
-    counts.strategyEvents = n(await tx.delete(strategyEvents).where(inArray(strategyEvents.userId, targets)).returning({ id: strategyEvents.id }));
-    counts.strategyRuns = n(await tx.delete(strategyRuns).where(inArray(strategyRuns.userId, targets)).returning({ id: strategyRuns.id }));
-    counts.strategies = n(await tx.delete(strategies).where(inArray(strategies.userId, targets)).returning({ id: strategies.id }));
-    counts.orders = n(await tx.delete(orders).where(inArray(orders.userId, targets)).returning({ id: orders.id }));
-    counts.positions = n(await tx.delete(positions).where(inArray(positions.userId, targets)).returning({ id: positions.id }));
-    counts.paymentRequests = n(await tx.delete(paymentRequests).where(inArray(paymentRequests.userId, targets)).returning({ id: paymentRequests.id }));
-    for (let i = 0; i < journals.length; i += 5000) {
-      const part = journals.slice(i, i + 5000);
-      counts.ledgerPostings = (counts.ledgerPostings ?? 0) + n(await tx.delete(ledgerPostings).where(inArray(ledgerPostings.journalId, part)).returning({ id: ledgerPostings.id }));
-    }
-    for (let i = 0; i < journals.length; i += 5000) {
-      const part = journals.slice(i, i + 5000);
-      await tx.update(paymentRequests).set({ journalId: null }).where(inArray(paymentRequests.journalId, part));
-      counts.journals = (counts.journals ?? 0) + n(await tx.delete(journalEntries).where(inArray(journalEntries.id, part)).returning({ id: journalEntries.id }));
-    }
-    if (accts.length) await tx.delete(ledgerAccounts).where(inArray(ledgerAccounts.id, accts));
-    counts.consents = n(await tx.delete(tradingConsents).where(inArray(tradingConsents.userId, targets)).returning({ id: tradingConsents.id }));
-    counts.watchlistItems = n(await tx.delete(watchlistItems).where(inArray(watchlistItems.userId, targets)).returning({ id: watchlistItems.id }));
-    counts.notifications = n(await tx.delete(notifications).where(inArray(notifications.userId, targets)).returning({ id: notifications.id }));
-    await tx.delete(deviceCredentials).where(inArray(deviceCredentials.userId, targets));
-    await tx.delete(accountWipes).where(inArray(accountWipes.userId, targets));
-    await tx.delete(sessions).where(inArray(sessions.userId, targets));
-    // Traders assigned to a deleted broker stay, unassigned.
-    await tx.update(users).set({ brokerId: null }).where(inArray(users.brokerId, targets));
-    await tx.update(users).set({ brokerId: null }).where(inArray(users.id, targets));
-    await tx.delete(users).where(inArray(users.id, targets));
-    return counts;
+  private purge(tx: Tx, targets: string[], signedOut: string[]) {
+    return purgeAccounts(tx, targets, signedOut);
   }
 
   // ---------------------------------------------------------------- delete one account permanently
@@ -277,7 +317,7 @@ export class WipeService {
         await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
         throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
       }
-      if (r.requestedById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
+      if (r.requestedById === actor.userId && !(await soleAdminMayApprove(tx))) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
       if (confirm.trim().toLowerCase() !== r.targetUsername) throw badInput(`Type the username ${r.targetUsername} to confirm.`);
       const [u] = await tx.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, r.targetUserId!)).for('update');
       if (!u) { await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id)); throw notFound('Account'); }

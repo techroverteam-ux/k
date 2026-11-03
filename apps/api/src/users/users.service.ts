@@ -1,4 +1,5 @@
 import { emailColumns, emailIndex, normalizeEmail, normalizePhone, phoneColumns, phoneIndex } from '../common/pii';
+import { soleAdminMayApprove } from '../common/maker-checker';
 import { Injectable } from '@nestjs/common';
 import { and, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
@@ -107,12 +108,12 @@ export class UsersService {
       const [u] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
       if (!u) throw notFound('Account');
       if (u.status !== 'PENDING') throw conflict(`Account is ${u.status.toLowerCase()}.`);
-      if (u.createdById === actor.userId) {
+      if (u.createdById === actor.userId && !(await soleAdminMayApprove(tx))) {
         await this.audit.recordStandalone({ actor, action: 'user.self_approval_blocked', entityType: 'user', entityId: userId, outcome: 'DENIED', ip });
         throw forbidden('Maker-checker: another Super Admin must approve accounts you created.');
       }
       const [r] = await tx.update(users).set({ status: 'ACTIVE', updatedAt: new Date() }).where(eq(users.id, userId)).returning();
-      await this.audit.record(tx, { actor, action: 'user.approved', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { createdBy: u.createdById } });
+      await this.audit.record(tx, { actor, action: 'user.approved', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { createdBy: u.createdById, soleAdmin: u.createdById === actor.userId } });
       return r;
     });
   }

@@ -1,4 +1,5 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
+import { useSoleAdmin } from './sole-admin';
 import { router } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -196,7 +197,8 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const [busy, setBusy] = useState(false);
   // A new key whenever the amount changes: a retry of the same request is safe, a different amount is a new request.
   const key = useMemo(newKey, [amount]);
-  const { settings } = useAuth();
+  const { settings, me } = useAuth();
+  const sole = useSoleAdmin() && me?.role === 'SUPER_ADMIN';
   const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
   const minLabel = `₹${inr(String(min)).replace('.00', '')}`;
   const fmt = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
@@ -204,7 +206,7 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const over = type === 'WITHDRAWAL' && !!available && fmt && Number(amount) > Number(available);
   const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : under ? `Minimum to add is ${minLabel}` : over ? `You can withdraw up to ₹${inr(available)}` : null);
   return (
-    <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
+    <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
       <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
       {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={[min, min * 2, min * 4, min * 10].map(String).map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
       {err && <Notice tone="err">{err}</Notice>}
@@ -212,7 +214,15 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
         setTouched(true);
         if (!fmt || over || under) return;
         setBusy(true); setErr(null);
-        try { await gql(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } }); toast('Request sent for review'); onClose(); }
+        try {
+          const d = await gql<{ requestPayment: { id: string } }>(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } });
+          // Only one Super Admin: post it now (asks for the authenticator code), no separate approval step.
+          if (sole) {
+            try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: d.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
+            catch { toast('Request saved. Approve it under Approvals.'); }
+          } else toast('Request sent for review');
+          onClose();
+        }
         catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
       }} />
     </Sheet>

@@ -1,4 +1,6 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { gql } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -19,14 +21,20 @@ export function useUserActions(onDone: () => void) {
   const [pw, setPw] = useState('');
   const [broker, setBroker] = useState('');
   const [typed, setTyped] = useState('');
+  const sole = useSoleAdmin();
+  const router = useRouter();
   const toast = useToast();
   const brokers = useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
   const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setPw(''); setTyped(''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
   const close = () => setAct(null);
-  const run = async (q: string, v: Record<string, unknown>, ok: string) => {
+  const run = async (q: string, v: Record<string, unknown>, ok: string | ((d: Record<string, { status?: string } | undefined>) => string)) => {
     setBusy(true); setErr(null);
-    try { await gql(q, v); toast(ok); close(); onDone(); }
+    try {
+      const d = await gql(q, v); toast(typeof ok === 'string' ? ok : ok(d)); close();
+      if (d?.requestUserDeletion?.status === 'EXECUTED') { router.push('/admin/users'); router.refresh(); }
+      onDone();
+    }
     catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') setErr((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -70,13 +78,13 @@ export function useUserActions(onDone: () => void) {
     </Dialog>
   );
   if (act?.kind === 'delete') node = (
-    <Dialog title={`Delete ${act.u.displayName} permanently?`} sub="Erases the account and all its data. A different Super Admin must approve within 30 minutes." onClose={close}>
+    <Dialog title={`Delete ${act.u.displayName} permanently?`} sub={sole ? 'Erases the account and all its data right away.' : 'Erases the account and all its data. A different Super Admin must approve within 30 minutes.'} onClose={close}>
       <div className="notice err" style={{ marginBottom: 12 }}><Icon name="alert" size={18} /><span>Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of <b>{act.u.username}</b> are deleted and can’t be brought back. {act.u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}The audit log keeps a record of the delete.</span></div>
       <div className="field"><label htmlFor="dr">Reason</label><input id="dr" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Recorded in the audit log" /><span className="hint">10–300 characters</span></div>
       <div className="field"><label htmlFor="du">Type <b>{act.u.username}</b> to confirm</label><input id="du" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} /></div>
       <ErrBox />
       <div className="actions"><button className="btn" onClick={close}>Cancel</button>
-        <button className="btn btn-sell" disabled={busy || reason.trim().length < 10 || typed.trim().toLowerCase() !== act.u.username} onClick={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id } }`, { u: act.u.id, r: reason.trim(), w: typed.trim() }, 'Sent to another Super Admin for approval')}>{busy ? 'Sending…' : 'Ask to delete'}</button>
+        <button className="btn btn-sell" disabled={busy || reason.trim().length < 10 || typed.trim().toLowerCase() !== act.u.username} onClick={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id status } }`, { u: act.u.id, r: reason.trim(), w: typed.trim() }, (d) => (d.requestUserDeletion?.status === 'EXECUTED' ? `${act.u.username} deleted` : 'Sent to another Super Admin for approval'))}>{busy ? 'Please wait…' : sole ? 'Delete now' : 'Ask to delete'}</button>
       </div>
     </Dialog>
   );
@@ -106,6 +114,7 @@ interface Deletion { id: string; status: string; targetUserId: string; targetUse
 /** Pending (and, for one account, past) delete requests, with Approve / Reject for the other Super Admin. */
 export function PendingDeletions({ userId, onDone }: { userId?: string; onDone?: () => void }) {
   const { me } = useAuth();
+  const sole = useSoleAdmin();
   const toast = useToast();
   const { data, refetch } = useQuery<{ userDeletions: Deletion[] }>(`query($u:ID){ userDeletions(userId:$u){ id status targetUserId targetUsername targetRole reason requestedById expiresAt createdAt summary } }`, { u: userId });
   const [approve, setApprove] = useState<Deletion | null>(null);
@@ -130,7 +139,7 @@ export function PendingDeletions({ userId, onDone }: { userId?: string; onDone?:
           <div key={d.id} className="spread" style={{ gap: 12, flexWrap: 'wrap' }}>
             <div><div className="w6">{d.targetUsername} · {ROLE_LABEL[d.targetRole as keyof typeof ROLE_LABEL] ?? d.targetRole}</div><div className="t3 sm">{d.reason} · asked {when(d.createdAt)}{mine ? ' by you' : ''} · expires {when(d.expiresAt)}</div></div>
             <div className="row" style={{ gap: 6 }}>
-              {!mine && <button className="btn btn-sm btn-sell" onClick={() => { setTyped(''); setErr(null); setApprove(d); }}>Approve delete</button>}
+              {(!mine || sole) && <button className="btn btn-sm btn-sell" onClick={() => { setTyped(''); setErr(null); setApprove(d); }}>Approve delete</button>}
               <button className="btn btn-sm" disabled={busy} onClick={() => void act(`mutation($id:ID!){ rejectUserDeletion(id:$id){ id } }`, { id: d.id }, mine ? 'Request cancelled' : 'Request rejected')}>{mine ? 'Cancel request' : 'Reject'}</button>
             </div>
           </div>

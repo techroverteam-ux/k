@@ -102,6 +102,12 @@ export class CandleStore {
   private minutes = new Map<string, Bar[]>();
   private daily = new Map<string, Bar[]>();
 
+  /** Drop every bar (Data reset). */
+  clear() {
+    this.minutes.clear();
+    this.daily.clear();
+  }
+
   has(id: string) {
     return this.minutes.has(id);
   }

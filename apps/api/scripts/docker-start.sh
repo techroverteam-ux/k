@@ -7,7 +7,8 @@ $TS scripts/migrate.ts
 if [ -n "$BOOTSTRAP_ADMIN_USERNAME" ]; then
   $TS scripts/bootstrap-admin.ts || echo "bootstrap-admin: not applied (see the message above); the API starts anyway."
 fi
-if [ -n "$SEED_PASSWORD" ] && [ "$NODE_ENV" != "production" ]; then
+# Demo accounts only when asked for explicitly (SEED_DEMO_ACCOUNTS=true), never in production.
+if [ "$SEED_DEMO_ACCOUNTS" = "true" ] && [ -n "$SEED_PASSWORD" ] && [ "$NODE_ENV" != "production" ]; then
   $TS scripts/seed.ts
 fi
 exec node dist/main.js

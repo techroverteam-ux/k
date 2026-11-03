@@ -130,6 +130,19 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
     await this.flush(); // keep the last minute of candles on a clean shutdown or redeploy
   }
 
+  /**
+   * Data reset: forget every instrument, quote and unsaved candle, so nothing tries to save bars for deleted
+   * instruments. Call after the reset commits; instruments come back with the next instrument sync or reload().
+   */
+  async clearAll() {
+    await this.flushing?.catch(() => undefined);
+    this.unsaved.clear();
+    this.history.clear();
+    this.quotes.clear();
+    this.meta.clear();
+    this.dhanFeed.setSubscriptions([]);
+  }
+
   async reload() {
     const rows = await this.dbs.db.select().from(instruments).where(eq(instruments.active, true));
     const fresh = rows.filter((r) => !this.history.has(r.id));

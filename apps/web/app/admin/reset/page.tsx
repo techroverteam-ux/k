@@ -8,7 +8,7 @@ export default function DataReset() {
   if (!me) return null;
   return (
     <div className="stack" style={{ gap: 24, maxWidth: 820 }}>
-      <PageHead title="Data reset" sub="Permanently delete all trader and broker data, for example at the end of a training batch." />
+      <PageHead title="Data reset" sub="Permanently delete everything except the Super Admin accounts, for example at the end of a training batch." />
       <PlatformWipePanel meId={me.id} />
     </div>
   );

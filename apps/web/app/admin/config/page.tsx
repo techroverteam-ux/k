@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import { useState } from 'react';
 import { Icon } from '@/components/icons';
 import { Dialog, ErrorState, PageHead, SkeletonRows, Status, useToast } from '@/components/ui';
@@ -15,6 +16,7 @@ const short = (j: string) => (j.length > 80 ? j.slice(0, 80) + '…' : j);
 
 export default function ConfigPage() {
   const { me } = useAuth();
+  const sole = useSoleAdmin();
   const { data, loading, error, refetch } = useQuery<{ configItems: Item[] }>(`{ configItems { key description valueJson version isDefault pending { ${V} } } }`);
   const [edit, setEdit] = useState<Item | null>(null);
   const [hist, setHist] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export default function ConfigPage() {
                   )}
                 </div>
                 <div className="row" style={{ gap: 6 }}>
-                  {i.pending ? (i.pending.makerId === me?.id ? <span className="badge warn">Waiting for another admin</span> : <>
+                  {i.pending ? (i.pending.makerId === me?.id && !sole ? <span className="badge warn">Waiting for another admin</span> : <>
                     <button className="btn btn-sm btn-danger" onClick={() => decide(i.pending!.id, false)}>Reject</button>
                     <button className="btn btn-sm btn-primary" onClick={() => decide(i.pending!.id, true)}>Approve</button>
                   </>) : <button className="btn btn-sm" onClick={() => setEdit(i)}>Propose change</button>}
@@ -82,7 +84,7 @@ function Propose({ item, onClose, onDone }: { item: Item; onClose: () => void; o
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" disabled={busy || !ok || reason.trim().length < 5} onClick={async () => {
             setBusy(true); setErr(null);
-            try { await gql(`mutation($k:String!,$v:String!,$r:String!){ proposeConfigChange(key:$k, valueJson:$v, reason:$r){ id } }`, { k: item.key, v: JSON.stringify(JSON.parse(value)), r: reason }); toast('Change sent for approval'); onDone(); onClose(); }
+            try { const d = await gql<{ proposeConfigChange: { status: string } }>(`mutation($k:String!,$v:String!,$r:String!){ proposeConfigChange(key:$k, valueJson:$v, reason:$r){ id status } }`, { k: item.key, v: JSON.stringify(JSON.parse(value)), r: reason }); toast(d.proposeConfigChange.status === 'PENDING' ? 'Change sent for approval' : 'Change applied'); onDone(); onClose(); }
             catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') setErr((e as Error).message); } finally { setBusy(false); }
           }}>{busy ? 'Sending…' : 'Send for approval'}</button>
         </div>
@@ -105,7 +107,7 @@ function History({ k, onClose, onDone }: { k: string; onClose: () => void; onDon
               <span className="t3">{v.reason} · {when(v.createdAt)}</span>
             </div>
             {v.status === 'SUPERSEDED' && <button className="btn btn-sm" onClick={async () => {
-              try { await gql(`mutation($k:String!,$v:Int!){ proposeConfigRollback(key:$k, toVersion:$v){ id } }`, { k, v: v.version }); toast('Rollback sent for approval'); onDone(); onClose(); }
+              try { const d = await gql<{ proposeConfigRollback: { status: string } }>(`mutation($k:String!,$v:Int!){ proposeConfigRollback(key:$k, toVersion:$v){ id status } }`, { k, v: v.version }); toast(d.proposeConfigRollback.status === 'PENDING' ? 'Rollback sent for approval' : 'Rolled back'); onDone(); onClose(); }
               catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') toast((e as Error).message, true); }
             }}>Restore</button>}
           </div>
