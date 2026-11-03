@@ -613,9 +613,17 @@ export const accountWipes = pgTable(
 );
 
 /** Super Admin "wipe all trading data": requested by one Super Admin, executed only when a different one approves. */
+/**
+ * Permanent deletes, requested by one Super Admin and approved by another within 30 minutes.
+ * target_user_id empty: "wipe all trading data". Set: delete that one trader/broker account and all its data
+ * (username and role are copied so the record still makes sense after the account is gone; no FK on purpose).
+ */
 export const platformWipes = pgTable('platform_wipes', {
   id: id(),
   status: varchar('status', { length: 16 }).notNull().default('PENDING'),
+  targetUserId: uuid('target_user_id'),
+  targetUsername: varchar('target_username', { length: 40 }),
+  targetRole: varchar('target_role', { length: 20 }),
   requestedById: uuid('requested_by_id').notNull(),
   requestedIp: varchar('requested_ip', { length: 64 }),
   reason: varchar('reason', { length: 300 }).notNull(),

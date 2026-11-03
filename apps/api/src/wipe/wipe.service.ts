@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, notFound } from '../common/errors';
 import { formatMoney } from '../common/money';
 import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
-import { DbService, type DbOrTx } from '../db/db';
+import { DbService, type DbOrTx, type Tx } from '../db/db';
 import {
   accountWipes, deviceCredentials, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders, otpChallenges,
   paymentRequests, platformWipes, positions, sessions, strategies, strategyEvents, strategyRuns, tradingConsents, users, watchlistItems,
@@ -16,6 +16,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 export const WIPE_CONFIRM = 'WIPE';
 export const PLATFORM_WIPE_CONFIRM = 'WIPE ALL DATA';
 const PLATFORM_WIPE_TTL_MS = 30 * 60_000;
+const DELETE_REASON = (r: string) => { const why = r.trim(); if (why.length < 10 || why.length > 300) throw badInput('Give a reason (10–300 characters).'); return why; };
 
 const jsonSafe = (rows: unknown) => JSON.parse(JSON.stringify(rows, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
 
@@ -144,7 +145,7 @@ export class WipeService {
   // ------------------------------------------------------------------ Super Admin: wipe all trading data
 
   listPlatform() {
-    return this.dbs.db.select().from(platformWipes).orderBy(desc(platformWipes.createdAt)).limit(20);
+    return this.dbs.db.select().from(platformWipes).where(isNull(platformWipes.targetUserId)).orderBy(desc(platformWipes.createdAt)).limit(20);
   }
 
   async requestPlatform(actor: Actor, reason: string, confirm: string, ip: string) {
@@ -153,7 +154,7 @@ export class WipeService {
     if (why.length < 10 || why.length > 300) throw badInput('Give a reason (10–300 characters).');
     return this.dbs.db.transaction(async (tx) => {
       await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(and(eq(platformWipes.status, 'PENDING'), sql`${platformWipes.expiresAt} < now()`));
-      const [open] = await tx.select({ id: platformWipes.id }).from(platformWipes).where(eq(platformWipes.status, 'PENDING')).limit(1);
+      const [open] = await tx.select({ id: platformWipes.id }).from(platformWipes).where(and(eq(platformWipes.status, 'PENDING'), isNull(platformWipes.targetUserId))).limit(1);
       if (open) throw new AppError('CONFLICT', 'A wipe request is already waiting for approval.');
       const [r] = await tx.insert(platformWipes).values({ requestedById: actor.userId, requestedIp: ip, reason: why, expiresAt: new Date(Date.now() + PLATFORM_WIPE_TTL_MS) }).returning();
       await this.audit.record(tx, { actor, action: 'platform.wipe_requested', entityType: 'platform_wipe', entityId: r.id, outcome: 'SUCCESS', ip, metadata: { reason: why } });
@@ -164,7 +165,7 @@ export class WipeService {
   }
 
   async rejectPlatform(actor: Actor, id: string, ip: string) {
-    const [r] = await this.dbs.db.update(platformWipes).set({ status: 'REJECTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date() }).where(and(eq(platformWipes.id, id), eq(platformWipes.status, 'PENDING'))).returning();
+    const [r] = await this.dbs.db.update(platformWipes).set({ status: 'REJECTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date() }).where(and(eq(platformWipes.id, id), eq(platformWipes.status, 'PENDING'), isNull(platformWipes.targetUserId))).returning();
     if (!r) throw notFound('Wipe request');
     await this.audit.recordStandalone({ actor, action: r.requestedById === actor.userId ? 'platform.wipe_cancelled' : 'platform.wipe_rejected', entityType: 'platform_wipe', entityId: id, outcome: 'SUCCESS', ip });
     return r;
@@ -174,7 +175,7 @@ export class WipeService {
     if (confirm.trim() !== PLATFORM_WIPE_CONFIRM) throw badInput(`Type ${PLATFORM_WIPE_CONFIRM} to confirm.`);
     const signedOut: string[] = [];
     const result = await this.dbs.db.transaction(async (tx) => {
-      const [r] = await tx.select().from(platformWipes).where(eq(platformWipes.id, id)).for('update');
+      const [r] = await tx.select().from(platformWipes).where(and(eq(platformWipes.id, id), isNull(platformWipes.targetUserId))).for('update');
       if (!r || r.status !== 'PENDING') throw notFound('Wipe request');
       if (r.expiresAt < new Date()) {
         await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
@@ -185,40 +186,7 @@ export class WipeService {
       // The one place append-only ledger and consent rows may be deleted (see migration 0013). Never the audit log.
       await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
       const targets = (await tx.select({ id: users.id }).from(users).where(ne(users.role, 'SUPER_ADMIN'))).map((x) => x.id);
-      const n = (rows: unknown[]) => rows.length;
-      const counts: Record<string, number> = { accounts: targets.length };
-      if (targets.length) {
-        const sess = await tx.select({ id: sessions.id }).from(sessions).where(inArray(sessions.userId, targets));
-        signedOut.push(...sess.map((s) => s.id));
-        const accts = (await tx.select({ id: ledgerAccounts.id }).from(ledgerAccounts).where(inArray(ledgerAccounts.ownerId, targets))).map((a) => a.id);
-        const journals = accts.length
-          ? (await tx.selectDistinct({ id: ledgerPostings.journalId }).from(ledgerPostings).where(inArray(ledgerPostings.accountId, accts))).map((j) => j.id)
-          : [];
-        counts.strategyEvents = n(await tx.delete(strategyEvents).where(inArray(strategyEvents.userId, targets)).returning({ id: strategyEvents.id }));
-        counts.strategyRuns = n(await tx.delete(strategyRuns).where(inArray(strategyRuns.userId, targets)).returning({ id: strategyRuns.id }));
-        counts.strategies = n(await tx.delete(strategies).where(inArray(strategies.userId, targets)).returning({ id: strategies.id }));
-        counts.orders = n(await tx.delete(orders).where(inArray(orders.userId, targets)).returning({ id: orders.id }));
-        counts.positions = n(await tx.delete(positions).where(inArray(positions.userId, targets)).returning({ id: positions.id }));
-        counts.paymentRequests = n(await tx.delete(paymentRequests).where(inArray(paymentRequests.userId, targets)).returning({ id: paymentRequests.id }));
-        for (let i = 0; i < journals.length; i += 5000) {
-          const part = journals.slice(i, i + 5000);
-          counts.ledgerPostings = (counts.ledgerPostings ?? 0) + n(await tx.delete(ledgerPostings).where(inArray(ledgerPostings.journalId, part)).returning({ id: ledgerPostings.id }));
-        }
-        for (let i = 0; i < journals.length; i += 5000) {
-          const part = journals.slice(i, i + 5000);
-          await tx.update(paymentRequests).set({ journalId: null }).where(inArray(paymentRequests.journalId, part));
-          counts.journals = (counts.journals ?? 0) + n(await tx.delete(journalEntries).where(inArray(journalEntries.id, part)).returning({ id: journalEntries.id }));
-        }
-        if (accts.length) await tx.delete(ledgerAccounts).where(inArray(ledgerAccounts.id, accts));
-        counts.consents = n(await tx.delete(tradingConsents).where(inArray(tradingConsents.userId, targets)).returning({ id: tradingConsents.id }));
-        counts.watchlistItems = n(await tx.delete(watchlistItems).where(inArray(watchlistItems.userId, targets)).returning({ id: watchlistItems.id }));
-        counts.notifications = n(await tx.delete(notifications).where(inArray(notifications.userId, targets)).returning({ id: notifications.id }));
-        await tx.delete(deviceCredentials).where(inArray(deviceCredentials.userId, targets));
-        await tx.delete(accountWipes).where(inArray(accountWipes.userId, targets));
-        await tx.delete(sessions).where(inArray(sessions.userId, targets));
-        await tx.update(users).set({ brokerId: null }).where(inArray(users.id, targets));
-        await tx.delete(users).where(inArray(users.id, targets));
-      }
+      const counts = await this.purge(tx, targets, signedOut);
       await tx.delete(otpChallenges);
       await tx.update(platformWipes).set({ status: 'EXECUTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date(), summary: counts }).where(eq(platformWipes.id, id));
       await this.audit.record(tx, { actor, action: 'platform.wiped', entityType: 'platform_wipe', entityId: id, outcome: 'SUCCESS', ip, metadata: { requestedBy: r.requestedById, reason: r.reason, ...counts } });
@@ -227,5 +195,107 @@ export class WipeService {
     // Tell the deleted accounts' open devices to leave now.
     await this.auth.announceSignedOut(signedOut, 'Your account no longer exists.');
     return result;
+  }
+
+  /**
+   * Permanently delete these (non-Super-Admin) accounts and everything they own. Must run inside a transaction that has
+   * `SET LOCAL td.platform_wipe = 'on'` (the only way ledger and consent rows can be deleted). The audit log is never touched.
+   * Adds the deleted accounts' session ids to `signedOut` so their open devices can be told to leave.
+   */
+  private async purge(tx: Tx, targets: string[], signedOut: string[]): Promise<Record<string, number>> {
+    const n = (rows: unknown[]) => rows.length;
+    const counts: Record<string, number> = { accounts: targets.length };
+    if (!targets.length) return counts;
+    const sess = await tx.select({ id: sessions.id }).from(sessions).where(inArray(sessions.userId, targets));
+    signedOut.push(...sess.map((s) => s.id));
+    const accts = (await tx.select({ id: ledgerAccounts.id }).from(ledgerAccounts).where(inArray(ledgerAccounts.ownerId, targets))).map((a) => a.id);
+    const journals = accts.length
+      ? (await tx.selectDistinct({ id: ledgerPostings.journalId }).from(ledgerPostings).where(inArray(ledgerPostings.accountId, accts))).map((j) => j.id)
+      : [];
+    counts.strategyEvents = n(await tx.delete(strategyEvents).where(inArray(strategyEvents.userId, targets)).returning({ id: strategyEvents.id }));
+    counts.strategyRuns = n(await tx.delete(strategyRuns).where(inArray(strategyRuns.userId, targets)).returning({ id: strategyRuns.id }));
+    counts.strategies = n(await tx.delete(strategies).where(inArray(strategies.userId, targets)).returning({ id: strategies.id }));
+    counts.orders = n(await tx.delete(orders).where(inArray(orders.userId, targets)).returning({ id: orders.id }));
+    counts.positions = n(await tx.delete(positions).where(inArray(positions.userId, targets)).returning({ id: positions.id }));
+    counts.paymentRequests = n(await tx.delete(paymentRequests).where(inArray(paymentRequests.userId, targets)).returning({ id: paymentRequests.id }));
+    for (let i = 0; i < journals.length; i += 5000) {
+      const part = journals.slice(i, i + 5000);
+      counts.ledgerPostings = (counts.ledgerPostings ?? 0) + n(await tx.delete(ledgerPostings).where(inArray(ledgerPostings.journalId, part)).returning({ id: ledgerPostings.id }));
+    }
+    for (let i = 0; i < journals.length; i += 5000) {
+      const part = journals.slice(i, i + 5000);
+      await tx.update(paymentRequests).set({ journalId: null }).where(inArray(paymentRequests.journalId, part));
+      counts.journals = (counts.journals ?? 0) + n(await tx.delete(journalEntries).where(inArray(journalEntries.id, part)).returning({ id: journalEntries.id }));
+    }
+    if (accts.length) await tx.delete(ledgerAccounts).where(inArray(ledgerAccounts.id, accts));
+    counts.consents = n(await tx.delete(tradingConsents).where(inArray(tradingConsents.userId, targets)).returning({ id: tradingConsents.id }));
+    counts.watchlistItems = n(await tx.delete(watchlistItems).where(inArray(watchlistItems.userId, targets)).returning({ id: watchlistItems.id }));
+    counts.notifications = n(await tx.delete(notifications).where(inArray(notifications.userId, targets)).returning({ id: notifications.id }));
+    await tx.delete(deviceCredentials).where(inArray(deviceCredentials.userId, targets));
+    await tx.delete(accountWipes).where(inArray(accountWipes.userId, targets));
+    await tx.delete(sessions).where(inArray(sessions.userId, targets));
+    // Traders assigned to a deleted broker stay, unassigned.
+    await tx.update(users).set({ brokerId: null }).where(inArray(users.brokerId, targets));
+    await tx.update(users).set({ brokerId: null }).where(inArray(users.id, targets));
+    await tx.delete(users).where(inArray(users.id, targets));
+    return counts;
+  }
+
+  // ---------------------------------------------------------------- delete one account permanently
+  listUserDeletions(userId?: string) {
+    return this.dbs.db.select().from(platformWipes)
+      .where(userId ? eq(platformWipes.targetUserId, userId) : isNotNull(platformWipes.targetUserId))
+      .orderBy(desc(platformWipes.createdAt)).limit(50);
+  }
+
+  /** One Super Admin asks to delete a trader or broker for good; confirm = the account's username. */
+  async requestUserDeletion(actor: Actor, userId: string, reason: string, confirm: string, ip: string) {
+    const why = DELETE_REASON(reason);
+    return this.dbs.db.transaction(async (tx) => {
+      const [u] = await tx.select({ id: users.id, username: users.username, role: users.role, displayName: users.displayName }).from(users).where(eq(users.id, userId));
+      if (!u) throw notFound('Account');
+      if (u.role === 'SUPER_ADMIN') throw new AppError('FORBIDDEN', 'Super Admin accounts can’t be deleted here.');
+      if (confirm.trim().toLowerCase() !== u.username) throw badInput(`Type the username ${u.username} to confirm.`);
+      await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(and(eq(platformWipes.status, 'PENDING'), sql`${platformWipes.expiresAt} < now()`));
+      const [open] = await tx.select({ id: platformWipes.id }).from(platformWipes).where(and(eq(platformWipes.status, 'PENDING'), eq(platformWipes.targetUserId, userId))).limit(1);
+      if (open) throw new AppError('CONFLICT', 'A delete request for this account is already waiting for approval.');
+      const [r] = await tx.insert(platformWipes).values({ targetUserId: u.id, targetUsername: u.username, targetRole: u.role, requestedById: actor.userId, requestedIp: ip, reason: why, expiresAt: new Date(Date.now() + PLATFORM_WIPE_TTL_MS) }).returning();
+      await this.audit.record(tx, { actor, action: 'user.delete_requested', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username: u.username, role: u.role, reason: why, request: r.id } });
+      const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE'), ne(users.id, actor.userId)));
+      for (const a of admins) await this.notifications.notify(tx, a.id, 'user.delete_requested', `Approval needed: delete ${u.username}`, `A Super Admin asked to permanently delete ${u.displayName} (${u.username}) and all their data. Reason: ${why}. It expires in 30 minutes.`);
+      return r;
+    });
+  }
+
+  /** A different Super Admin approves: the account and all its data are deleted at once. confirm = the username. */
+  async approveUserDeletion(actor: Actor, id: string, confirm: string, ip: string) {
+    const signedOut: string[] = [];
+    const result = await this.dbs.db.transaction(async (tx) => {
+      const [r] = await tx.select().from(platformWipes).where(and(eq(platformWipes.id, id), isNotNull(platformWipes.targetUserId))).for('update');
+      if (!r || r.status !== 'PENDING') throw notFound('Delete request');
+      if (r.expiresAt < new Date()) {
+        await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
+        throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
+      }
+      if (r.requestedById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
+      if (confirm.trim().toLowerCase() !== r.targetUsername) throw badInput(`Type the username ${r.targetUsername} to confirm.`);
+      const [u] = await tx.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, r.targetUserId!)).for('update');
+      if (!u) { await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id)); throw notFound('Account'); }
+      if (u.role === 'SUPER_ADMIN') throw new AppError('FORBIDDEN', 'Super Admin accounts can’t be deleted here.');
+      await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
+      const counts = await this.purge(tx, [u.id], signedOut);
+      await tx.update(platformWipes).set({ status: 'EXECUTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date(), summary: counts }).where(eq(platformWipes.id, id));
+      await this.audit.record(tx, { actor, action: 'user.deleted', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username: r.targetUsername, role: r.targetRole, requestedBy: r.requestedById, reason: r.reason, ...counts } });
+      return counts;
+    });
+    await this.auth.announceSignedOut(signedOut, 'Your account no longer exists.');
+    return result;
+  }
+
+  async rejectUserDeletion(actor: Actor, id: string, ip: string) {
+    const [r] = await this.dbs.db.update(platformWipes).set({ status: 'REJECTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date() }).where(and(eq(platformWipes.id, id), eq(platformWipes.status, 'PENDING'), isNotNull(platformWipes.targetUserId))).returning();
+    if (!r) throw notFound('Delete request');
+    await this.audit.recordStandalone({ actor, action: r.requestedById === actor.userId ? 'user.delete_cancelled' : 'user.delete_rejected', entityType: 'user', entityId: r.targetUserId!, outcome: 'SUCCESS', ip, metadata: { username: r.targetUsername } });
+    return r;
   }
 }

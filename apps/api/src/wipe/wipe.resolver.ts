@@ -53,10 +53,15 @@ class PlatformWipe {
   @Field() expiresAt: Date;
   @Field({ nullable: true, description: 'JSON counts of what was deleted.' }) summary?: string;
   @Field() createdAt: Date;
+  @Field(() => ID, { nullable: true, description: 'Set for a single-account delete.' }) targetUserId?: string;
+  @Field({ nullable: true }) targetUsername?: string;
+  @Field({ nullable: true }) targetRole?: string;
 }
 
-const toPlatform = (r: { id: string; status: string; requestedById: string; reason: string; decidedById: string | null; decidedAt: Date | null; expiresAt: Date; summary: unknown; createdAt: Date }): PlatformWipe => ({
+type WipeRow = { id: string; status: string; requestedById: string; reason: string; decidedById: string | null; decidedAt: Date | null; expiresAt: Date; summary: unknown; createdAt: Date; targetUserId: string | null; targetUsername: string | null; targetRole: string | null };
+const toPlatform = (r: WipeRow): PlatformWipe => ({
   ...r, decidedById: r.decidedById ?? undefined, decidedAt: r.decidedAt ?? undefined, summary: r.summary ? JSON.stringify(r.summary) : undefined,
+  targetUserId: r.targetUserId ?? undefined, targetUsername: r.targetUsername ?? undefined, targetRole: r.targetRole ?? undefined,
 });
 
 @Resolver()
@@ -117,5 +122,32 @@ export class WipeResolver {
   @Mutation(() => PlatformWipe, { description: 'Reject (or, for the requester, cancel) a pending wipe.' })
   async rejectPlatformWipe(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
     return toPlatform(await this.wipe.rejectPlatform(a, id, c.ip));
+  }
+
+  // ---- Super Admin: delete one trader / broker account permanently (maker-checker)
+  @Roles('SUPER_ADMIN')
+  @Query(() => [PlatformWipe], { description: 'Delete requests for one account (userId) or all accounts.' })
+  async userDeletions(@Args('userId', { type: () => ID, nullable: true }) userId?: string) {
+    return (await this.wipe.listUserDeletions(userId)).map(toPlatform);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @RequireStepUp()
+  @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete one trader or broker and all their data. confirm = their username. Another Super Admin must approve within 30 minutes.' })
+  async requestUserDeletion(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) userId: string, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
+    return toPlatform(await this.wipe.requestUserDeletion(a, userId, reason, confirm, c.ip));
+  }
+
+  @Roles('SUPER_ADMIN')
+  @RequireStepUp()
+  @Mutation(() => String, { description: 'A different Super Admin approves and the account is deleted. Returns JSON counts. confirm = the username.' })
+  async approveUserDeletion(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
+    return JSON.stringify(await this.wipe.approveUserDeletion(a, id, confirm, c.ip));
+  }
+
+  @Roles('SUPER_ADMIN')
+  @Mutation(() => PlatformWipe, { description: 'Reject (or, for the requester, cancel) a pending delete.' })
+  async rejectUserDeletion(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
+    return toPlatform(await this.wipe.rejectUserDeletion(a, id, c.ip));
   }
 }

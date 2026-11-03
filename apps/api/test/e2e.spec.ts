@@ -1200,6 +1200,63 @@ describe('wipe out', () => {
     expect(unbalanced.rows).toHaveLength(0);
   });
 
+  it('Super Admin deletes one broker or trader permanently: second Super Admin approves, nothing else changes', async () => {
+    const admin = await adminLogin('admin');
+    const checker = await adminLogin('checker');
+    const suA = await stepUp(admin.token, 'admin');
+    const suC = await stepUp(checker.token, 'checker');
+    const id = async (u: string) => (await pg.query(`SELECT id FROM users WHERE username = $1`, [u])).rows[0]?.id as string | undefined;
+    const broker = (await id('broker.two'))!;
+    const trader = (await id('trader.three'))!;
+    expect((await pg.query(`SELECT broker_id FROM users WHERE id = $1`, [trader])).rows[0].broker_id).toBe(broker);
+    const others = Number((await pg.query(`SELECT count(*) FROM orders WHERE user_id <> $1`, [trader])).rows[0].count);
+    const REQ = `mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id status targetUsername } }`;
+    const APPROVE = `mutation($id:ID!,$w:String!){ approveUserDeletion(id:$id, confirm:$w) }`;
+
+    // Checks on the request.
+    expect((await gql(REQ, { u: trader, r: 'Left the course', w: 'trader.three' }, { token: admin.token })).errors?.[0].extensions?.code).toBe('STEP_UP_REQUIRED');
+    expect((await gql(REQ, { u: trader, r: 'short', w: 'trader.three' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect((await gql(REQ, { u: trader, r: 'Left the course for good', w: 'trader.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect((await gql(REQ, { u: admin.id, r: 'Trying to delete an admin', w: 'admin' }, { token: checker.token, stepUp: suC })).errors?.[0].extensions?.code).toBe('FORBIDDEN');
+
+    // Broker first: their trader stays, unassigned.
+    const rb = await gql(REQ, { u: broker, r: 'Broker contract ended', w: 'broker.two' }, { token: admin.token, stepUp: suA });
+    expect(rb.data.requestUserDeletion).toMatchObject({ status: 'PENDING', targetUsername: 'broker.two' });
+    expect((await gql(REQ, { u: broker, r: 'Broker contract ended', w: 'broker.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('CONFLICT');
+    expect((await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('FORBIDDEN');
+    expect((await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.one' }, { token: checker.token, stepUp: suC })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
+    const okB = await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.two' }, { token: checker.token, stepUp: suC });
+    expect(okB.errors).toBeUndefined();
+    expect(await id('broker.two')).toBeUndefined();
+    expect((await pg.query(`SELECT broker_id FROM users WHERE id = $1`, [trader])).rows[0].broker_id).toBeNull();
+
+    // Then a trader with orders, positions history, ledger and a past wipe.
+    const rt = await gql(REQ, { u: trader, r: 'Left the course for good', w: 'trader.three' }, { token: admin.token, stepUp: suA });
+    const okT = await gql(APPROVE, { id: rt.data.requestUserDeletion.id, w: 'TRADER.THREE' }, { token: checker.token, stepUp: suC });
+    expect(okT.errors).toBeUndefined();
+    const counts = JSON.parse(okT.data.approveUserDeletion);
+    expect(counts.accounts).toBe(1);
+    expect(counts.orders).toBeGreaterThan(0);
+    expect(counts.journals).toBeGreaterThan(0);
+    tokenCache.delete('trader.three'); tokenCache.delete('broker.two');
+    expect(await id('trader.three')).toBeUndefined();
+    for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'watchlist_items', 'account_wipes', 'sessions']) {
+      expect((await pg.query(`SELECT count(*)::int n FROM ${tbl} WHERE user_id = $1`, [trader])).rows[0].n).toBe(0);
+    }
+    expect((await pg.query(`SELECT count(*)::int n FROM ledger_accounts WHERE owner_id = $1`, [trader])).rows[0].n).toBe(0);
+    // Nobody else's data changed, and every remaining journal still balances.
+    expect(Number((await pg.query(`SELECT count(*) FROM orders`)).rows[0].count)).toBe(others);
+    expect((await pg.query(`SELECT journal_id FROM ledger_postings GROUP BY journal_id HAVING SUM(amount_minor) <> 0`)).rows).toHaveLength(0);
+    const login3 = await gql(`mutation{ login(username:"trader.three", password:"${PW}"){ mfaRequired } }`);
+    expect(login3.errors?.[0].extensions?.code).toBe('UNAUTHENTICATED');
+    // The audit log keeps who deleted whom, and the request history stays readable.
+    expect((await pg.query(`SELECT count(*)::int n FROM audit_events WHERE action = 'user.deleted'`)).rows[0].n).toBe(2);
+    const hist = (await gql(`query($u:ID){ userDeletions(userId:$u){ status targetUsername summary } }`, { u: trader }, { token: admin.token })).data.userDeletions;
+    expect(hist[0]).toMatchObject({ status: 'EXECUTED', targetUsername: 'trader.three' });
+    // Data reset history is unaffected by single deletes.
+    expect((await gql(`{ platformWipes { id } }`, {}, { token: admin.token })).data.platformWipes).toHaveLength(0);
+  });
+
   it('Super Admin full wipe needs a second Super Admin, then deletes all trader and broker data but keeps the audit log', async () => {
     const admin = await adminLogin('admin');
     const checker = await adminLogin('checker');

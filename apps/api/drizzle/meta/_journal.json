@@ -113,6 +113,13 @@
       "when": 1793641423121,
       "tag": "0015_fees_encryption",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793728018411,
+      "tag": "0016_user_delete",
+      "breakpoints": true
     }
   ]
 }
