@@ -9,7 +9,8 @@
  *   BOOTSTRAP_ADMIN_RESET      "true" to set a new password on an EXISTING Super Admin (also unlocks it and signs it out)
  *   BOOTSTRAP_ADMIN_RESET_MFA  "true" to also remove its authenticator (re-enrol on next sign-in), e.g. a lost phone
  *   BOOTSTRAP_DELETE_OTHER_ACCOUNTS  a label such as 2026-11-03: permanently delete EVERY other account (other Super
- *                              Admins, brokers, traders) and all their data, keeping only this Super Admin. Runs once
+ *                              Admins, brokers, traders) and all data (settings back to defaults, bank/UPI details,
+ *                              instruments, price history), keeping only this Super Admin. Runs once
  *                              per label (recorded in platform_wipes and the audit log), so a restart never repeats it.
  *
  * The password is never printed or logged. Without RESET an existing account is never changed.
@@ -23,7 +24,7 @@ import * as schema from '../src/db/schema';
 import { deviceCredentials, otpChallenges, platformWipes, sessions, users } from '../src/db/schema';
 import { AuditService } from '../src/audit/audit.service';
 import type { DbService } from '../src/db/db';
-import { purgeAccounts } from '../src/wipe/wipe.service';
+import { clearPlatformData, purgeAccounts } from '../src/wipe/wipe.service';
 import { PasswordService } from '../src/auth/password.service';
 import { USERNAME_RE } from '../src/users/users.service';
 
@@ -78,13 +79,13 @@ async function deleteOtherAccounts(db: ReturnType<typeof drizzle<typeof schema>>
     if (!admin || admin.role !== 'SUPER_ADMIN') throw new Error(`bootstrap-admin: "${keep}" must be an existing Super Admin.`);
     await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
     const targets = (await tx.select({ id: users.id }).from(users).where(ne(users.id, admin.id))).map((u) => u.id);
-    const c = await purgeAccounts(tx, targets, []);
+    const c = { ...(await purgeAccounts(tx, targets, [])), ...(await clearPlatformData(tx)) };
     await tx.delete(otpChallenges);
     await tx.insert(platformWipes).values({ status: 'EXECUTED', requestedById: admin.id, reason, decidedById: admin.id, decidedAt: new Date(), expiresAt: new Date(), summary: c });
     await audit.record(tx, { actor: { userId: admin.id, role: 'SUPER_ADMIN' }, action: 'platform.bootstrap_cleared', entityType: 'platform_wipe', outcome: 'SUCCESS', metadata: { kept: keep, label, ...c } });
     return c;
   });
-  console.log(`bootstrap-admin: deleted ${counts.accounts} other account(s) and their data; only "${keep}" is left. Remove BOOTSTRAP_DELETE_OTHER_ACCOUNTS now.`);
+  console.log(`bootstrap-admin: deleted ${counts.accounts} other account(s), all trading data, settings, bank/UPI details, instruments and price history; only "${keep}" is left. Remove the BOOTSTRAP_* variables now.`);
 }
 
 main().catch((e) => { console.error((e as Error).message); process.exit(1); });

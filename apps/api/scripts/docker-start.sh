@@ -7,6 +7,10 @@ $TS scripts/migrate.ts
 if [ -n "$BOOTSTRAP_ADMIN_USERNAME" ]; then
   $TS scripts/bootstrap-admin.ts || echo "bootstrap-admin: not applied (see the message above); the API starts anyway."
 fi
+# No instruments (a fresh database or after a full reset): load them from Dhan's public scrip master.
+if $TS scripts/instruments-empty.ts; then
+  $TS scripts/sync-dhan-instruments.ts || echo "instruments: sync failed; the API starts anyway."
+fi
 # Demo accounts only when asked for explicitly (SEED_DEMO_ACCOUNTS=true), never in production.
 if [ "$SEED_DEMO_ACCOUNTS" = "true" ] && [ -n "$SEED_PASSWORD" ] && [ "$NODE_ENV" != "production" ]; then
   $TS scripts/seed.ts

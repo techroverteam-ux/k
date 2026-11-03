@@ -53,8 +53,10 @@ async function ask(prompt: string, hide = false): Promise<string> {
 const hidden = (prompt: string) => ask(prompt, true);
 
 async function main() {
-  const url = process.env.DATABASE_URL || (await hidden('Database connection string (from Neon → Connect): '));
-  if (!/^postgres(ql)?:\/\//.test(url)) throw new Error('That is not a postgres:// connection string.');
+  const raw = (process.env.DATABASE_URL || (await hidden('Database connection string (from Neon → Connect): '))).replace(/^['"]|['"]$/g, '');
+  if (!/^postgres(ql)?:\/\//.test(raw)) throw new Error('That is not a postgres:// connection string.');
+  // pg already treats sslmode=require as verify-full (encrypted, certificate checked); say so to silence its warning.
+  const url = raw.replace(/([?&])sslmode=(require|prefer|verify-ca)\b/, '$1sslmode=verify-full');
   const pool = new Pool({ connectionString: url, max: 1, ssl: dbSsl(url, 'production'), application_name: 'tradedesk-reset' });
   const db = drizzle(pool, { schema });
   try {
@@ -116,5 +118,14 @@ async function main() {
 }
 
 main()
-  .catch((e) => { console.error(`\n${(e as Error).message}`); process.exitCode = 1; })
+  .catch((e) => {
+    // Show the database's own reason (wrong password, unknown host, ...), never the connection string.
+    const err = e as Error & { cause?: Error & { code?: string } };
+    const why = (err.cause?.message ?? err.message).replace(/\.$/, "");
+    const hint = /password authentication failed/i.test(why) ? ' The password in the connection string is wrong: copy a fresh one from Neon → Connect.'
+      : /ENOTFOUND|getaddrinfo/i.test(why) ? ' The database address could not be found: check the connection string and your internet connection.'
+      : /does not exist/i.test(why) ? ' The tables are missing: this database has not been set up by the app yet.' : '';
+    console.error(`\nCould not finish: ${why}.${hint} Nothing was changed.`);
+    process.exitCode = 1;
+  })
   .finally(() => rl.close());
