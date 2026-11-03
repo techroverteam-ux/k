@@ -69,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled tradingMode signupEnabled maxWatchlists minDeposit apiVersion } }`)
         .then((d) => setSettings(d.appSettings))
         .catch(() => undefined);
-      if (await refreshSession()) { requestSplash(); await reload(); }
+      if (await refreshSession()) { requestSplash('restore'); await reload(); }
       setLoading(false);
     })();
   }, [reload, router]);
