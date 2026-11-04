@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { gql } from '@/lib/api';
+import { gql, pollingPaused } from '@/lib/api';
 import { shortSymbol } from '@/lib/format';
 
 interface Pulse { instrumentId: string; symbol: string; name: string; exchange: string; ltp: string; change: string; changePct: string; source: string }
 
-const POLL_MS = 3000;
+/** Sign-in page prices: every 10 s while the tab is visible; skipped while the API asks clients to slow down (429). */
+const POLL_MS = 10_000;
 /** Shown while the feed is waking up: names only, never made-up prices. */
 const WAITING: { sym: string; name: string }[] = [
   { sym: 'BANKNIFTY', name: 'Nifty Bank Index' }, { sym: 'GOLD', name: 'Gold (1 kg)' }, { sym: 'SILVER', name: 'Silver (30 kg)' },
@@ -60,7 +61,7 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' |
       }
     };
     void load();
-    const t = setInterval(() => { if (!document.hidden) void load(); }, POLL_MS);
+    const t = setInterval(() => { if (!document.hidden && !pollingPaused()) void load(); }, POLL_MS);
     return () => { alive = false; clearInterval(t); };
   }, []);
 
