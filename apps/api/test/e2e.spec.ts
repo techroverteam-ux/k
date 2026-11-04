@@ -1164,6 +1164,36 @@ describe('broker commission percentage', () => {
   });
 });
 
+describe('broker creates a trader with an opening amount', () => {
+  it('goes to the Super Admin as a request; approving activates the account and credits the amount once', async () => {
+    const b = await login('broker.one');
+    const tok = { token: b.accessToken };
+    const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id status brokerId openingAmount } }`;
+    const base = { username: 'trader.opening', displayName: 'Opening Trader', role: 'TRADER', tempPassword: 'Trad3r!Open#26' };
+    expect(code(await gql(CREATE, { i: base }, tok))).toBe('BAD_USER_INPUT'); // amount required from a broker
+    expect(code(await gql(CREATE, { i: { ...base, openingAmount: '1000' } }, tok))).toBe('BAD_USER_INPUT'); // below the minimum
+    const r = await gql(CREATE, { i: { ...base, openingAmount: '75000' } }, tok);
+    expect(r.data.createUser).toMatchObject({ status: 'PENDING', openingAmount: '75000.00' });
+    const id = r.data.createUser.id;
+    const admin = await adminLogin('admin');
+    const n = await pg.query(`SELECT n.title, n.body FROM notifications n JOIN users u ON u.id = n.user_id WHERE u.username = 'admin' AND n.kind = 'user.review' ORDER BY n.created_at DESC LIMIT 1`);
+    expect(n.rows[0].body).toContain('trader.opening');
+    expect(n.rows[0].body).toContain('75,000');
+    const seen = await gql(`query($id:ID!){ user(id:$id){ openingAmount status } }`, { id }, { token: admin.token });
+    expect(seen.data.user).toMatchObject({ openingAmount: '75000.00', status: 'PENDING' });
+    const su = await stepUp(admin.token, 'admin');
+    const ap = await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token, stepUp: su });
+    expect(ap.data.approveUser.status).toBe('ACTIVE');
+    const pay = await pg.query(`SELECT status, amount_minor::text AS amt, requested_by_id, reviewed_by_id FROM payment_requests WHERE user_id = $1`, [id]);
+    expect(pay.rows).toHaveLength(1);
+    expect(pay.rows[0]).toMatchObject({ status: 'POSTED', amt: '7500000', requested_by_id: b.user.id });
+    const bal = await pg.query(`SELECT COALESCE(SUM(p.amount_minor),0)::text AS s FROM ledger_postings p JOIN ledger_accounts a ON a.id = p.account_id WHERE a.owner_id = $1`, [id]);
+    expect(bal.rows[0].s).toBe('7500000');
+    expect(code(await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token, stepUp: su }))).toBe('CONFLICT');
+    expect((await pg.query(`SELECT count(*)::int AS n FROM payment_requests WHERE user_id = $1`, [id])).rows[0].n).toBe(1);
+  });
+});
+
 describe('wipe out', () => {
   const PLACE = `mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status } }`;
   let instrumentId: string;

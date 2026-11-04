@@ -298,6 +298,11 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 220px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e2); padding: var(--s2); z-index: 40; animation: pop 0.12s ease-out; }
 .menu a, .menu button { display: flex; width: 100%; align-items: center; gap: var(--s3); height: 40px; padding: 0 var(--s3); border: 0; background: none; border-radius: var(--r-md); cursor: pointer; text-align: left; font-size: var(--fs-md); }
 .menu a:hover, .menu button:hover { background: var(--bg-2); }
+.cell-v { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.menu-float { position: fixed; top: auto; right: auto; z-index: 1000; max-width: calc(100vw - 16px); }
+.menu button svg { flex: none; color: var(--text-2); }
+.menu .neg svg { color: var(--neg); }
+.menu button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .suggest { position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e2); z-index: 40; max-height: 380px; overflow: auto; padding: var(--s1) 0; }
 .suggest a, .suggest li[role='option'] { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s4); cursor: pointer; }
 .suggest [aria-selected='true'], .suggest a:hover { background: var(--bg-2); }
@@ -472,6 +477,8 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
   .t.resp td { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); height: auto; min-height: 28px; padding: 2px 0; border: 0; text-align: right; }
   .t.resp td.r { text-align: right; }
   .t.resp td[data-label]::before { content: attr(data-label); color: var(--text-3); font-size: var(--fs-xs); text-align: left; flex-shrink: 0; }
+  .t.resp td.empty-sm { display: none; }
+  .t.resp .cell-v { align-items: flex-end; }
   .t.resp td.lead { display: block; text-align: left; padding-bottom: var(--s2); }
   .t.resp td.acts { justify-content: flex-start; padding-top: var(--s2); }
   .t.resp td.acts > * { justify-content: flex-start !important; flex-wrap: wrap !important; }

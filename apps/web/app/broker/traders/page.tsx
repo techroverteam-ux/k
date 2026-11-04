@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { CreateUserDialog, Person, USER_FIELDS, type UserRow } from '@/components/accounts';
 import { Icon } from '@/components/icons';
 import { Chips, Empty, ErrorState, PageHead, Pager, SkeletonRows, Status } from '@/components/ui';
-import { when } from '@/lib/format';
+import { inr, when } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 
 const SIZE = 20;
@@ -34,13 +34,13 @@ export default function BrokerTraders() {
           <>
             <div className="table-wrap">
               <table className="t resp">
-                <thead><tr><th>Trader</th><th>Status</th><th className="hide-sm">Mobile</th><th className="hide-sm">Joined</th><th /></tr></thead>
+                <thead><tr><th>Trader</th><th>Status</th><th className="hide-sm">Mobile</th><th>Requested</th><th /></tr></thead>
                 <tbody>{items.map((u) => (
                   <tr key={u.id}>
                     <td className="lead"><Person u={u} href={`/broker/traders/${u.id}`} /></td>
-                    <td data-label="Status"><Status value={u.status} /></td>
+                    <td data-label="Status"><span className="cell-v"><Status value={u.status} />{u.status === 'PENDING' && u.openingAmount && <span className="sub num">Opening ₹{inr(u.openingAmount)}</span>}</span></td>
                     <td className="t2 num hide-sm">{u.phone ?? '—'}</td>
-                    <td className="t2 sm num hide-sm">{when(u.createdAt)}</td>
+                    <td data-label="Requested" className="t2 sm num">{when(u.createdAt)}</td>
                     <td className="r acts"><Link className="btn btn-sm" href={`/broker/traders/${u.id}`}>View</Link></td>
                   </tr>
                 ))}</tbody>

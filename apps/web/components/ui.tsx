@@ -275,25 +275,52 @@ export function Pager({ page, total, size, onPage }: { page: number; total: numb
   );
 }
 
-/** Overflow menu for secondary row actions. */
-export function RowMenu({ label, items }: { label: string; items: { label: string; onClick: () => void; danger?: boolean }[] }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+/**
+ * Overflow menu for secondary row actions. The menu is drawn on top of the page (a portal, fixed position), so a table
+ * or card that scrolls or clips can't hide it; it opens upward when there isn't room below.
+ */
+export type RowMenuItem = { label: string; onClick: () => void; danger?: boolean; icon?: IconName };
+export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] }) {
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; right?: number; left?: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const open = !!pos;
+  const toggle = () => {
+    if (pos) return setPos(null);
+    const r = btn.current!.getBoundingClientRect();
+    const h = items.length * 44 + 16; // rows + padding
+    // Line up with the button's right edge; if that would run off the left side (button near the left), line up from its left.
+    const side = r.right - 228 < 8 ? { left: Math.max(8, r.left) } : { right: Math.max(8, window.innerWidth - r.right) };
+    setPos(r.bottom + 6 + h > window.innerHeight && r.top - 6 - h > 0 ? { bottom: window.innerHeight - r.top + 6, ...side } : { top: r.bottom + 6, ...side });
+  };
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', close); document.addEventListener('keydown', esc);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+    const outside = (e: MouseEvent) => !menu.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node) && setPos(null);
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPos(null); btn.current?.focus(); } };
+    // Close when the page scrolls the button away (not on the small scrolls a tap or focus can cause).
+    const start = btn.current!.getBoundingClientRect().top;
+    const away = () => { const t = btn.current?.getBoundingClientRect().top; if (t === undefined || Math.abs(t - start) > 24) setPos(null); };
+    document.addEventListener('mousedown', outside); document.addEventListener('keydown', esc);
+    window.addEventListener('scroll', away, true); window.addEventListener('resize', away);
+    menu.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    return () => {
+      document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc);
+      window.removeEventListener('scroll', away, true); window.removeEventListener('resize', away);
+    };
   }, [open]);
   return (
-    <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
-      <button className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} style={{ width: 32, height: 32 }}><Icon name="more" size={20} strokeWidth={3} /></button>
-      {open && (
-        <div className="menu" role="menu">
-          {items.map((i) => <button key={i.label} role="menuitem" className={i.danger ? 'neg' : ''} onClick={() => { setOpen(false); i.onClick(); }}>{i.label}</button>)}
-        </div>
+    <>
+      <button ref={btn} className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={toggle} style={{ width: 32, height: 32 }}><Icon name="more" size={20} strokeWidth={3} /></button>
+      {pos && createPortal(
+        <div ref={menu} className="menu menu-float" role="menu" aria-label={label} style={{ top: pos.top, bottom: pos.bottom, right: pos.right, left: pos.left }}>
+          {items.map((i) => (
+            <button key={i.label} role="menuitem" className={i.danger ? 'neg' : ''} onClick={() => { setPos(null); i.onClick(); }}>
+              {i.icon && <Icon name={i.icon} size={18} />}<span>{i.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }

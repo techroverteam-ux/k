@@ -16,6 +16,7 @@ import { requestContext } from '../common/request-context';
 import { afterWipeFor } from '../wipe/visibility';
 
 type PaymentStatus = PaymentRow['status'];
+type Tx = Parameters<Parameters<DbService['db']['transaction']>[0]>[0];
 
 /**
  * Deposit / withdrawal requests with maker-checker approval.
@@ -45,14 +46,7 @@ export class PaymentsService {
     }
     await this.policy.assertCanAccessUser(actor, userId, ip);
     if (!/^[A-Za-z0-9_-]{8,120}$/.test(input.idempotencyKey)) throw badInput('Invalid idempotency key.');
-    if (input.amountMinor <= 0n) throw badInput('Amount must be greater than zero.');
-    const maxKey = input.type === 'DEPOSIT' ? 'payments.maxDepositMinor' : 'payments.maxWithdrawalMinor';
-    const max = BigInt(await this.config.get(maxKey));
-    if (input.amountMinor > max) throw badInput(`Maximum per request is ₹${formatMoney(max)}.`);
-    if (input.type === 'DEPOSIT') {
-      const min = BigInt(await this.config.get('payments.minDepositMinor'));
-      if (input.amountMinor < min) throw badInput(`Minimum to add is ₹${(Number(min) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}.`);
-    }
+    await this.assertAmount(input.type, input.amountMinor);
 
     return this.dbs.serializable(async (tx) => {
       const [dup] = await tx
@@ -87,6 +81,38 @@ export class PaymentsService {
     });
   }
 
+  /** Per-request limits from settings: above zero, at most the maximum, and (deposits) at least the minimum. */
+  async assertAmount(type: 'DEPOSIT' | 'WITHDRAWAL', amountMinor: bigint) {
+    if (amountMinor <= 0n) throw badInput('Amount must be greater than zero.');
+    const maxKey = type === 'DEPOSIT' ? 'payments.maxDepositMinor' : 'payments.maxWithdrawalMinor';
+    const max = BigInt(await this.config.get(maxKey));
+    if (amountMinor > max) throw badInput(`Maximum per request is ₹${formatMoney(max)}.`);
+    if (type === 'DEPOSIT') {
+      const min = BigInt(await this.config.get('payments.minDepositMinor'));
+      if (amountMinor < min) throw badInput(`Minimum to add is ₹${(Number(min) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}.`);
+    }
+  }
+
+  /**
+   * Credits a new trader's opening amount inside the transaction that approves the account, so the account never
+   * goes live without it. The person who created the account is recorded as the requester (maker) and the approving
+   * Super Admin as the reviewer (checker). Safe to repeat: keyed per account.
+   */
+  async creditOpeningTx(tx: Tx, actor: Actor, u: { id: string; mode: 'SIMULATED' | 'LIVE'; createdById: string | null; openingAmountMinor: bigint | null }, ip: string) {
+    if (!u.openingAmountMinor || u.openingAmountMinor <= 0n) return null;
+    const key = `opening-${u.id}`;
+    const requestedById = u.createdById ?? actor.userId;
+    let [p] = await tx.select().from(paymentRequests).where(and(eq(paymentRequests.requestedById, requestedById), eq(paymentRequests.idempotencyKey, key)));
+    if (!p) {
+      [p] = await tx
+        .insert(paymentRequests)
+        .values({ userId: u.id, type: 'DEPOSIT', mode: u.mode, amountMinor: u.openingAmountMinor, idempotencyKey: key, requestedById, reviewNote: 'Opening amount for the new account', requestedIp: ip, requestId: requestContext.get()?.requestId })
+        .returning();
+      await this.audit.record(tx, { actor, action: 'payment.deposit_requested', entityType: 'payment', entityId: p.id, outcome: 'SUCCESS', ip, metadata: { userId: u.id, amount: u.openingAmountMinor, mode: u.mode, opening: true, requestedBy: requestedById } });
+    }
+    return this.approveTx(tx, actor, p.id, 'Opening amount, credited on account approval', ip);
+  }
+
   /** Withdrawable = cash − margin in use − other pending withdrawals. */
   private async available(tx: Parameters<Parameters<DbService['db']['transaction']>[0]>[0], userId: string, cashAccountId: string, excludePaymentId?: string) {
     const bal = await this.ledger.balance(tx, cashAccountId);
@@ -108,7 +134,11 @@ export class PaymentsService {
 
   /** Checker: a Super Admin who is neither the requester nor the account owner. Posts atomically. */
   async approve(actor: Actor, id: string, note: string | undefined, ip: string) {
-    return this.dbs.serializable(async (tx) => {
+    return this.dbs.serializable((tx) => this.approveTx(tx, actor, id, note, ip));
+  }
+
+  private async approveTx(tx: Tx, actor: Actor, id: string, note: string | undefined, ip: string) {
+    {
       const [p] = await tx.select().from(paymentRequests).where(eq(paymentRequests.id, id)).for('update');
       if (!p) throw notFound('Payment request');
       if (p.status === 'POSTED') return p; // idempotent re-approval
@@ -151,7 +181,7 @@ export class PaymentsService {
       await this.audit.record(tx, { actor, action: 'payment.approved', entityType: 'payment', entityId: p.id, outcome: 'SUCCESS', ip, metadata: { journalId: j.id, amount: p.amountMinor, type: p.type, requestedBy: p.requestedById } });
       await this.notifications.notify(tx, p.userId, 'payment.posted', `${p.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'} approved`, `₹${formatMoney(p.amountMinor)} has been ${p.type === 'DEPOSIT' ? 'credited' : 'debited'}${p.mode === 'SIMULATED' ? ' (virtual)' : ''}.`);
       return done;
-    });
+    }
   }
 
   async reject(actor: Actor, id: string, note: string, ip: string) {

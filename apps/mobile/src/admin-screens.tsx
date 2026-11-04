@@ -19,8 +19,8 @@ import {
   StatusBadge, T, Tabs, toast, useQuery, VList,
 } from './ui';
 
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId commissionPct mfaEnabled createdAt phone';
-export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
 const ROLE: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 const useBrokers = () => useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
@@ -44,7 +44,7 @@ const UserItem = memo(function UserItem({ u, broker }: { u: UserRow; broker?: st
     <ListRow onPress={() => router.push(`/admin-user/${u.id}`)} label={`${u.displayName}, ${ROLE[u.role]}, ${u.status}`}
       left={<View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: t.brandSoft, alignItems: 'center', justifyContent: 'center' }}><T v="sm" c="brand" w="700">{initials(u.displayName)}</T></View>}
       title={<Row gap={6}><T w="600" numberOfLines={1} style={{ flexShrink: 1 }}>{u.displayName}</T>{u.isDemo ? <Badge text="Demo" /> : null}</Row>}
-      sub={`${u.username} · ${ROLE[u.role]}${broker ? ` · broker ${broker}` : ''}`}
+      sub={`${u.username} · ${ROLE[u.role]}${u.brokerName ?? broker ? ` · broker ${u.brokerName ?? broker}` : ''}${u.status === 'PENDING' ? `\nRequested ${when(u.createdAt)}${u.createdByName ? ` by ${u.createdByName}` : ''}${u.openingAmount ? ` · opening ₹${inr(u.openingAmount)}` : ''}` : ''}`}
       right={<StatusBadge v={u.status} />} />
   );
 });
@@ -81,9 +81,14 @@ export function AdminUsersScreen() {
   );
 }
 
-function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '', commissionPct: '' });
+/** New account. A broker uses it to ask for a trader account (with the opening amount); a Super Admin approves it. */
+export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
+  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '', commissionPct: '', openingAmount: '' });
   const sole = useSoleAdmin();
+  const { me, settings } = useAuth();
+  const asBroker = me?.role === 'BROKER';
+  const minOpen = Number(settings?.minDeposit ?? 50000);
+  const minLabel = minOpen.toLocaleString('en-IN');
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -93,12 +98,13 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : null,
     commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : null,
+    openingAmount: f.role === 'TRADER' && (asBroker || f.openingAmount.trim()) && !(/^\d{1,12}(\.\d{1,2})?$/.test(f.openingAmount.trim()) && Number(f.openingAmount) >= minOpen) ? `Enter at least ₹${minLabel}` : null,
   };
   const bad = Object.values(errs).some(Boolean);
   const e = (k: keyof typeof errs) => (touched ? errs[k] : null);
   return (
-    <Sheet visible title="New account" sub={sole ? 'It can sign in straight away.' : 'It can sign in after a Super Admin approves it.'} onClose={onClose}>
-      <Chips value={f.role} onChange={(role) => setF({ ...f, role })} items={[{ k: 'TRADER', label: 'Trader' }, { k: 'BROKER', label: 'Broker' }]} />
+    <Sheet visible title={asBroker ? 'Add trader' : 'New account'} sub={asBroker ? 'Sent to the Super Admin. When they approve, the trader can sign in and the opening amount is added to their balance.' : sole ? 'It can sign in straight away.' : 'It can sign in after a Super Admin approves it.'} onClose={onClose}>
+      {!asBroker && <Chips value={f.role} onChange={(role) => setF({ ...f, role })} items={[{ k: 'TRADER', label: 'Trader' }, { k: 'BROKER', label: 'Broker' }]} />}
       <Field label="Full name" value={f.displayName} maxLength={120} onChangeText={(v) => setF({ ...f, displayName: v })} error={e('displayName')} />
       <Field label="Username" autoCapitalize="none" autoCorrect={false} value={f.username} onChangeText={(v) => setF({ ...f, username: v.toLowerCase() })} error={e('username')} />
       <Field label="Mobile (optional)" keyboardType="phone-pad" maxLength={10} value={f.phone} onChangeText={(v) => setF({ ...f, phone: v.replace(/\D/g, '') })} error={e('phone')} />
@@ -106,15 +112,16 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
       {f.role === 'TRADER' && brokers.length > 0 && (
         <View style={{ gap: 6 }}><T v="sm" c="text2" w="500">Broker</T><Chips value={f.brokerId} onChange={(brokerId) => setF({ ...f, brokerId })} items={[{ k: '', label: 'None' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} /></View>
       )}
+      {f.role === 'TRADER' && <Field label={`Opening amount (₹)${asBroker ? '' : ' — optional'}`} keyboardType="decimal-pad" placeholder={minLabel} maxLength={15} value={f.openingAmount} onChangeText={(v) => setF({ ...f, openingAmount: v.replace(/[^\d.]/g, '') })} error={e('openingAmount')} hint={`Minimum ₹${minLabel}. Added to the trader’s balance when the account is approved.`} />}
       <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={f.tempPassword} onChangeText={(v) => setF({ ...f, tempPassword: v })} error={e('tempPassword')} hint="Use three of: lowercase, uppercase, digits, symbols. Share it privately." />
       {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title="Create account" busy={busy} onPress={async () => {
+      <Button kind="primary" size="lg" title={asBroker ? 'Send for approval' : 'Create account'} busy={busy} onPress={async () => {
         setTouched(true);
         if (bad) return;
         setBusy(true); setErr(null);
         try {
-          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined } });
-          toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose();
+          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+          toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose();
         } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }} />
     </Sheet>
@@ -143,14 +150,15 @@ export function AdminUserScreen({ id }: { id: string }) {
         <View style={{ flex: 1, gap: 4 }}><T v="h2">{x.displayName}</T><Row gap={S[2]}><T v="sm" c="text2">{x.username} · {ROLE[x.role]}</T><StatusBadge v={x.status} /></Row></View>
       </Row>
       <Lines lines={[
-        ['Created', when(x.createdAt)], ['Two-step verification', x.mfaEnabled ? 'On' : 'Off'],
-        ...(x.role === 'TRADER' ? [['Broker', brokerName ? `${brokerName.displayName} (${brokerName.username})` : 'None'] as [string, string]] : []),
+        [x.status === 'PENDING' ? 'Requested' : 'Created', `${when(x.createdAt)}${x.createdByName ? ` by ${x.createdByName}` : ''}`], ['Two-step verification', x.mfaEnabled ? 'On' : 'Off'],
+        ...(x.status === 'PENDING' && x.openingAmount ? [['Opening amount', `₹${inr(x.openingAmount)}`] as [string, string]] : []),
+        ...(x.role === 'TRADER' ? [['Broker', brokerName ? `${brokerName.displayName} (${brokerName.username})` : x.brokerName ?? 'None'] as [string, string]] : []),
         ...(x.role === 'BROKER' ? [['Commission', x.commissionPct ? `${Number(x.commissionPct)}%` : 'Platform default'] as [string, string]] : []),
         ...(x.phone ? [['Mobile', x.phone] as [string, string]] : []),
       ]} />
       {self ? <Notice>This is your own account. Use Profile to change your password or devices.</Notice> : (
         <Section title="Actions">
-          {x.status === 'PENDING' && <ActionRow icon="check" tone="pos" label="Approve account" sub="Lets them sign in" onPress={() => setAct('approve')} />}
+          {x.status === 'PENDING' && <ActionRow icon="check" tone="pos" label="Approve account" sub={x.openingAmount ? `Lets them sign in and adds ₹${inr(x.openingAmount)}` : 'Lets them sign in'} onPress={() => setAct('approve')} />}
           {x.status === 'ACTIVE' && <ActionRow icon="lock" tone="neg" label="Suspend account" sub="Signs them out and blocks sign-in" onPress={() => setAct('suspend')} />}
           {x.status === 'SUSPENDED' && <ActionRow icon="check" tone="pos" label="Reactivate account" sub="Lets them sign in again" onPress={() => setAct('reactivate')} />}
           {x.role === 'BROKER' && <ActionRow icon="briefcase" label="Change commission" sub={x.commissionPct ? `Now ${Number(x.commissionPct)}%` : 'Now the platform default'} onPress={() => setAct('commission')} />}
@@ -207,7 +215,8 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
   const title = { approve: 'Approve account?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?', commission: 'Change commission' }[act];
   return (
     <Sheet visible title={title} sub={`${u.displayName} (${u.username})`} onClose={onClose}>
-      {act === 'approve' && <T c="text2">They can sign in as soon as you approve.</T>}
+      {act === 'approve' && <T c="text2">{u.openingAmount ? `They can sign in as soon as you approve, and ₹${inr(u.openingAmount)} is added to their balance.` : 'They can sign in as soon as you approve.'}</T>}
+      {act === 'approve' && <Lines lines={[['Type', ROLE[u.role]], ...(u.brokerName ? [['Broker', u.brokerName] as [string, string]] : []), ...(u.createdByName ? [['Requested by', u.createdByName] as [string, string]] : []), ['Requested on', when(u.createdAt)], ...(u.openingAmount ? [['Opening amount', `₹${inr(u.openingAmount)}`] as [string, string]] : [])]} />}
       {(act === 'suspend' || act === 'reactivate') && <Field label="Reason (recorded in the audit log)" value={reason} onChangeText={setReason} maxLength={200} hint="At least 5 characters" />}
       {act === 'broker' && <Chips value={broker} onChange={setBroker} items={[{ k: '', label: 'No broker' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} />}
       {act === 'password' && <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={pw} onChangeText={setPw} hint="At least 10 characters. They’ll be signed out and should change it after signing in." />}
@@ -221,7 +230,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
       {err && <Notice tone="err">{err}</Notice>}
       <Row>
         <Button block title="Cancel" onPress={onClose} />
-        {act === 'approve' && <Button block kind="primary" title="Approve" busy={busy} onPress={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: u.id }, 'Account approved')} />}
+        {act === 'approve' && <Button block kind="primary" title="Approve" busy={busy} onPress={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: u.id }, u.openingAmount ? `Account approved and ₹${inr(u.openingAmount)} added` : 'Account approved')} />}
         {act === 'suspend' && <Button block kind="sell" title="Suspend" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$s:UserStatus!,$r:String!){ setUserStatus(userId:$id, status:$s, reason:$r){ id } }`, { id: u.id, s: 'SUSPENDED', r: reason.trim() }, 'Account suspended')} />}
         {act === 'reactivate' && <Button block kind="primary" title="Reactivate" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$s:UserStatus!,$r:String!){ setUserStatus(userId:$id, status:$s, reason:$r){ id } }`, { id: u.id, s: 'ACTIVE', r: reason.trim() }, 'Account reactivated')} />}
         {act === 'broker' && <Button block kind="primary" title="Save" busy={busy} disabled={broker === (u.brokerId ?? '')} onPress={() => run(`mutation($t:ID!,$b:ID){ assignTraderToBroker(traderId:$t, brokerId:$b){ id } }`, { t: u.id, b: broker || null }, 'Broker updated')} />}

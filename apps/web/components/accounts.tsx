@@ -1,5 +1,6 @@
 'use client';
 import { useSoleAdmin } from '@/lib/sole-admin';
+import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@/lib/hooks';
@@ -8,8 +9,8 @@ import { Icon } from './icons';
 import { LedgerTable, OrdersTable, PAYMENT_FIELDS, PaymentDialog, PortfolioSummary, PositionsTable, type Payment } from './trading';
 import { Dialog, Empty, ErrorState, SkeletonRows, Status, Tabs, useToast } from './ui';
 
-export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId commissionPct mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct mfaEnabled createdAt phone';
 /** "40.00" → "40%"; empty for non-brokers. Brokers without their own value use the platform default. */
 export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPct'>) => (u.role !== 'BROKER' ? '' : u.commissionPct ? `${Number(u.commissionPct)}% commission` : 'default commission');
 export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
@@ -26,8 +27,12 @@ export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username
 
 /** Create a broker or trader. Accounts start PENDING until a Super Admin approves them. */
 export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: ('BROKER' | 'TRADER')[]; brokers?: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commissionPct: '' });
+  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commissionPct: '', openingAmount: '' });
   const sole = useSoleAdmin();
+  const { me, settings } = useAuth();
+  const asBroker = me?.role === 'BROKER';
+  const minOpen = Number(settings?.minDeposit ?? 50000);
+  const minLabel = minOpen.toLocaleString('en-IN');
   const [touched, setTouched] = useState(false);
   const m = useMutation(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`);
   const toast = useToast();
@@ -38,17 +43,18 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : '',
     email: f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email) ? 'Enter a valid email' : '',
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : '',
+    openingAmount: f.role === 'TRADER' && (asBroker || f.openingAmount.trim()) && !(/^\d{1,12}(\.\d{1,2})?$/.test(f.openingAmount.trim()) && Number(f.openingAmount) >= minOpen) ? `Enter at least ₹${minLabel}` : '',
     commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : '',
   };
   const bad = Object.values(errs).some(Boolean);
   const E = ({ k }: { k: keyof typeof errs }) => (touched && errs[k] ? <span className="err">{errs[k]}</span> : null);
   return (
-    <Dialog title="Create account" sub={sole ? 'The account can sign in straight away.' : 'New accounts can sign in after a Super Admin approves them.'} onClose={onClose}>
+    <Dialog title={asBroker ? 'Add trader' : 'Create account'} sub={asBroker ? 'This sends a request to the Super Admin. When they approve it, the trader can sign in and the opening amount is added to their balance.' : sole ? 'The account can sign in straight away.' : 'New accounts can sign in after a Super Admin approves them.'} onClose={onClose}>
       <form className="stack" noValidate onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
         if (bad) return;
-        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined } });
-        if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose(); }
+        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+        if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose(); }
       }}>
         {roles.length > 1 && (
           <div className="field"><label htmlFor="role">Account type</label>
@@ -75,13 +81,22 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
             <select id="br" className="input" value={f.brokerId} onChange={set('brokerId')}><option value="">No broker</option>{brokers.map((b) => <option key={b.id} value={b.id}>{b.username}</option>)}</select>
           </div>
         )}
+        {f.role === 'TRADER' && (
+          <div className="field"><label htmlFor="oa">Opening amount{asBroker ? '' : ' (optional)'}</label>
+            <div className="input-icon" style={{ maxWidth: 240 }}>
+              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>₹</span>
+              <input id="oa" className="input num" inputMode="decimal" placeholder={minLabel} value={f.openingAmount} onChange={(e) => setF({ ...f, openingAmount: e.target.value.replace(/[^\d.]/g, '') })} aria-invalid={touched && !!errs.openingAmount} style={{ paddingLeft: 28 }} />
+            </div>
+            {touched && errs.openingAmount ? <E k="openingAmount" /> : <span className="hint">Minimum ₹{minLabel}. Added to the trader’s balance when the account is approved.</span>}
+          </div>
+        )}
         <div className="field"><label htmlFor="tp">Temporary password</label><input id="tp" className="input" type="password" autoComplete="new-password" value={f.tempPassword} onChange={set('tempPassword')} aria-invalid={touched && !!errs.tempPassword} />
           {touched && errs.tempPassword ? <E k="tempPassword" /> : <span className="hint">Use three of: lowercase, uppercase, digits, symbols. Share it privately.</span>}
         </div>
         {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}
         <div className="actions" style={{ marginTop: 4 }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={m.pending}>{m.pending ? 'Creating…' : 'Create account'}</button>
+          <button className="btn btn-primary" disabled={m.pending}>{m.pending ? (asBroker ? 'Sending…' : 'Creating…') : asBroker ? 'Send for approval' : 'Create account'}</button>
         </div>
       </form>
     </Dialog>

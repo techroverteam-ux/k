@@ -59,6 +59,8 @@ export const users = pgTable(
     brokerId: uuid('broker_id').references((): AnyPgColumn => users.id, { onDelete: 'restrict' }),
     /** Brokers only: their share of the brokerage their traders pay, in basis points (4000 = 40%). Empty: the platform default (broker.commissionShareBps). */
     commissionShareBps: integer('commission_share_bps'),
+    /** Traders only: the opening amount asked for when the account was created (paise); credited when the account is approved. */
+    openingAmountMinor: money('opening_amount_minor'),
     mfaSecretEnc: text('mfa_secret_enc'),
     mfaEnabled: boolean('mfa_enabled').notNull().default(false),
     failedLoginCount: integer('failed_login_count').notNull().default(0),

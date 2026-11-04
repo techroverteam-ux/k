@@ -5,7 +5,7 @@ import { CreateUserDialog, Person, pctLabel, ROLE_LABEL, USER_FIELDS, type UserR
 import { PendingDeletions, UserActionButtons, useUserActions } from '@/components/admin';
 import { Icon } from '@/components/icons';
 import { Chips, Empty, ErrorState, PageHead, Pager, SkeletonRows, Status, Tabs } from '@/components/ui';
-import { when } from '@/lib/format';
+import { inr, when } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 
 const SIZE = 25;
@@ -28,7 +28,7 @@ function Users() {
   const reset = () => setPage(0);
   return (
     <>
-      <PageHead title="Accounts" sub="Brokers and traders. New accounts need a second Super Admin to approve them.">
+      <PageHead title="Accounts" sub="Brokers and traders. Traders added by a broker wait here for your approval, with their opening amount.">
         <button className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={18} />Create account</button>
       </PageHead>
       <PendingDeletions onDone={refetch} />
@@ -44,15 +44,15 @@ function Users() {
           <>
             <div className="table-wrap">
               <table className="t resp">
-                <thead><tr><th>Account</th><th>Type</th><th className="hide-sm">Broker</th><th>Status</th><th className="hide-sm">2-step</th><th className="hide-md">Created</th><th className="r">Actions</th></tr></thead>
+                <thead><tr><th>Account</th><th>Type</th><th>Broker</th><th>Status</th><th>{status === 'PENDING' ? 'Requested' : 'Created'}</th><th className="hide-sm">2-step</th><th className="r">Actions</th></tr></thead>
                 <tbody>{data!.users.items.map((u) => (
                   <tr key={u.id}>
                     <td className="lead"><Person u={u} href={`/admin/users/${u.id}`} />{u.isDemo && <span className="badge info" style={{ marginTop: 4 }}>Demo</span>}</td>
-                    <td data-label="Type">{ROLE_LABEL[u.role]}{u.role === 'BROKER' && <span className="sub" style={{ display: 'block' }}>{pctLabel(u)}</span>}</td>
-                    <td className="t2 hide-sm">{u.role === 'TRADER' ? brokerName(u.brokerId) ?? '—' : ''}</td>
-                    <td data-label="Status"><Status value={u.status} /></td>
+                    <td data-label="Type"><span className="cell-v">{ROLE_LABEL[u.role]}{u.role === 'BROKER' && <span className="sub">{pctLabel(u)}</span>}</span></td>
+                    <td data-label="Broker" className={u.role === 'TRADER' ? 't2' : 't2 empty-sm'}>{u.role === 'TRADER' ? (u.brokerName ?? brokerName(u.brokerId) ?? 'No broker') : '—'}</td>
+                    <td data-label="Status"><span className="cell-v"><Status value={u.status} />{u.status === 'PENDING' && u.openingAmount && <span className="sub num">Opening ₹{inr(u.openingAmount)}</span>}</span></td>
+                    <td data-label={u.status === 'PENDING' ? 'Requested' : 'Created'} className="t2 sm num"><span className="cell-v">{when(u.createdAt)}{u.createdByName && <span className="sub">by {u.createdByName}</span>}</span></td>
                     <td className="hide-sm">{u.mfaEnabled ? <span className="badge ok">On</span> : <span className="badge">Off</span>}</td>
-                    <td className="t2 sm num hide-md">{when(u.createdAt)}</td>
                     <td className="r acts"><UserActionButtons u={u} open={open} /></td>
                   </tr>
                 ))}</tbody>

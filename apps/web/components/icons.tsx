@@ -46,6 +46,8 @@ export const ICON_PATHS = {
   type: 'M5 6V4h14v2M12 4v16M9 20h6',
   bold: 'M7 4h6a4 4 0 0 1 0 8H7z M7 12h7a4 4 0 0 1 0 8H7z',
   book: 'M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5Z M4 19a2 2 0 0 1 2-2h13',
+  trash: 'M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6 M10 11v6 M14 11v6',
+  swap: 'M7 4 3 8l4 4 M3 8h14 M17 20l4-4-4-4 M21 16H7',
   key: 'M14 10a4 4 0 1 0-3.5 4L9 16v2H7v2H4v-3l6.5-6.5A4 4 0 0 0 14 10Z M15.5 8.5h.01',
   external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
   calendar: 'M4 6h16v14H4z M4 10h16 M8 3v4M16 3v4',

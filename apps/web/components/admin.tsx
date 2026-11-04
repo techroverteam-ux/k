@@ -4,11 +4,11 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { gql } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { when } from '@/lib/format';
+import { inr, when } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 import { ROLE_LABEL, type UserRow } from './accounts';
 import { Icon } from './icons';
-import { Confirm, Dialog, RowMenu, useToast } from './ui';
+import { Confirm, Dialog, RowMenu, type RowMenuItem, useToast } from './ui';
 
 type Kind = 'approve' | 'suspend' | 'reactivate' | 'assign' | 'reset' | 'delete' | 'commission';
 
@@ -42,9 +42,10 @@ export function useUserActions(onDone: () => void) {
 
   let node = null;
   if (act?.kind === 'approve') node = (
-    <Confirm title="Approve this account?" sub="They can sign in as soon as you approve." lines={[['Name', act.u.displayName], ['Username', act.u.username], ['Type', ROLE_LABEL[act.u.role]]]}
+    <Confirm title="Approve this account?" sub={act.u.openingAmount ? `They can sign in as soon as you approve, and ₹${inr(act.u.openingAmount)} is added to their balance.` : 'They can sign in as soon as you approve.'}
+      lines={[['Name', act.u.displayName], ['Username', act.u.username], ['Type', ROLE_LABEL[act.u.role]], ...(act.u.brokerName ? [['Broker', act.u.brokerName] as [string, string]] : []), ...(act.u.createdByName ? [['Requested by', act.u.createdByName] as [string, string]] : []), ['Requested on', when(act.u.createdAt)], ...(act.u.openingAmount ? [['Opening amount', `₹${inr(act.u.openingAmount)}`] as [string, string]] : [])]}
       confirmLabel="Approve account" pending={busy} error={err} onClose={close}
-      onConfirm={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: act.u.id }, 'Account approved')} />
+      onConfirm={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: act.u.id }, act.u.openingAmount ? `Account approved and ₹${inr(act.u.openingAmount)} added` : 'Account approved')} />
   );
   if (act?.kind === 'suspend' || act?.kind === 'reactivate') {
     const s = act.kind === 'suspend';
@@ -108,12 +109,12 @@ export function useUserActions(onDone: () => void) {
 
 export function UserActionButtons({ u, open }: { u: UserRow; open: (k: Kind, u: UserRow) => void }) {
   if (u.role === 'SUPER_ADMIN') return <span className="t3">Managed by operations</span>;
-  const more = [
-    ...(u.role === 'TRADER' ? [{ label: 'Change broker', onClick: () => open('assign', u) }] : []),
-    ...(u.role === 'BROKER' ? [{ label: 'Change commission', onClick: () => open('commission', u) }] : []),
-    { label: 'Reset password', onClick: () => open('reset', u) },
-    ...(u.status === 'ACTIVE' ? [{ label: 'Suspend account', onClick: () => open('suspend', u), danger: true }] : []),
-    { label: 'Delete permanently', onClick: () => open('delete', u), danger: true },
+  const more: RowMenuItem[] = [
+    ...(u.role === 'TRADER' ? [{ label: 'Change broker', icon: 'swap' as const, onClick: () => open('assign', u) }] : []),
+    ...(u.role === 'BROKER' ? [{ label: 'Change commission', icon: 'percent' as const, onClick: () => open('commission', u) }] : []),
+    { label: 'Reset password', icon: 'key', onClick: () => open('reset', u) },
+    ...(u.status === 'ACTIVE' ? [{ label: 'Suspend account', icon: 'lock' as const, onClick: () => open('suspend', u), danger: true }] : []),
+    { label: 'Delete permanently', icon: 'trash', onClick: () => open('delete', u), danger: true },
   ];
   return (
     <div className="row" style={{ gap: 4, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>

@@ -1,6 +1,8 @@
 import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength } from 'class-validator';
 import { soleAdminMayApprove } from '../common/maker-checker';
 import { DbService } from '../db/db';
+import { inArray } from 'drizzle-orm';
+import { users, type UserRow } from '../db/schema';
 import { Transform } from 'class-transformer';
 import { RX } from '../common/validation';
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -11,7 +13,8 @@ import { Ctx, CurrentActor, RequireStepUp, Roles } from '../common/context';
 import { badInput } from '../common/errors';
 import { AdminOverview, CommissionReport } from '../common/gql-types';
 import { clampLimit } from '../common/mappers';
-import { formatMoney } from '../common/money';
+import { formatMoney, parseMoney } from '../common/money';
+import { PaymentsService } from '../payments/payments.service';
 import { ReconciliationService } from '../reconciliation/reconciliation.service';
 import { RoleGql, UserPage, UserStatusGql, UserType } from './user.types';
 import { UsersService } from './users.service';
@@ -26,6 +29,7 @@ class CreateUserInput {
   @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID('all', { message: 'Invalid broker.' }) brokerId?: string;
   @Field({ description: 'Temporary password; the user should change it on first sign-in.' }) @Length(10, 128, { message: 'Password must be 10–128 characters.' }) tempPassword: string;
   @Field({ nullable: true, description: 'Brokers only (required): their share of their traders\' brokerage, in percent, e.g. "40".' }) @IsOptional() @MaxLength(8) commissionPct?: string;
+  @Field({ nullable: true, description: 'Traders only: opening amount in rupees, e.g. "50000". Required when a broker creates the trader; credited when the account is approved.' }) @IsOptional() @Matches(RX.money, { message: 'Enter an amount with up to 2 decimals.' }) openingAmount?: string;
 }
 
 @Resolver()
@@ -34,7 +38,13 @@ export class UsersResolver {
     private readonly users: UsersService,
     private readonly recon: ReconciliationService,
     private readonly dbs: DbService,
+    private readonly payments: PaymentsService,
   ) {}
+
+  /** Approve an account and, in the same transaction, credit its opening amount (if one was asked for). */
+  private approveWithOpening(a: Actor, id: string, ip: string) {
+    return this.users.approve(a, id, ip, (tx, u) => this.payments.creditOpeningTx(tx, a, u, ip));
+  }
 
   @Roles('SUPER_ADMIN', 'BROKER')
   @Query(() => UserPage, { name: 'users', description: 'Admins see everyone; brokers see only their assigned traders.' })
@@ -48,21 +58,41 @@ export class UsersResolver {
     @Args('offset', { type: () => Int, nullable: true }) offset?: number,
   ): Promise<UserPage> {
     const r = await this.users.list(a, { role, status, search, brokerId, limit: clampLimit(limit), offset: Math.max(0, Math.min(offset ?? 0, 100_000)) });
-    return { items: r.items.map((u) => UserType.from(u, a)), total: r.total };
+    return { items: await this.withNames(r.items.map((u) => UserType.from(u, a)), r.items, a), total: r.total };
+  }
+
+  /** Adds the broker's name and (for Super Admins) who asked for the account, in one lookup for the whole page. */
+  private async withNames(out: UserType[], rows: UserRow[], a: Actor) {
+    const ids = [...new Set(rows.flatMap((u) => [u.brokerId, a.role === 'SUPER_ADMIN' ? u.createdById : null]).filter((x): x is string => !!x))];
+    if (!ids.length) return out;
+    const names = new Map((await this.dbs.db.select({ id: users.id, username: users.username, displayName: users.displayName }).from(users).where(inArray(users.id, ids))).map((n) => [n.id, n.displayName || n.username]));
+    rows.forEach((u, i) => {
+      if (u.brokerId) out[i].brokerName = names.get(u.brokerId);
+      if (a.role === 'SUPER_ADMIN' && u.createdById) out[i].createdByName = names.get(u.createdById);
+    });
+    return out;
   }
 
   @Roles('SUPER_ADMIN', 'BROKER')
   @Query(() => UserType)
   async user(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
-    return UserType.from(await this.users.get(a, id, c.ip), a);
+    const u = await this.users.get(a, id, c.ip);
+    return (await this.withNames([UserType.from(u, a)], [u], a))[0];
   }
 
   @Roles('SUPER_ADMIN', 'BROKER')
-  @Mutation(() => UserType, { description: 'Creates a PENDING account. A different Super Admin must approve it.' })
+  @Mutation(() => UserType, { description: 'Creates a PENDING account (a broker: a request to the Super Admin, with the opening amount). Approving it activates the account and credits the opening amount.' })
   async createUser(@CurrentActor() a: Actor, @Args('input') input: CreateUserInput, @Ctx() c: GqlContext) {
-    const u = await this.users.create(a, input, c.ip);
+    let openingAmountMinor: bigint | null = null;
+    if (input.role === 'TRADER' && input.openingAmount?.trim()) {
+      try { openingAmountMinor = parseMoney(input.openingAmount); } catch { throw badInput('Enter a valid opening amount (up to 2 decimals).'); }
+      await this.payments.assertAmount('DEPOSIT', openingAmountMinor);
+    } else if (input.role === 'TRADER' && a.role === 'BROKER') {
+      throw badInput('Enter the opening amount for this trader.');
+    }
+    const u = await this.users.create(a, { ...input, openingAmountMinor }, c.ip);
     // Only one Super Admin (single-admin mode): accounts they create are active straight away.
-    if (a.role === 'SUPER_ADMIN' && (await soleAdminMayApprove(this.dbs.db))) return UserType.from(await this.users.approve(a, u.id, c.ip), a);
+    if (a.role === 'SUPER_ADMIN' && (await soleAdminMayApprove(this.dbs.db))) return UserType.from(await this.approveWithOpening(a, u.id, c.ip), a);
     return UserType.from(u, a);
   }
 
@@ -77,7 +107,7 @@ export class UsersResolver {
   @RequireStepUp()
   @Mutation(() => UserType)
   async approveUser(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
-    return UserType.from(await this.users.approve(a, id, c.ip), a);
+    return UserType.from(await this.approveWithOpening(a, id, c.ip), a);
   }
 
   @Roles('SUPER_ADMIN')

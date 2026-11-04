@@ -1,3 +1,4 @@
+import { formatMoney } from '../common/money';
 import { Field, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import type { UserRow } from '../db/schema';
 import { maskPhone } from '../auth/sms.provider';
@@ -35,6 +36,9 @@ export class UserType {
   @Field() isDemo: boolean;
   @Field(() => ID, { nullable: true }) brokerId?: string;
   @Field({ nullable: true, description: 'Brokers: commission share in percent (e.g. "40.00"); empty = platform default. Shown to Super Admins and the broker.' }) commissionPct?: string;
+  @Field({ nullable: true, description: "Traders: their broker's name." }) brokerName?: string;
+  @Field({ nullable: true, description: 'Who asked for this account (Super Admins only).' }) createdByName?: string;
+  @Field({ nullable: true, description: 'Traders: opening amount asked for at creation (rupees, e.g. "50000.00"); credited when the account is approved. Shown to Super Admins, the trader\'s broker and the trader.' }) openingAmount?: string;
   @Field() mfaEnabled: boolean;
   @Field() termsAccepted: boolean;
   @Field() createdAt: Date;
@@ -54,6 +58,7 @@ export class UserType {
       isDemo: u.isDemo,
       brokerId: u.brokerId ?? undefined,
       commissionPct: full && u.role === 'BROKER' && u.commissionShareBps !== null ? (u.commissionShareBps / 100).toFixed(2) : undefined,
+      openingAmount: u.openingAmountMinor && viewer && (full || u.brokerId === viewer.userId) ? formatMoney(u.openingAmountMinor) : undefined,
       mfaEnabled: u.mfaEnabled,
       termsAccepted: !!u.termsAcceptedAt,
       createdAt: u.createdAt,

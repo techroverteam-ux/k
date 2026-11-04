@@ -9,7 +9,9 @@ import { AuditService } from '../audit/audit.service';
 import { PasswordService } from '../auth/password.service';
 import { ConfigService } from '../config-mgmt/config.service';
 import { DbService } from '../db/db';
-import { journalEntries, ledgerAccounts, ledgerPostings, orders, paymentRequests, positions, sessions, users, type Role, deviceCredentials } from '../db/schema';
+import { journalEntries, ledgerAccounts, ledgerPostings, orders, paymentRequests, positions, sessions, users, type Role, type UserRow, deviceCredentials } from '../db/schema';
+
+type Tx = Parameters<Parameters<DbService['db']['transaction']>[0]>[0];
 import { LedgerService } from '../ledger/ledger.service';
 import { MarketDataService } from '../market/market-data.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -71,7 +73,7 @@ export class UsersService {
    * Maker step. Super Admin can create brokers and traders; a broker can create traders under itself.
    * New accounts start PENDING and must be approved by a (different) Super Admin.
    */
-  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string }, ip: string) {
+  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string; openingAmountMinor?: bigint | null }, ip: string) {
     const username = input.username.trim().toLowerCase();
     if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     if (input.role === 'SUPER_ADMIN') throw forbidden('Super Admin accounts are provisioned by operations, not via the API.');
@@ -83,9 +85,11 @@ export class UsersService {
     const email = input.email ? normalizeEmail(input.email) : null;
     const hash = await this.passwords.hash(input.tempPassword);
     return this.dbs.serializable(async (tx) => {
+      let brokerName: string | undefined;
       if (brokerId) {
         const [b] = await tx.select().from(users).where(and(eq(users.id, brokerId), eq(users.role, 'BROKER')));
         if (!b) throw badInput('Broker not found.');
+        brokerName = b.displayName || b.username;
       }
       const [exists] = await tx
         .select({ id: users.id })
@@ -102,6 +106,7 @@ export class UsersService {
           ...emailColumns(email),
           brokerId: brokerId ?? null,
           commissionShareBps,
+          openingAmountMinor: input.role === 'TRADER' ? (input.openingAmountMinor ?? null) : null,
           passwordHash: hash,
           status: 'PENDING',
           mode: 'SIMULATED',
@@ -109,13 +114,19 @@ export class UsersService {
         })
         .returning();
       await this.ledger.cashAccount(tx, u.id, 'SIMULATED');
-      await this.audit.record(tx, { actor, action: 'user.created', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username, role: input.role, brokerId, ...(commissionShareBps !== null ? { commissionShareBps } : {}) } });
+      await this.audit.record(tx, { actor, action: 'user.created', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username, role: input.role, brokerId, ...(commissionShareBps !== null ? { commissionShareBps } : {}), ...(u.openingAmountMinor ? { openingAmount: u.openingAmountMinor } : {}) } });
+      if (actor.role === 'BROKER') {
+        // The broker's request goes to the Super Admins: the new account, and the opening amount if one was asked for.
+        const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
+        const amt = u.openingAmountMinor ? ` with an opening amount of ₹${(Number(u.openingAmountMinor) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '';
+        for (const a of admins) await this.notifications.notify(tx, a.id, 'user.review', 'New trader account to approve', `${brokerName ?? 'A broker'} asked for ${username}${amt}.`);
+      }
       return u;
     });
   }
 
   /** Checker step for account activation. */
-  async approve(actor: Actor, userId: string, ip: string) {
+  async approve(actor: Actor, userId: string, ip: string, onApproved?: (tx: Tx, u: UserRow) => Promise<unknown>) {
     return this.dbs.serializable(async (tx) => {
       const [u] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
       if (!u) throw notFound('Account');
@@ -126,6 +137,7 @@ export class UsersService {
       }
       const [r] = await tx.update(users).set({ status: 'ACTIVE', updatedAt: new Date() }).where(eq(users.id, userId)).returning();
       await this.audit.record(tx, { actor, action: 'user.approved', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { createdBy: u.createdById, soleAdmin: u.createdById === actor.userId } });
+      if (onApproved) await onApproved(tx, r); // e.g. credit the opening amount in the same transaction
       return r;
     });
   }
