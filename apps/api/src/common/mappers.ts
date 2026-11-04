@@ -1,6 +1,7 @@
 import type { InstrumentRow, OrderRow, PaymentRow } from '../db/schema';
 import type { Quote as QuoteData } from '../market/market-data.service';
 import { formatMoney } from './money';
+import { categoryOf } from '../trading/instrument-meta';
 import { m, type Instrument, type Order, type PaymentRequest, type Quote } from './gql-types';
 
 export function toInstrument(r: InstrumentRow): Instrument {
@@ -14,6 +15,8 @@ export function toInstrument(r: InstrumentRow): Instrument {
     lotSize: r.lotSize,
     tickSize: formatMoney(BigInt(r.tickMinor)),
     lotClass: r.lotClass === 'MEGA' ? 'MEGA' : 'MINI',
+    lotLabel: r.lotLabel ?? undefined,
+    category: categoryOf(r.exchange, r.segment),
   };
 }
 

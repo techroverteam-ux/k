@@ -286,6 +286,8 @@ export const instruments = pgTable(
     lotSize: integer('lot_size').notNull().default(1),
     /** MINI or MEGA: decides the brokerage per lot (trading.brokeragePerLot / trading.brokeragePerMegaLot) and the broker's earning. */
     lotClass: varchar('lot_class', { length: 5 }).notNull().default('MINI'),
+    /** What one lot is, in words ("100 g", "5 kg", "10 barrels"). Shown with the instrument; editable by the Super Admin. */
+    lotLabel: varchar('lot_label', { length: 40 }),
     tickMinor: integer('tick_minor').notNull().default(5),
     refPriceMinor: money('ref_price_minor').notNull(),
     active: boolean('active').notNull().default(true),

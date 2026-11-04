@@ -52,6 +52,8 @@ export class Instrument {
   @Field(() => Int) lotSize: number;
   @Field() tickSize: string;
   @Field({ description: 'MINI or MEGA: decides the brokerage per lot (₹250 or ₹2,500 by default).' }) lotClass: string;
+  @Field({ nullable: true, description: 'What one lot is, in words, e.g. "100 g", "5 kg", "10 barrels".' }) lotLabel?: string;
+  @Field({ description: 'MCX, FOREX, NSE or INDICES: the tab the instrument is listed under.' }) category: string;
 }
 
 export enum CandleIntervalGql {

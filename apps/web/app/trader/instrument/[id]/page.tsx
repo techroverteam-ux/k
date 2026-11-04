@@ -17,7 +17,7 @@ interface Preview { price: string; value: string; intradayMargin: string; carryF
 function StockPage() {
   const { id } = useParams<{ id: string }>();
   const sp = useSearchParams();
-  const inst = useQuery<{ instrument: Instrument }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize } }`, { id });
+  const inst = useQuery<{ instrument: Instrument }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
   // Focus mode hides the order panel so the chart can use the full width. Remembered in this browser.
@@ -95,7 +95,8 @@ function StockPage() {
             {[
               ['Exchange', `${i.exchange} · ${i.segment}`],
               ['Expiry', i.expiry ? new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'],
-              ['Lot size', String(i.lotSize)],
+              ['One lot', i.lotLabel ?? String(i.lotSize)],
+              ...(i.category === 'MCX' ? [['Lot type', i.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot']] : []),
               ['Tick size', `₹${i.tickSize}`],
               ['Price source', q?.source === 'SIMULATED' ? 'Simulated feed' : q?.source ?? '—'],
               ['Symbol', i.symbol],
@@ -120,7 +121,7 @@ function StockPage() {
 }
 
 type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS' | 'TAKE_PROFIT';
-interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; marketHoursEnforced: boolean; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
+interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; brokeragePerLot?: string; brokeragePerMegaLot?: string; marketHoursEnforced: boolean; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
 const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
 const isTrig = (t: OType) => t === 'STOP_LOSS' || t === 'TAKE_PROFIT';
 /** Does the trigger fire when the LTP falls to it (else when it rises)? Mirrors the API. */
@@ -135,7 +136,7 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
   const toast = useToast();
   const { prefs } = usePrefs();
   const sum = useSummary();
-  const rules = useQuery<{ tradingRules: Rules }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument marketHoursEnforced sessions { exchange open close isOpen message } } }`, undefined, { pollMs: 60_000 });
+  const rules = useQuery<{ tradingRules: Rules }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument brokeragePerLot brokeragePerMegaLot marketHoursEnforced sessions { exchange open close isOpen message } } }`, undefined, { pollMs: 60_000 });
   const pos = useQuery<{ positions: { instrumentId: string; netQty: number }[] }>(`{ positions { instrumentId netQty } }`, undefined, { pollMs: 5000 });
   const [side, setSide] = useState<Side>(initialSide);
   const [type, setType] = useState<OType>('MARKET');
@@ -226,13 +227,19 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         )}
         <Chips label="Order type" value={type} onChange={(t) => { setType(t); setPrice(''); }} items={(['MARKET', 'LIMIT', 'STOP_LOSS', 'TAKE_PROFIT'] as OType[]).map((t) => ({ v: t, label: t === 'STOP_LOSS' ? 'SL' : t === 'TAKE_PROFIT' ? 'TP' : TYPE_LABEL[t], title: TYPE_LABEL[t] }))} />
         <div className="field">
-          <label htmlFor="qty">Quantity</label>
+          <label htmlFor="qty">Quantity (lots)</label>
           <div className="row" style={{ flexWrap: 'nowrap', gap: 8 }}>
             <button type="button" className="btn" aria-label="Decrease quantity" onClick={() => setQty(String(Math.max(1, (n || 1) - 1)))}>−</button>
             <input id="qty" className="input num" inputMode="numeric" style={{ textAlign: 'center' }} value={qty} aria-invalid={!!qtyErr} aria-describedby="qty-limits" onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} />
             <button type="button" className="btn" aria-label="Increase quantity" onClick={() => setQty(String((n || 0) + 1))}>+</button>
           </div>
           {qtyErr && <span className="err">{qtyErr}</span>}
+          {r && (
+            <span className="t3 xs">
+              {i.lotLabel ? `1 lot = ${i.lotLabel}${n > 1 ? ` · ${n} lots` : ''}. ` : ''}
+              {i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot') + ': ' : ''}brokerage ₹{inr((i.lotClass === 'MEGA' ? r.brokeragePerMegaLot : r.brokeragePerLot) ?? '0')} per lot to open and again to cut.
+            </span>
+          )}
           {r && (
             <div className="qty-chips" id="qty-limits">
               <button type="button" className="badge" title="Maximum quantity in one order" onClick={() => setQty(String(r.maxQtyPerOrder))}>Punch qty: {r.maxQtyPerOrder}</button>

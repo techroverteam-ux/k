@@ -11,14 +11,14 @@ import { Badge, Button, Change, Chips, Divider, Field, Lines, Mark, Notice, Row,
 
 type Side = 'BUY' | 'SELL';
 interface Preview { price: string; value: string; intradayMargin: string; carryForwardMargin: string; brokerage: string }
-interface I { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string }
+interface I { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string; lotClass?: string; lotLabel?: string; category?: string }
 
 /** Groww-style stock screen: price, live chart, performance, details, sticky Buy/Sell bar. */
 export default function StockScreen() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { id, side: s0, qty: q0 } = useLocalSearchParams<{ id: string; side?: string; qty?: string }>();
-  const inst = useQuery<{ instrument: I }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize } }`, { id });
+  const inst = useQuery<{ instrument: I }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
   const [order, setOrder] = useState<Side | null>(s0 === 'BUY' || s0 === 'SELL' ? s0 : null);
@@ -62,7 +62,7 @@ export default function StockScreen() {
       <Section title="Contract details">
         <Lines lines={[
           ['Expiry', i?.expiry ? new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'],
-          ['Lot size', i?.lotSize ?? '—'], ['Tick size', i ? `₹${i.tickSize}` : '—'], ['Price source', q?.source === 'SIMULATED' ? 'Simulated feed' : q?.source ?? '—'],
+          ['One lot', i?.lotLabel ?? i?.lotSize ?? '—'], ...(i?.category === 'MCX' ? [['Lot type', i.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot'] as [string, string]] : []), ['Tick size', i ? `₹${i.tickSize}` : '—'], ['Price source', q?.source === 'SIMULATED' ? 'Simulated feed' : q?.source ?? '—'],
         ]} />
       </Section>
       {i && order && <OrderSheet i={i} q={q} side={order} setSide={setOrder} initialQty={q0 ?? '1'} onClose={() => setOrder(null)} />}
@@ -71,7 +71,7 @@ export default function StockScreen() {
 }
 
 type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS' | 'TAKE_PROFIT';
-interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
+interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; brokeragePerLot?: string; brokeragePerMegaLot?: string; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
 const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
 const isTrig = (t: OType) => t === 'STOP_LOSS' || t === 'TAKE_PROFIT';
 const firesOnFall = (t: OType, s: Side) => (t === 'STOP_LOSS' && s === 'SELL') || (t === 'TAKE_PROFIT' && s === 'BUY');
@@ -90,7 +90,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
   const t = useTheme();
   const priv = usePrivate();
   const sum = useSummary();
-  const rules = useQuery<{ tradingRules: Rules }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument sessions { exchange open close isOpen message } } }`);
+  const rules = useQuery<{ tradingRules: Rules }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument brokeragePerLot brokeragePerMegaLot sessions { exchange open close isOpen message } } }`);
   const pos = useQuery<{ positions: { instrumentId: string; netQty: number }[] }>(`{ positions { instrumentId netQty } }`);
   const [type, setType] = useState<OType>('MARKET');
   const [qty, setQty] = useState(initialQty);
@@ -151,10 +151,11 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
             <View style={{ flex: 1.2, gap: 6 }}>
               <Row gap={4} style={{ alignItems: 'flex-end' }}>
                 <Stepper label="Decrease quantity" sign="−" onPress={() => setQty(String(Math.max(1, (n || 1) - 1)))} />
-                <View style={{ flex: 1 }}><Field label="Quantity" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} /></View>
+                <View style={{ flex: 1 }}><Field label="Quantity (lots)" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} /></View>
                 <Stepper label="Increase quantity" sign="+" onPress={() => setQty(String((n || 0) + 1))} />
               </Row>
               {qtyErr ? <T v="sm" c="neg">{qtyErr}</T> : null}
+              {r ? <T v="xs" c="text3">{`${i.lotLabel ? `1 lot = ${i.lotLabel}. ` : ''}${i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega' : 'Mini') + ' lot: ' : ''}brokerage ₹${inr((i.lotClass === 'MEGA' ? r.brokeragePerMegaLot : r.brokeragePerLot) ?? '0')} per lot to open and again to cut.`}</T> : null}
             </View>
             <View style={{ flex: 1 }}>
               {type === 'MARKET' ? <Field label="Price" editable={false} value="At market" /> : <Field label={type === 'LIMIT' ? 'Limit price' : 'Trigger (LTP)'} prefix="₹" keyboardType="decimal-pad" value={price} onChangeText={(v) => setPrice(v.replace(/[^\d.]/g, ''))} placeholder={q?.ltp} error={priceErr} />}

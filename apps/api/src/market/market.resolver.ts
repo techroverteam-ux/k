@@ -71,15 +71,27 @@ export class MarketResolver {
   }
 
   @AllowWithoutMfa()
-  @Query(() => [Instrument])
-  async searchInstruments(@Args('query') query: string, @Args('limit', { type: () => Int, nullable: true }) limit?: number) {
+  @Query(() => [Instrument], { description: 'Find instruments by symbol or name. With a category (MCX, FOREX, NSE, INDICES) and/or lot class (MINI, MEGA) and an empty query, lists that group.' })
+  async searchInstruments(
+    @Args('query') query: string,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+    @Args('category', { nullable: true }) category?: string,
+    @Args('lotClass', { nullable: true }) lotClass?: string,
+  ) {
     const s = `%${query.trim().replace(/[%_\\]/g, (x) => '\\' + x).slice(0, 30)}%`;
+    const cat =
+      category === 'MCX' ? eq(instruments.exchange, 'MCX')
+      : category === 'FOREX' ? or(eq(instruments.exchange, 'CDS'), eq(instruments.segment, 'CUR'))
+      : category === 'INDICES' ? eq(instruments.segment, 'INDEX')
+      : category === 'NSE' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('INDEX', 'CUR')`)
+      : category ? sql`false` : undefined;
+    const cls = lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined;
     const rows = await this.dbs.db
       .select()
       .from(instruments)
-      .where(and(eq(instruments.active, true), or(ilike(instruments.symbol, s), ilike(instruments.name, s))))
-      .orderBy(asc(instruments.symbol))
-      .limit(clampLimit(limit, 20, 50));
+      .where(and(eq(instruments.active, true), query.trim() ? or(ilike(instruments.symbol, s), ilike(instruments.name, s)) : undefined, cat, cls))
+      .orderBy(asc(instruments.symbol), asc(instruments.expiry))
+      .limit(clampLimit(limit, 20, category || lotClass ? 200 : 50));
     return rows.map(toInstrument);
   }
 
@@ -110,6 +122,22 @@ export class MarketResolver {
       if (m) m.lotClass = lotClass; // fees use the in-memory copy
     }
     return rows.map(toInstrument);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @Mutation(() => Instrument, { description: 'Super Admin: what one lot is, in words (e.g. "100 g"). Empty clears it.' })
+  async setInstrumentLotLabel(@CurrentActor() a: Actor, @Args('instrumentId', { type: () => ID }) id: string, @Args('lotLabel') label: string, @Ctx() c: GqlContext) {
+    const v = label.trim().replace(/\s+/g, ' ');
+    if (v.length > 40) throw badInput('Keep it short, like “100 g” or “10 barrels”.');
+    const row = await this.dbs.db.transaction(async (tx) => {
+      const [r] = await tx.update(instruments).set({ lotLabel: v || null }).where(eq(instruments.id, id)).returning();
+      if (!r) throw notFound('Instrument');
+      await this.audit.record(tx, { actor: a, action: 'instrument.lot_label_set', entityType: 'instrument', entityId: id, outcome: 'SUCCESS', ip: c.ip, metadata: { symbol: r.symbol, lotLabel: v || null } });
+      return r;
+    });
+    const m = this.market.instrument(id);
+    if (m) m.lotLabel = row.lotLabel;
+    return toInstrument(row);
   }
 
   @AllowWithoutMfa()

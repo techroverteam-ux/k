@@ -4,7 +4,7 @@
  *
  *   SEED_PASSWORD="Dev-Only-Passw0rd!" npm run db:seed
  */
-import { defaultLotClass } from '../src/trading/brokerage';
+import { defaultLotClass, defaultLotLabel } from '../src/trading/instrument-meta';
 import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { eq } from 'drizzle-orm';
@@ -35,6 +35,10 @@ const INSTRUMENTS: Array<[string, string, string, string, number, number, number
   ['GOLD', 'Gold (1 kg)', 'MCX', 'FUT', 121450, 1, 100],
   ['SILVER', 'Silver (30 kg)', 'MCX', 'FUT', 148300, 1, 100],
   ['CRUDEOIL', 'Crude Oil', 'MCX', 'FUT', 5321, 100, 100],
+  ['GOLDM', 'Gold Mini (100 g)', 'MCX', 'FUT', 121450, 1, 100],
+  ['SILVERM', 'Silver Mini (5 kg)', 'MCX', 'FUT', 148300, 1, 100],
+  ['CRUDEOILM', 'Crude Oil Mini', 'MCX', 'FUT', 5321, 1, 100],
+  ['USDINR', 'US Dollar – Indian Rupee', 'CDS', 'CUR', 88.5, 1, 1],
 ];
 
 async function main() {
@@ -49,7 +53,7 @@ async function main() {
     for (const [base, name, exchange, segment, price, lot, tick] of INSTRUMENTS) {
       await tx
         .insert(instruments)
-        .values({ symbol: `${base}26NOVFUT`, name: `${name} — Nov 26 FUT`, exchange, segment, expiry: EXPIRY, lotSize: lot, lotClass: defaultLotClass(exchange, `${base}26NOVFUT`), tickMinor: tick, refPriceMinor: BigInt(Math.round(price * 100)) })
+        .values({ symbol: `${base}26NOVFUT`, name: `${name} — Nov 26 FUT`, exchange, segment, expiry: EXPIRY, lotSize: lot, lotClass: defaultLotClass(exchange, `${base}26NOVFUT`), lotLabel: defaultLotLabel(`${base}26NOVFUT`), tickMinor: tick, refPriceMinor: BigInt(Math.round(price * 100)) })
         .onConflictDoNothing();
     }
 

@@ -29,13 +29,4 @@ export async function feeRule(config: ConfigService): Promise<FeeRule> {
   return { perLotMinor: BigInt(Math.round(perLot * 100)), megaPerLotMinor: BigInt(Math.round(mega * 100)), bps };
 }
 
-/**
- * MCX full-size contracts (GOLD, SILVER, CRUDEOIL, NATURALGAS, COPPER…) are mega lots; their mini versions
- * (GOLDM, SILVERM, SILVERMIC, CRUDEOILM, NATGASMINI, GOLDPETAL, GOLDGUINEA) and everything on NSE are mini.
- * Used when an instrument is first added; the Super Admin can change any instrument afterwards.
- */
-export function defaultLotClass(exchange: string, symbol: string): LotClass {
-  if (exchange !== 'MCX') return 'MINI';
-  const base = symbol.toUpperCase().replace(/\d{2}[A-Z]{3}FUT.*$/, '');
-  return /(M|MINI|MIC|PETAL|GUINEA)$/.test(base) ? 'MINI' : 'MEGA';
-}
+export { defaultLotClass } from './instrument-meta';

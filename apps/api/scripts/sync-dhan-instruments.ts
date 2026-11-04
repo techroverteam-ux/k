@@ -3,12 +3,13 @@
  * - Active MCX Commodity Futures (Silver, Gold, Crude Oil, Natural Gas, etc.)
  * - Top NSE liquid Equities (Reliance, TCS, HDFC Bank, Infy, SBI, etc.)
  * - Major Indices (Nifty 50, Bank Nifty, Fin Nifty)
+ * - Forex: NSE currency futures for USDINR, EURINR, GBPINR, JPYINR (stored with exchange CDS, segment CUR)
  *
  * Maps them directly into the Postgres `instruments` table with their Dhan Security IDs and segments.
  * Run with:
  *   npm --prefix apps/api run instruments:sync-dhan
  */
-import { defaultLotClass } from '../src/trading/brokerage';
+import { baseSymbol, defaultLotClass, defaultLotLabel } from '../src/trading/instrument-meta';
 import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { sql } from 'drizzle-orm';
@@ -30,8 +31,10 @@ interface ScripRow {
   tickSize: number;
   expiryDate?: Date;
   dhanSegment: string;
-  category: 'MCX_FUT' | 'NSE_EQ' | 'NSE_INDEX';
+  category: 'MCX_FUT' | 'NSE_EQ' | 'NSE_INDEX' | 'FOREX';
 }
+
+const FOREX_PAIRS = new Set(['USDINR', 'EURINR', 'GBPINR', 'JPYINR']);
 
 const TOP_NSE_SYMBOLS = new Set([
   'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'ITC',
@@ -105,6 +108,25 @@ async function downloadScripMaster(): Promise<ScripRow[]> {
       continue;
     }
 
+    // 1b. Forex: NSE currency futures (FUTCUR) for the four major INR pairs.
+    if (exch === 'NSE' && instName === 'FUTCUR' && FOREX_PAIRS.has(baseSymbol(rawSymbol))) {
+      if (expiry && expiry < now) continue;
+      parsed.push({
+        exchange: 'CDS',
+        segment: 'CUR',
+        securityId: secId,
+        instrumentName: instName,
+        tradingSymbol: rawSymbol,
+        customSymbol: customSymbol || rawSymbol,
+        lotSize: lot,
+        tickSize: tick,
+        expiryDate: expiry,
+        dhanSegment: 'NSE_CURRENCY',
+        category: 'FOREX',
+      });
+      continue;
+    }
+
     // 2. NSE Top Equities
     if (exch === 'NSE' && instName === 'EQUITY' && TOP_NSE_SYMBOLS.has(rawSymbol)) {
       parsed.push({
@@ -153,6 +175,7 @@ async function main() {
     const nseCount = scrips.filter((s) => s.exchange === 'NSE').length;
     console.log(`  - MCX Commodity Futures: ${mcxCount}`);
     console.log(`  - NSE Equities & Indices: ${nseCount}`);
+    console.log(`  - Forex (currency futures): ${scrips.filter((x) => x.category === 'FOREX').length}`);
 
     let inserted = 0;
     let updated = 0;
@@ -176,6 +199,7 @@ async function main() {
           expiry: s.expiryDate,
           lotSize: s.lotSize,
           lotClass: defaultLotClass(s.exchange, cleanSymbol),
+          lotLabel: defaultLotLabel(cleanSymbol),
           tickMinor,
           refPriceMinor: 100_000n, // ₹1,000 reference default, updated by live quotes
           active: true,

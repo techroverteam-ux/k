@@ -34,7 +34,7 @@ export const CONFIG_REGISTRY = {
   },
   'trading.marketHours': {
     schema: z.record(z.string(), z.object({ open: hhmm, close: hhmm })),
-    default: { NSE: { open: '09:17', close: '15:30' }, MCX: { open: '09:02', close: '23:30' }, INTL: { open: '03:32', close: '02:30' } },
+    default: { NSE: { open: '09:17', close: '15:30' }, MCX: { open: '09:02', close: '23:30' }, CDS: { open: '09:00', close: '17:00' }, INTL: { open: '03:32', close: '02:30' } },
     description: 'Market sessions per exchange (IST, HH:MM). A close earlier than the open means the session runs past midnight.',
   },
   'payments.minDepositMinor': { schema: minor, default: '5000000', description: 'Minimum single add-funds (deposit) request (paise). Default ₹50,000.' },

@@ -19,7 +19,26 @@ import {
 
 export interface Quote { instrumentId: string; ltp: string; bid: string; ask: string; high: string; low: string; change: string; changePct: string; ts: string; source: string }
 export const QF = 'instrumentId ltp bid ask high low change changePct ts source';
-interface Inst { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string }
+interface Inst { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string }
+const INST_FIELDS = 'id symbol name exchange segment expiry lotClass lotLabel category';
+type Cat = '' | 'MCX' | 'FOREX' | 'NSE' | 'INDICES';
+type Lot = '' | 'MINI' | 'MEGA';
+
+/** Market tabs (All · MCX · Forex · NSE · Indices) and, for MCX, Mini / Mega. */
+function MarketFilter({ cat, lot, onCat, onLot }: { cat: Cat; lot: Lot; onCat: (c: Cat) => void; onLot: (l: Lot) => void }) {
+  return (
+    <View style={{ gap: S[2] }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: S[4] }}>
+        <Chips value={cat} onChange={(c) => { onCat(c); onLot(''); }} items={[{ k: '', label: 'All' }, { k: 'MCX', label: 'MCX' }, { k: 'FOREX', label: 'Forex' }, { k: 'NSE', label: 'NSE' }, { k: 'INDICES', label: 'Indices' }]} />
+      </ScrollView>
+      {cat === 'MCX' && <Chips value={lot} onChange={onLot} items={[{ k: '', label: 'All lots' }, { k: 'MINI', label: 'Mini' }, { k: 'MEGA', label: 'Mega' }]} />}
+    </View>
+  );
+}
+
+/** "Mini · 100 g" for MCX instruments; "Lot · 1,000 USD" for others with a lot label. */
+const lotText = (i: Inst) => (i.category === 'MCX' ? `${i.lotClass === 'MEGA' ? 'Mega' : 'Mini'}${i.lotLabel ? ` · ${i.lotLabel}` : ''}` : i.lotLabel ? `Lot · ${i.lotLabel}` : '');
+const marketText = (i: Inst) => (i.category === 'FOREX' ? 'Forex' : i.category === 'INDICES' ? 'Index' : i.exchange) + (i.expiry ? ` · ${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : '');
 
 /**
  * Live quotes by instrument id. Streams only while the screen is in use; on return it re-reads a snapshot.
@@ -52,7 +71,7 @@ export function SearchButton() {
 const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void }) {
   return (
     <ListRow onPress={() => router.push(`/instrument/${i.id}`)} label={`${shortSymbol(i.symbol)}, open chart`} left={<Mark text={shortSymbol(i.symbol)} />}
-      title={<Row gap={6}><T w="600" numberOfLines={1}>{shortSymbol(i.symbol)}</T><Badge text={`${i.exchange} ${i.segment}`} /></Row>}
+      title={<Row gap={6}><T w="600" numberOfLines={1}>{shortSymbol(i.symbol)}</T><Badge text={marketText(i)} />{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}</Row>}
       sub={i.name}
       right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></View>}
       action={<IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />} />
@@ -62,14 +81,17 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; q
 /** Search every instrument; tap to open its chart, + to add it to Watchlist 1. */
 export function SearchView() {
   const [q, setQ] = useState('');
+  const [cat, setCat] = useState<Cat>('');
+  const [lot, setLot] = useState<Lot>('');
   const [res, setRes] = useState<Inst[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [added, setAdded] = useState<string[]>([]);
   useEffect(() => {
-    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:50){ id symbol name exchange segment } }`, { q: q.trim() }).then((d) => { setErr(null); setRes(d.searchInstruments); }).catch((e) => { setErr((e as Error).message); setRes([]); }), q ? 180 : 0);
+    setRes(null);
+    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ ${INST_FIELDS} } }`, { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }).then((d) => { setErr(null); setRes(d.searchInstruments); }).catch((e) => { setErr((e as Error).message); setRes([]); }), q ? 180 : 0);
     return () => clearTimeout(h);
-  }, [q, nonce]);
+  }, [q, cat, lot, nonce]);
   const wl = useQuery<{ watchlist: { instrument: { id: string } }[] }>(`{ watchlist(listIndex:0){ instrument{ id } } }`);
   const inList = useMemo(() => new Set([...(wl.data?.watchlist ?? []).map((w) => w.instrument.id), ...added]), [wl.data, added]);
   const quotes = useLiveQuotes((res ?? []).map((i) => i.id));
@@ -80,8 +102,8 @@ export function SearchView() {
   return (
     <Screen back title="Search" scroll={false}>
       <VList data={res ?? []} keyOf={(i) => i.id}
-        header={<SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. RELIANCE" autoFocus />}
-        empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={`No instruments match “${q}”`}>Try the symbol, like NIFTY or SBIN.</Empty>}
+        header={<View style={{ gap: S[3] }}><SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. GOLDM, RELIANCE" autoFocus /><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
+        empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={q ? `No instruments match “${q}”` : 'Nothing listed here yet'}>{q ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>}
         render={(i) => <SearchRow i={i} qq={quotes[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
     </Screen>
   );
@@ -297,13 +319,16 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: 0 });
   const entries = useMemo(() => (data?.watchlist ?? []).slice(0, limit ?? 100), [data, limit]);
   const [query, setQuery] = useState('');
+  const [cat, setCat] = useState<Cat>('');
+  const [lot, setLot] = useState<Lot>('');
   const [hits, setHits] = useState<Inst[] | null>(null);
-  const searching = query.trim().length > 0;
+  const searching = query.trim().length > 0 || !!cat;
   useEffect(() => {
     if (!searching) { setHits(null); return; }
-    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q: query.trim() }).then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
+    setHits(null);
+    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ ${INST_FIELDS} } }`, { q: query.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }).then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
     return () => clearTimeout(h);
-  }, [query, searching]);
+  }, [query, cat, lot, searching]);
   const q = useLiveQuotes(searching ? (hits ?? []).map((i) => i.id) : entries.map((e) => e.instrument.id));
   const inList = useMemo(() => new Set((data?.watchlist ?? []).map((e) => e.instrument.id)), [data]);
   const onAdd = useCallback(async (i: Inst) => {
@@ -320,11 +345,12 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   const top = (
     <>
       {header}
-      <SearchBox value={query} onChangeText={setQuery} placeholder="Search and add, e.g. NIFTY, RELIANCE" />
+      <SearchBox value={query} onChangeText={setQuery} placeholder="Search and add, e.g. GOLDM, NIFTY" />
+      {!limit && <View style={{ marginTop: S[2] }}><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
     </>
   );
   const state = searching
-    ? (hits === null ? <Skeleton rows={4} /> : <Empty icon="search" title={`Nothing matches “${query.trim()}”`}>Try the symbol, like NIFTY or SBIN.</Empty>)
+    ? (hits === null ? <Skeleton rows={4} /> : <Empty icon="search" title={query.trim() ? `Nothing matches “${query.trim()}”` : 'Nothing listed here yet'}>{query.trim() ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>)
     : loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>;
   const hint = !searching && entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a sell or buy price to trade. Swipe a row left to remove it.' : 'Swipe a row left to remove it.'}</T> : null;
   const sheet = (

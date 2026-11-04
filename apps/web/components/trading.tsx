@@ -11,7 +11,21 @@ import { Private, usePrefs } from '@/lib/prefs';
 import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
 
 export interface Quote { instrumentId: string; ltp: string; bid: string; ask: string; high: string; low: string; change: string; changePct: string; ts: string; source: string }
-export interface Instrument { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string }
+export interface Instrument { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string }
+
+export const CATEGORIES = [{ v: '', label: 'All' }, { v: 'MCX', label: 'MCX' }, { v: 'FOREX', label: 'Forex' }, { v: 'NSE', label: 'NSE' }, { v: 'INDICES', label: 'Indices' }] as const;
+export type CategoryV = (typeof CATEGORIES)[number]['v'];
+const expiryShort = (d?: string) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
+
+/** "Mini · 100 g" badge for MCX instruments (and the lot size of others). */
+export function LotTag({ i }: { i: Pick<Instrument, 'lotClass' | 'lotLabel' | 'category'> }) {
+  if (i.category !== 'MCX' && !i.lotLabel) return null;
+  return (
+    <span className={`badge ${i.lotClass === 'MEGA' ? 'info' : ''}`} title="What one lot is">
+      {i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega' : 'Mini') : 'Lot'}{i.lotLabel ? ` · ${i.lotLabel}` : ''}
+    </span>
+  );
+}
 export const QUOTE_FIELDS = 'instrumentId ltp bid ask high low change changePct ts source';
 
 /** Live quotes over WebSocket; seeds with a one-off fetch so the first paint has prices. */
@@ -198,15 +212,18 @@ export function Watchlist({ compact }: { compact?: boolean }) {
   const live = useLiveQuotes(entries.map((e) => e.instrument.id));
   const toast = useToast();
   const [q, setQ] = useState('');
+  const [cat, setCat] = useState<CategoryV>('');
+  const [lot, setLot] = useState<'' | 'MINI' | 'MEGA'>('');
   const [hits, setHits] = useState<Instrument[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const searching = q.trim().length > 0;
+  const searching = q.trim().length > 0 || !!cat;
   useEffect(() => {
     if (!searching) { setHits(null); return; }
-    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(`query($q:String!){ searchInstruments(query:$q, limit:20){ id symbol name exchange segment } }`, { q: q.trim() })
+    setHits(null);
+    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ id symbol name exchange segment expiry lotClass lotLabel category } }`, { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined })
       .then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
     return () => clearTimeout(t);
-  }, [q, searching]);
+  }, [q, cat, lot, searching]);
   const inList = new Set(entries.map((e) => e.instrument.id));
   const add = async (i: Instrument) => {
     setBusy(i.id);
@@ -226,16 +243,28 @@ export function Watchlist({ compact }: { compact?: boolean }) {
           <Icon name="search" size={18} />
           <input className="input" type="search" placeholder="Search and add, e.g. NIFTY, RELIANCE" aria-label="Search instruments to add to your watchlist" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }} />
         </div>
-        {searching && <button className="btn btn-sm btn-ghost" onClick={() => setQ('')}>Cancel</button>}
+        {searching && <button className="btn btn-sm btn-ghost" onClick={() => { setQ(''); setCat(''); setLot(''); }}>Cancel</button>}
       </div>
+      {!compact && (
+        <div className="wl-cats">
+          <div className="chips" role="group" aria-label="Market">
+            {CATEGORIES.map((c) => <button key={c.v} className="chip" aria-pressed={cat === c.v} onClick={() => { setCat(c.v); setLot(''); }}>{c.label}</button>)}
+          </div>
+          {cat === 'MCX' && (
+            <div className="chips" role="group" aria-label="Lot type">
+              {([['', 'All lots'], ['MINI', 'Mini'], ['MEGA', 'Mega']] as const).map(([v, l]) => <button key={v} className="chip" aria-pressed={lot === v} onClick={() => setLot(v)}>{l}</button>)}
+            </div>
+          )}
+        </div>
+      )}
       {searching ? (
-        hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? <Empty icon="search" title={`Nothing matches “${q.trim()}”`}>Try the symbol, like NIFTY or SBIN.</Empty> : (
+        hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? <Empty icon="search" title={q.trim() ? `Nothing matches “${q.trim()}”` : 'Nothing listed here yet'}>{q.trim() ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty> : (
           <div className="list list-pad">
             {hits.map((i) => (
               <div key={i.id} className="list-row">
                 <Mark text={shortSymbol(i.symbol)} />
                 <Link href={`/trader/instrument/${i.id}`} className="grow" style={{ minWidth: 0 }}>
-                  <div className="w6">{shortSymbol(i.symbol)} <span className="t3 xs">{i.exchange} {i.segment}</span></div>
+                  <div className="w6 row" style={{ gap: 6, flexWrap: 'wrap' }}>{shortSymbol(i.symbol)} <span className="t3 xs">{i.category === 'FOREX' ? 'Forex' : i.exchange}{i.expiry ? ` · ${expiryShort(i.expiry)}` : ''}</span><LotTag i={i} /></div>
                   <div className="t3 sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.name}</div>
                 </Link>
                 {inList.has(i.id)

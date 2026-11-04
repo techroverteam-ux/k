@@ -1173,6 +1173,31 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
   });
 });
 
+describe('instrument categories and lot details', () => {
+  it('lists MCX, forex, NSE and indices separately, filters mini/mega lots and shows what one lot is', async () => {
+    const t = await login('trader.two');
+    const Q = `query($c:String,$l:String){ searchInstruments(query:"", category:$c, lotClass:$l, limit:200){ symbol exchange category lotClass lotLabel } }`;
+    const mcx = (await gql(Q, { c: 'MCX' }, { token: t.accessToken })).data.searchInstruments;
+    expect(mcx.length).toBeGreaterThan(0);
+    expect(mcx.every((i: { category: string }) => i.category === 'MCX')).toBe(true);
+    const mini = (await gql(Q, { c: 'MCX', l: 'MINI' }, { token: t.accessToken })).data.searchInstruments;
+    expect(mini.map((i: { symbol: string }) => i.symbol)).toEqual(expect.arrayContaining(['GOLDM26NOVFUT', 'SILVERM26NOVFUT', 'CRUDEOILM26NOVFUT']));
+    expect(mini.find((i: { symbol: string }) => i.symbol === 'GOLDM26NOVFUT')).toMatchObject({ lotClass: 'MINI', lotLabel: '100 g' });
+    expect(mini.find((i: { symbol: string }) => i.symbol === 'SILVERM26NOVFUT').lotLabel).toBe('5 kg');
+    const mega = (await gql(Q, { c: 'MCX', l: 'MEGA' }, { token: t.accessToken })).data.searchInstruments;
+    expect(mega.find((i: { symbol: string }) => i.symbol === 'GOLD26NOVFUT')).toMatchObject({ lotClass: 'MEGA', lotLabel: '1 kg' });
+    const fx = (await gql(Q, { c: 'FOREX' }, { token: t.accessToken })).data.searchInstruments;
+    expect(fx).toEqual([expect.objectContaining({ symbol: 'USDINR26NOVFUT', category: 'FOREX', lotLabel: '1,000 USD' })]);
+    const nse = (await gql(Q, { c: 'NSE' }, { token: t.accessToken })).data.searchInstruments;
+    expect(nse.some((i: { category: string }) => i.category !== 'NSE')).toBe(false);
+    // The admin can relabel a lot.
+    const admin = await adminLogin('admin');
+    const id = (await pg.query(`SELECT id FROM instruments WHERE symbol = 'CRUDEOILM26NOVFUT'`)).rows[0].id;
+    const r = await gql(`mutation($i:ID!,$l:String!){ setInstrumentLotLabel(instrumentId:$i, lotLabel:$l){ lotLabel } }`, { i: id, l: '10 bbl' }, { token: admin.token });
+    expect(r.data.setInstrumentLotLabel.lotLabel).toBe('10 bbl');
+  });
+});
+
 describe('broker commission per lot', () => {
   it('pays the broker ₹170 per mini lot (×lots, on opening and on cutting) and lets the admin set their own amounts', async () => {
     const admin = await adminLogin('admin');
