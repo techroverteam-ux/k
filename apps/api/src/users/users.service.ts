@@ -18,6 +18,15 @@ import { OrdersService } from '../trading/orders.service';
 import { afterWipeFor } from '../wipe/visibility';
 
 /** Stored lower-case; sign-in ignores case. Letters, digits and _ . - @ #, starting with a letter. */
+/** "40" or "37.5" (percent, 0–100, up to 2 decimals) → basis points. Required for brokers. */
+export function parseCommissionPct(v?: string | number | null): number {
+  const t = String(v ?? '').trim().replace('%', '');
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(t)) throw badInput('Commission: a percentage from 0 to 100, e.g. 40 or 37.5.');
+  const bps = Math.round(Number(t) * 100);
+  if (bps > 10_000) throw badInput('Commission can’t be more than 100%.');
+  return bps;
+}
+
 export const USERNAME_RE = /^[a-z][a-z0-9_.@#-]{3,39}$/;
 
 @Injectable()
@@ -62,12 +71,13 @@ export class UsersService {
    * Maker step. Super Admin can create brokers and traders; a broker can create traders under itself.
    * New accounts start PENDING and must be approved by a (different) Super Admin.
    */
-  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string }, ip: string) {
+  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string }, ip: string) {
     const username = input.username.trim().toLowerCase();
     if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     if (input.role === 'SUPER_ADMIN') throw forbidden('Super Admin accounts are provisioned by operations, not via the API.');
     if (actor.role === 'BROKER' && input.role !== 'TRADER') throw forbidden('Brokers can only create trader accounts.');
     const brokerId = actor.role === 'BROKER' ? actor.userId : input.role === 'TRADER' ? input.brokerId : undefined;
+    const commissionShareBps = input.role === 'BROKER' ? parseCommissionPct(input.commissionPct) : null;
     this.passwords.assertStrong(input.tempPassword, username);
     const phone = input.phone ? normalizePhone(input.phone) : null;
     const email = input.email ? normalizeEmail(input.email) : null;
@@ -91,6 +101,7 @@ export class UsersService {
           ...phoneColumns(phone),
           ...emailColumns(email),
           brokerId: brokerId ?? null,
+          commissionShareBps,
           passwordHash: hash,
           status: 'PENDING',
           mode: 'SIMULATED',
@@ -98,7 +109,7 @@ export class UsersService {
         })
         .returning();
       await this.ledger.cashAccount(tx, u.id, 'SIMULATED');
-      await this.audit.record(tx, { actor, action: 'user.created', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username, role: input.role, brokerId } });
+      await this.audit.record(tx, { actor, action: 'user.created', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username, role: input.role, brokerId, ...(commissionShareBps !== null ? { commissionShareBps } : {}) } });
       return u;
     });
   }
@@ -240,10 +251,23 @@ export class UsersService {
     };
   }
 
+  /** Super Admin: change a broker's commission share (applies to reports from now on; recorded in the audit log). */
+  async setCommission(actor: Actor, brokerId: string, pct: string, ip: string) {
+    const bps = parseCommissionPct(pct);
+    return this.dbs.db.transaction(async (tx) => {
+      const [b] = await tx.select().from(users).where(eq(users.id, brokerId)).for('update');
+      if (!b || b.role !== 'BROKER') throw notFound('Broker');
+      const [u] = await tx.update(users).set({ commissionShareBps: bps, updatedAt: new Date() }).where(eq(users.id, brokerId)).returning();
+      await this.audit.record(tx, { actor, action: 'user.commission_changed', entityType: 'user', entityId: brokerId, outcome: 'SUCCESS', ip, metadata: { username: b.username, fromBps: b.commissionShareBps, toBps: bps } });
+      return u;
+    });
+  }
+
   /** Broker commissions: broker's share of simulated brokerage from assigned traders. */
   async brokerCommission(actor: Actor, brokerId: string, from: Date, to: Date) {
     if (actor.role === 'BROKER' && actor.userId !== brokerId) throw notFound('Account');
-    const share = await this.config.get('broker.commissionShareBps');
+    const [b] = await this.dbs.db.select({ bps: users.commissionShareBps }).from(users).where(and(eq(users.id, brokerId), eq(users.role, 'BROKER')));
+    const share = b?.bps ?? (await this.config.get('broker.commissionShareBps'));
     const rows = await this.dbs.db
       .select({ userId: users.id, username: users.username, fees: sql<string>`COALESCE(-SUM(${ledgerPostings.amountMinor}),0)::text` })
       .from(users)

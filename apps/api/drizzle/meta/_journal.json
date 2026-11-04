@@ -120,6 +120,13 @@
       "when": 1793728018411,
       "tag": "0016_user_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793810334266,
+      "tag": "0017_broker_commission",
+      "breakpoints": true
     }
   ]
 }

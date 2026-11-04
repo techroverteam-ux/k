@@ -30,7 +30,7 @@ export default function ConfigPage() {
   const pending = items.filter((i) => i.pending).length;
   return (
     <div className="stack" style={{ gap: 32 }}>
-      <PageHead title="Configuration" sub="Business rules stored in the database. Every change is validated and versioned, and needs a second Super Admin to approve it. Secrets never live here." />
+      <PageHead title="Configuration" sub={sole ? 'Business rules stored in the database. Every change is validated and versioned, and takes effect as soon as you save it. Secrets never live here.' : 'Business rules stored in the database. Every change is validated and versioned, and needs a second Super Admin to approve it. Secrets never live here.'} />
       {pending > 0 && <div className="notice warn"><Icon name="info" size={18} />{pending} change{pending > 1 ? 's are' : ' is'} waiting for approval.</div>}
       {loading && !data ? <SkeletonRows rows={8} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : groups.map(([g, list]) => (
         <section key={g} className="section">
@@ -53,7 +53,7 @@ export default function ConfigPage() {
                   {i.pending ? (i.pending.makerId === me?.id && !sole ? <span className="badge warn">Waiting for another admin</span> : <>
                     <button className="btn btn-sm btn-danger" onClick={() => decide(i.pending!.id, false)}>Reject</button>
                     <button className="btn btn-sm btn-primary" onClick={() => decide(i.pending!.id, true)}>Approve</button>
-                  </>) : <button className="btn btn-sm" onClick={() => setEdit(i)}>Propose change</button>}
+                  </>) : <button className="btn btn-sm" onClick={() => setEdit(i)}>{sole ? 'Change' : 'Propose change'}</button>}
                   <button className="btn btn-sm btn-ghost" onClick={() => setHist(i.key)}>History</button>
                 </div>
               </div>
@@ -61,13 +61,13 @@ export default function ConfigPage() {
           </div>
         </section>
       ))}
-      {edit && <Propose item={edit} onClose={() => setEdit(null)} onDone={refetch} />}
+      {edit && <Propose item={edit} sole={sole} onClose={() => setEdit(null)} onDone={refetch} />}
       {hist && <History k={hist} onClose={() => setHist(null)} onDone={refetch} />}
     </div>
   );
 }
 
-function Propose({ item, onClose, onDone }: { item: Item; onClose: () => void; onDone: () => void }) {
+function Propose({ item, sole, onClose, onDone }: { item: Item; sole: boolean; onClose: () => void; onDone: () => void }) {
   const [value, setValue] = useState(JSON.stringify(JSON.parse(item.valueJson), null, 2));
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -75,7 +75,7 @@ function Propose({ item, onClose, onDone }: { item: Item; onClose: () => void; o
   const toast = useToast();
   let ok = true; try { JSON.parse(value); } catch { ok = false; }
   return (
-    <Dialog title="Propose a change" sub={item.description} onClose={onClose}>
+    <Dialog title={sole ? `Change ${item.key}` : 'Propose a change'} sub={item.description} onClose={onClose}>
       <div className="stack">
         <div className="field"><label htmlFor="v">New value</label><textarea id="v" className="input num" rows={Math.min(12, value.split('\n').length + 1)} value={value} aria-invalid={!ok} onChange={(e) => setValue(e.target.value)} />{ok ? <span className="hint">JSON. Checked against the rule’s schema when you submit.</span> : <span className="err">This isn’t valid JSON yet</span>}</div>
         <div className="field"><label htmlFor="r">Reason</label><input id="r" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this changing?" /><span className="hint">Shown to the approver and kept in the history</span></div>
@@ -86,7 +86,7 @@ function Propose({ item, onClose, onDone }: { item: Item; onClose: () => void; o
             setBusy(true); setErr(null);
             try { const d = await gql<{ proposeConfigChange: { status: string } }>(`mutation($k:String!,$v:String!,$r:String!){ proposeConfigChange(key:$k, valueJson:$v, reason:$r){ id status } }`, { k: item.key, v: JSON.stringify(JSON.parse(value)), r: reason }); toast(d.proposeConfigChange.status === 'PENDING' ? 'Change sent for approval' : 'Change applied'); onDone(); onClose(); }
             catch (e) { if ((e as { code?: string }).code !== 'CANCELLED') setErr((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? 'Sending…' : 'Send for approval'}</button>
+          }}>{busy ? 'Saving…' : sole ? 'Save' : 'Send for approval'}</button>
         </div>
       </div>
     </Dialog>

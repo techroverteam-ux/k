@@ -46,20 +46,21 @@ function Audit() {
       <section className="panel">
         {loading && !data ? <SkeletonRows /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !rows.length ? <Empty icon="file" title={applied ? `No “${applied}” events` : 'No events'} /> : (
           <div className="table-wrap">
-            <table className="t resp">
-              <thead><tr><th>#</th><th>Action</th><th>Outcome</th><th className="hide-sm">Actor</th><th className="hide-sm">Target</th><th>Time</th><th><span className="sr-only">Details</span></th></tr></thead>
+            <table className="t resp feed">
+              <thead><tr><th>#</th><th>Action</th><th>Outcome</th><th className="f-break" /><th className="hide-sm">Actor</th><th className="hide-sm">Target</th><th>Time</th><th><span className="sr-only">Details</span></th></tr></thead>
               <tbody>{rows.map((e) => (
                 <Fragment key={e.id}>
-                  <tr>
-                    <td className="num t3" data-label="#">{e.seq}</td>
-                    <td className="w5" data-label="Action">{e.action}</td>
-                    <td data-label="Outcome"><Status value={e.outcome} /></td>
-                    <td className="t2 hide-sm">{e.actorRole ? e.actorRole.replace('_', ' ').toLowerCase() : 'system'}<span className="sub" style={{ display: 'block' }}>{e.ip}</span></td>
+                  <tr className="clickable" onClick={(ev) => { if (!(ev.target as HTMLElement).closest('a,button')) setOpen(open === e.id ? null : e.id); }}>
+                    <td className="num t3 f-meta">#{e.seq}</td>
+                    <td className="w5 f-main">{e.action}</td>
+                    <td className="f-badge"><Status value={e.outcome} /></td>
+                    <td className="f-break" aria-hidden="true" />
+                    <td className="t2 f-meta">{e.actorRole ? e.actorRole.replace('_', ' ').toLowerCase() : 'system'}<span className="sub" style={{ display: 'block' }}>{e.ip}</span></td>
                     <td className="t2 sm hide-sm">{e.entityType}<span className="sub" style={{ display: 'block' }}>{e.entityId?.slice(0, 13)}</span></td>
-                    <td className="t2 sm num" data-label="Time">{when(e.createdAt)}</td>
-                    <td className="r" data-label="Details"><button className="icon-btn" aria-expanded={open === e.id} aria-label="Show details" onClick={() => setOpen(open === e.id ? null : e.id)}><Icon name={open === e.id ? 'chevronDown' : 'chevronRight'} size={18} /></button></td>
+                    <td className="t2 sm num f-meta">{when(e.createdAt)}</td>
+                    <td className="r f-go"><button className="icon-btn" aria-expanded={open === e.id} aria-label="Show details" onClick={() => setOpen(open === e.id ? null : e.id)}><Icon name={open === e.id ? 'chevronDown' : 'chevronRight'} size={18} /></button></td>
                   </tr>
-                  {open === e.id && <tr><td colSpan={7} style={{ height: 'auto', padding: 16, background: 'var(--bg-2)' }}>
+                  {open === e.id && <tr className="detail"><td colSpan={8} style={{ height: 'auto', padding: 16, background: 'var(--bg-2)' }}>
                     <dl className="facts" style={{ marginBottom: 12 }}>
                       <div><dt>Time</dt><dd className="num sm">{stamp(e.createdAt)}</dd></div>
                       <div><dt>IP address</dt><dd className="num">{e.ip ?? '—'}</dd></div>

@@ -10,7 +10,7 @@ import { ROLE_LABEL, type UserRow } from './accounts';
 import { Icon } from './icons';
 import { Confirm, Dialog, RowMenu, useToast } from './ui';
 
-type Kind = 'approve' | 'suspend' | 'reactivate' | 'assign' | 'reset' | 'delete';
+type Kind = 'approve' | 'suspend' | 'reactivate' | 'assign' | 'reset' | 'delete' | 'commission';
 
 /** All Super Admin account actions with their confirmation dialogs. Step-up is prompted automatically by the API client. */
 export function useUserActions(onDone: () => void) {
@@ -26,7 +26,7 @@ export function useUserActions(onDone: () => void) {
   const toast = useToast();
   const brokers = useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
-  const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setPw(''); setTyped(''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
+  const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setPw(''); setTyped(kind === 'commission' ? (u.commissionPct ? String(Number(u.commissionPct)) : '') : ''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
   const close = () => setAct(null);
   const run = async (q: string, v: Record<string, unknown>, ok: string | ((d: Record<string, { status?: string } | undefined>) => string)) => {
     setBusy(true); setErr(null);
@@ -77,6 +77,21 @@ export function useUserActions(onDone: () => void) {
       <div className="actions"><button className="btn" onClick={close}>Cancel</button><button className="btn btn-primary" disabled={busy || pw.length < 10} onClick={() => run(`mutation($id:ID!,$p:String!){ resetUserPassword(userId:$id, tempPassword:$p) }`, { id: act.u.id, p: pw }, 'Password reset')}>{busy ? 'Resetting…' : 'Reset password'}</button></div>
     </Dialog>
   );
+  if (act?.kind === 'commission') {
+    const okPct = /^\d{1,3}(\.\d{1,2})?$/.test(typed.trim()) && Number(typed) <= 100;
+    node = (
+      <Dialog title={`Commission for ${act.u.displayName}`} sub="The broker’s share of the brokerage their traders pay. Applies to commission reports from now on." onClose={close}>
+        <div className="field"><label htmlFor="cpc">Commission</label>
+          <div className="input-icon" style={{ maxWidth: 180 }}><input id="cpc" className="input num" inputMode="decimal" placeholder="e.g. 40" value={typed} onChange={(e) => setTyped(e.target.value.replace(/[^\d.]/g, ''))} style={{ paddingLeft: 12, paddingRight: 30 }} /><span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>%</span></div>
+          <span className={typed && !okPct ? 'err' : 'hint'}>{typed && !okPct ? 'A percentage from 0 to 100, e.g. 40 or 37.5' : act.u.commissionPct ? `Now ${Number(act.u.commissionPct)}%` : 'Now using the platform default'}</span>
+        </div>
+        <ErrBox />
+        <div className="actions"><button className="btn" onClick={close}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !okPct} onClick={() => run(`mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ id } }`, { b: act.u.id, p: typed.trim() }, 'Commission updated')}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </Dialog>
+    );
+  }
   if (act?.kind === 'delete') node = (
     <Dialog title={`Delete ${act.u.displayName} permanently?`} sub={sole ? 'Erases the account and all its data right away.' : 'Erases the account and all its data. A different Super Admin must approve within 30 minutes.'} onClose={close}>
       <div className="notice err" style={{ marginBottom: 12 }}><Icon name="alert" size={18} /><span>Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of <b>{act.u.username}</b> are deleted and can’t be brought back. {act.u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}The audit log keeps a record of the delete.</span></div>
@@ -95,6 +110,7 @@ export function UserActionButtons({ u, open }: { u: UserRow; open: (k: Kind, u: 
   if (u.role === 'SUPER_ADMIN') return <span className="t3">Managed by operations</span>;
   const more = [
     ...(u.role === 'TRADER' ? [{ label: 'Change broker', onClick: () => open('assign', u) }] : []),
+    ...(u.role === 'BROKER' ? [{ label: 'Change commission', onClick: () => open('commission', u) }] : []),
     { label: 'Reset password', onClick: () => open('reset', u) },
     ...(u.status === 'ACTIVE' ? [{ label: 'Suspend account', onClick: () => open('suspend', u), danger: true }] : []),
     { label: 'Delete permanently', onClick: () => open('delete', u), danger: true },

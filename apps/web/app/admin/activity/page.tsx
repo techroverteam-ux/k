@@ -73,7 +73,7 @@ function Log({ initialIp, initialUser }: { initialIp: string; initialUser: strin
   return (
     <>
       <form className="stack" style={{ gap: 12, marginBottom: 16 }} onSubmit={(e) => { e.preventDefault(); apply(); }}>
-        <div className="row" style={{ alignItems: 'flex-end' }}>
+        <div className="row filters-row" style={{ alignItems: 'flex-end' }}>
           <div className="field filter-f" style={{ width: 180 }}><label htmlFor="f-ip">IP address</label><input id="f-ip" className="input num" placeholder="e.g. 49.36.12.4" value={ip} onChange={(e) => setIp(e.target.value)} /></div>
           <div className="field filter-f" style={{ width: 180 }}><label htmlFor="f-op">Operation</label><input id="f-op" className="input" placeholder="e.g. placeOrder" value={op} onChange={(e) => setOp(e.target.value)} /></div>
           <div className="field filter-f" style={{ width: 200 }}><label htmlFor="f-from">From</label><input id="f-from" type="datetime-local" className="input" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
@@ -94,22 +94,23 @@ function Log({ initialIp, initialUser }: { initialIp: string; initialUser: strin
       <section className="panel">
         {loading && !data ? <SkeletonRows /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !rows.length ? <Empty icon="activity" title="No requests match">Widen the dates or clear the filters.</Empty> : (
           <div className="table-wrap">
-            <table className="t resp">
-              <thead><tr><th>Time (IST)</th><th>Account</th><th>Action</th><th>IP address</th><th className="hide-md">Device</th><th>Result</th><th className="r hide-sm">ms</th><th><span className="sr-only">Details</span></th></tr></thead>
+            <table className="t resp feed">
+              <thead><tr><th>Time (IST)</th><th>Account</th><th>Action</th><th>IP address</th><th className="hide-md">Device</th><th>Result</th><th className="f-break" /><th className="r hide-sm">ms</th><th><span className="sr-only">Details</span></th></tr></thead>
               <tbody>{rows.map((r) => (
                 <Fragment key={r.id}>
                   <tr className="clickable" onClick={(e) => { if (!(e.target as HTMLElement).closest('a,button')) setOpen(open === r.id ? null : r.id); }}>
-                    <td className="num sm lead">{stamp(r.at)}</td>
-                    <td data-label="Account">{r.username ? <Link href={`/admin/users/${r.userId}`} className="w5">{r.username}</Link> : <span className="t3">Not signed in</span>}{r.role && <span className="sub" style={{ display: 'block' }}>{r.role.replace('_', ' ').toLowerCase()}</span>}</td>
-                    <td data-label="Action"><span className="w5">{actionLabel(r.opName, r.fields)}</span><span className="sub" style={{ display: 'block' }}>{r.opType}{r.fields && r.fields !== r.opName ? ` · ${r.fields}` : ''}</span></td>
-                    <td data-label="IP"><button className="btn btn-sm btn-ghost num" style={{ padding: '0 6px' }} onClick={() => setIpInfo(r.ip)} title="Who else used this IP?">{r.ip}</button></td>
+                    <td className="num sm f-meta">{stamp(r.at)}</td>
+                    <td className="f-meta">{r.username ? <Link href={`/admin/users/${r.userId}`} className="w5">{r.username}</Link> : <span className="t3">Not signed in</span>}{r.role && <span className="sub" style={{ display: 'block' }}>{r.role.replace('_', ' ').toLowerCase()}</span>}</td>
+                    <td className="f-main"><span className="w5">{actionLabel(r.opName, r.fields)}</span><span className="sub hide-sm-inline" style={{ display: 'block' }}>{r.opType}{r.fields && r.fields !== r.opName ? ` · ${r.fields}` : ''}</span></td>
+                    <td className="f-meta"><button className="btn btn-sm btn-ghost num" style={{ padding: '0 6px' }} onClick={() => setIpInfo(r.ip)} title="Who else used this IP?">{r.ip}</button></td>
                     <td className="t2 sm hide-md">{deviceLabel(r.userAgent)}{r.client && r.client !== 'other' && <span className="sub" style={{ display: 'block' }}>{r.client}</span>}</td>
-                    <td data-label="Result">{r.outcome === 'OK' ? <span className="badge ok">OK</span> : <span className="badge bad">{r.errorCode ?? 'Error'}</span>}</td>
+                    <td className="f-badge">{r.outcome === 'OK' ? <span className="badge ok">OK</span> : <span className="badge bad">{r.errorCode ?? 'Error'}</span>}</td>
+                    <td className="f-break" aria-hidden="true" />
                     <td className="r num t3 sm hide-sm">{r.durationMs ?? ''}</td>
-                    <td className="r" data-label="Details"><button className="icon-btn" aria-expanded={open === r.id} aria-label="Show details" onClick={() => setOpen(open === r.id ? null : r.id)}><Icon name={open === r.id ? 'chevronDown' : 'chevronRight'} size={18} /></button></td>
+                    <td className="r f-go"><button className="icon-btn" aria-expanded={open === r.id} aria-label="Show details" onClick={() => setOpen(open === r.id ? null : r.id)}><Icon name={open === r.id ? 'chevronDown' : 'chevronRight'} size={18} /></button></td>
                   </tr>
                   {open === r.id && (
-                    <tr><td colSpan={8} style={{ height: 'auto', padding: 16, background: 'var(--bg-2)' }}>
+                    <tr className="detail"><td colSpan={9} style={{ height: 'auto', padding: 16, background: 'var(--bg-2)' }}>
                       <dl className="facts" style={{ marginBottom: 12 }}>
                         <div><dt>Request ID</dt><dd className="num sm">{r.requestId}</dd></div>
                         <div><dt>Session</dt><dd className="num sm">{r.sessionId ?? '—'}</dd></div>

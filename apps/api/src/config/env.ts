@@ -40,6 +40,8 @@ const schema = z
      * requests (accounts, payments, settings, payment details, deletes). Step-up and the audit log still apply.
      * As soon as a second Super Admin is active, maker-checker is enforced again.
      */
+    /** API console (GraphiQL) at "/" and schema introspection. Default: on unless NODE_ENV=production. */
+    API_CONSOLE: z.enum(['true', 'false']).optional().transform((v) => (v === undefined ? undefined : v === 'true')),
     SINGLE_ADMIN_MODE: z
       .string()
       .default('true')

@@ -1,4 +1,5 @@
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
+import { ConsoleController } from './console/console.controller';
 import { Controller, Get, Injectable, Module, type ExecutionContext } from '@nestjs/common';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { inputHygienePlugin, validationPipe } from './common/validation';
@@ -124,7 +125,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
           autoSchemaFile: true,
           sortSchema: true,
           path: '/graphql',
-          introspection: !prod,
+          introspection: env().API_CONSOLE ?? !prod,
           playground: false,
           csrfPrevention: true,
           includeStacktraceInErrorResponses: false,
@@ -197,7 +198,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     }),
     AuthGuardDeps,
   ],
-  controllers: [HealthController, StatementController],
+  controllers: [HealthController, StatementController, ConsoleController],
   providers: [
     { provide: APP_GUARD, useClass: GqlThrottlerGuard },
     { provide: APP_GUARD, useClass: GqlAuthGuard },

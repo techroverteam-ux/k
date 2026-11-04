@@ -18,13 +18,14 @@ import { UsersService } from './users.service';
 
 @InputType()
 class CreateUserInput {
-  @Field() @Transform(trimLower) @Matches(RX.username, { message: 'Username: 4–40 characters, start with a letter; letters, digits, _ and . only.' }) username: string;
+  @Field() @Transform(trimLower) @Matches(RX.username, { message: 'Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.' }) username: string;
   @Field() @Transform(trim) @Length(2, 120, { message: 'Enter a name of 2–120 characters.' }) displayName: string;
   @Field(() => RoleGql) @IsEnum(RoleGql) role: RoleGql;
   @Field({ nullable: true }) @IsOptional() @Matches(RX.phoneIn, { message: 'Enter a valid mobile number.' }) phone?: string;
   @Field({ nullable: true }) @IsOptional() @IsEmail({}, { message: 'Enter a valid email address.' }) @MaxLength(254) email?: string;
   @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID('all', { message: 'Invalid broker.' }) brokerId?: string;
   @Field({ description: 'Temporary password; the user should change it on first sign-in.' }) @Length(10, 128, { message: 'Password must be 10–128 characters.' }) tempPassword: string;
+  @Field({ nullable: true, description: 'Brokers only (required): their share of their traders\' brokerage, in percent, e.g. "40".' }) @IsOptional() @MaxLength(8) commissionPct?: string;
 }
 
 @Resolver()
@@ -63,6 +64,13 @@ export class UsersResolver {
     // Only one Super Admin (single-admin mode): accounts they create are active straight away.
     if (a.role === 'SUPER_ADMIN' && (await soleAdminMayApprove(this.dbs.db))) return UserType.from(await this.users.approve(a, u.id, c.ip), a);
     return UserType.from(u, a);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @RequireStepUp()
+  @Mutation(() => UserType, { description: "Set a broker's commission share in percent (0–100)." })
+  async setBrokerCommission(@CurrentActor() a: Actor, @Args('brokerId', { type: () => ID }) id: string, @Args('commissionPct') pct: string, @Ctx() c: GqlContext) {
+    return UserType.from(await this.users.setCommission(a, id, pct, c.ip), a);
   }
 
   @Roles('SUPER_ADMIN')

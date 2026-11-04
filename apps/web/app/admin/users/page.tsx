@@ -1,7 +1,7 @@
 'use client';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { CreateUserDialog, Person, ROLE_LABEL, USER_FIELDS, type UserRow } from '@/components/accounts';
+import { CreateUserDialog, Person, pctLabel, ROLE_LABEL, USER_FIELDS, type UserRow } from '@/components/accounts';
 import { PendingDeletions, UserActionButtons, useUserActions } from '@/components/admin';
 import { Icon } from '@/components/icons';
 import { Chips, Empty, ErrorState, PageHead, Pager, SkeletonRows, Status, Tabs } from '@/components/ui';
@@ -48,7 +48,7 @@ function Users() {
                 <tbody>{data!.users.items.map((u) => (
                   <tr key={u.id}>
                     <td className="lead"><Person u={u} href={`/admin/users/${u.id}`} />{u.isDemo && <span className="badge info" style={{ marginTop: 4 }}>Demo</span>}</td>
-                    <td data-label="Type">{ROLE_LABEL[u.role]}</td>
+                    <td data-label="Type">{ROLE_LABEL[u.role]}{u.role === 'BROKER' && <span className="sub" style={{ display: 'block' }}>{pctLabel(u)}</span>}</td>
                     <td className="t2 hide-sm">{u.role === 'TRADER' ? brokerName(u.brokerId) ?? '—' : ''}</td>
                     <td data-label="Status"><Status value={u.status} /></td>
                     <td className="hide-sm">{u.mfaEnabled ? <span className="badge ok">On</span> : <span className="badge">Off</span>}</td>

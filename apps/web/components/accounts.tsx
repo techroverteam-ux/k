@@ -1,4 +1,5 @@
 'use client';
+import { useSoleAdmin } from '@/lib/sole-admin';
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@/lib/hooks';
@@ -7,8 +8,10 @@ import { Icon } from './icons';
 import { LedgerTable, OrdersTable, PAYMENT_FIELDS, PaymentDialog, PortfolioSummary, PositionsTable, type Payment } from './trading';
 import { Dialog, Empty, ErrorState, SkeletonRows, Status, Tabs, useToast } from './ui';
 
-export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId commissionPct mfaEnabled createdAt phone';
+/** "40.00" → "40%"; empty for non-brokers. Brokers without their own value use the platform default. */
+export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPct'>) => (u.role !== 'BROKER' ? '' : u.commissionPct ? `${Number(u.commissionPct)}% commission` : 'default commission');
 export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 
 export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username'>; href?: string }) {
@@ -23,7 +26,8 @@ export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username
 
 /** Create a broker or trader. Accounts start PENDING until a Super Admin approves them. */
 export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: ('BROKER' | 'TRADER')[]; brokers?: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '' });
+  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commissionPct: '' });
+  const sole = useSoleAdmin();
   const [touched, setTouched] = useState(false);
   const m = useMutation(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`);
   const toast = useToast();
@@ -34,15 +38,16 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : '',
     email: f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email) ? 'Enter a valid email' : '',
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : '',
+    commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : '',
   };
   const bad = Object.values(errs).some(Boolean);
   const E = ({ k }: { k: keyof typeof errs }) => (touched && errs[k] ? <span className="err">{errs[k]}</span> : null);
   return (
-    <Dialog title="Create account" sub="New accounts can sign in after a Super Admin approves them." onClose={onClose}>
+    <Dialog title="Create account" sub={sole ? 'The account can sign in straight away.' : 'New accounts can sign in after a Super Admin approves them.'} onClose={onClose}>
       <form className="stack" noValidate onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
         if (bad) return;
-        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword } });
+        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined } });
         if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose(); }
       }}>
         {roles.length > 1 && (
@@ -56,6 +61,15 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
           <div className="field grow"><label htmlFor="ph">Mobile (optional)</label><input id="ph" className="input num" inputMode="tel" maxLength={10} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '') })} aria-invalid={touched && !!errs.phone} /><E k="phone" /></div>
           <div className="field grow"><label htmlFor="em">Email (optional)</label><input id="em" type="email" className="input" value={f.email} onChange={set('email')} aria-invalid={touched && !!errs.email} /><E k="email" /></div>
         </div>
+        {f.role === 'BROKER' && (
+          <div className="field"><label htmlFor="cp">Commission</label>
+            <div className="input-icon" style={{ maxWidth: 180 }}>
+              <input id="cp" className="input num" inputMode="decimal" placeholder="e.g. 40" value={f.commissionPct} onChange={(e) => setF({ ...f, commissionPct: e.target.value.replace(/[^\d.]/g, '') })} aria-invalid={touched && !!errs.commissionPct} style={{ paddingLeft: 12, paddingRight: 30 }} />
+              <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>%</span>
+            </div>
+            {touched && errs.commissionPct ? <E k="commissionPct" /> : <span className="hint">The broker’s share of the brokerage their traders pay. You can change it later.</span>}
+          </div>
+        )}
         {f.role === 'TRADER' && brokers && (
           <div className="field"><label htmlFor="br">Broker</label>
             <select id="br" className="input" value={f.brokerId} onChange={set('brokerId')}><option value="">No broker</option>{brokers.map((b) => <option key={b.id} value={b.id}>{b.username}</option>)}</select>
@@ -88,7 +102,7 @@ export function AccountDetail({ id, back, actions }: { id: string; back: { href:
       <div className="spread">
         <div className="row" style={{ flexWrap: 'nowrap' }}>
           <span className="avatar" style={{ width: 48, height: 48, fontSize: 16 }}>{initials(t.displayName)}</span>
-          <div><h1 style={{ fontSize: 22 }}>{t.displayName}</h1><div className="row" style={{ gap: 8 }}><span className="t3">{t.username} · {ROLE_LABEL[t.role]}</span><Status value={t.status} /></div></div>
+          <div><h1 style={{ fontSize: 22 }}>{t.displayName}</h1><div className="row" style={{ gap: 8 }}><span className="t3">{t.username} · {ROLE_LABEL[t.role]}{t.role === 'BROKER' ? ` · ${pctLabel(t)}` : ''}</span><Status value={t.status} /></div></div>
         </div>
         <div className="row">
           {actions?.(t)}

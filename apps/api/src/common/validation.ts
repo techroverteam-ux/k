@@ -5,7 +5,7 @@ import { AppError } from './errors';
 
 /** Shared patterns (also used by the clients' form validation). */
 export const RX = {
-  username: /^[a-z][a-z0-9_.]{3,39}$/,
+  username: /^[a-z][a-z0-9_.@#-]{3,39}$/,
   phoneIn: /^\+?[0-9][0-9\s-]{9,15}$/,
   otp: /^\d{6}$/,
   money: /^\d{1,12}(\.\d{1,2})?$/,

@@ -475,6 +475,32 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
   .t.resp td.lead { display: block; text-align: left; padding-bottom: var(--s2); }
   .t.resp td.acts { justify-content: flex-start; padding-top: var(--s2); }
   .t.resp td.acts > * { justify-content: flex-start !important; flex-wrap: wrap !important; }
+  /* Feed rows (audit, activity): two compact lines instead of one label per line.
+     Line 1: what happened + result badge + chevron. Line 2: who · where · when, small and muted. */
+  .t.resp.feed tr { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--s2); row-gap: 2px; padding: var(--s3) var(--s4); }
+  .t.resp.feed td { display: block; min-height: 0; padding: 0; text-align: left; }
+  .t.resp.feed td[data-label]::before { content: none; }
+  .t.resp.feed td.f-main { order: 1; flex: 1 1 0; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .t.resp.feed td.f-main .sub { font-weight: 400; }
+  .t.resp.feed td.f-badge { order: 2; flex: 0 0 auto; }
+  .t.resp.feed td.f-go { order: 3; flex: 0 0 auto; margin-right: -8px; }
+  .t.resp.feed td.f-break { display: block; order: 4; flex-basis: 100%; height: 0; }
+  .t.resp.feed td.f-meta { order: 5; display: inline; color: var(--text-3); font-size: var(--fs-xs); }
+  .t.resp.feed td.f-meta .sub { display: inline !important; margin-left: 4px; }
+  .t.resp.feed td.f-meta + td.f-meta::before { content: '·'; margin-right: var(--s2); color: var(--text-3); }
+  .t.resp.feed td.f-meta .btn { height: auto; padding: 0 !important; font-size: var(--fs-xs); }
+  .t.resp.feed td.hide-sm, .t.resp.feed td.hide-md { display: none; }
+  .t.resp.feed tr.detail { display: block; padding: 0; }
+  .t.resp.feed tr.detail td { display: block; }
+  /* Filter forms: two fields per line on phones. */
+  .filters-2 { display: grid !important; grid-template-columns: 1fr 1fr; gap: var(--s3); align-items: end; }
+  .filters-2 .field { width: auto !important; min-width: 0; }
+  .filters-2 .input { min-width: 0; width: 100%; }
+  .filters-row { display: grid !important; grid-template-columns: 1fr 1fr; gap: var(--s2) var(--s3); align-items: end; }
+  .filters-row .field { width: auto !important; min-width: 0; }
+  .filters-row .input { min-width: 0; width: 100%; font-size: 14px; }
+  .filters-row > .btn { width: 100%; }
+  .t.resp.feed .hide-sm-inline { display: none !important; }
   .t.resp tbody tr:hover td { background: none; }
   .t.resp td:empty { display: none; }
 }
@@ -670,3 +696,6 @@ tr.clickable { cursor: pointer; }
 
 /* ---------- fees ---------- */
 .fee-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s4); }
+
+/* Feed tables: the line-break cell only exists on phones. */
+.t td.f-break, .t th.f-break { display: none; }

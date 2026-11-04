@@ -34,6 +34,7 @@ export class UserType {
   @Field(() => AccountModeGql) mode: AccountModeGql;
   @Field() isDemo: boolean;
   @Field(() => ID, { nullable: true }) brokerId?: string;
+  @Field({ nullable: true, description: 'Brokers: commission share in percent (e.g. "40.00"); empty = platform default. Shown to Super Admins and the broker.' }) commissionPct?: string;
   @Field() mfaEnabled: boolean;
   @Field() termsAccepted: boolean;
   @Field() createdAt: Date;
@@ -52,6 +53,7 @@ export class UserType {
       mode: u.mode as AccountModeGql,
       isDemo: u.isDemo,
       brokerId: u.brokerId ?? undefined,
+      commissionPct: full && u.role === 'BROKER' && u.commissionShareBps !== null ? (u.commissionShareBps / 100).toFixed(2) : undefined,
       mfaEnabled: u.mfaEnabled,
       termsAccepted: !!u.termsAcceptedAt,
       createdAt: u.createdAt,

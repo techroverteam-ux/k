@@ -19,8 +19,8 @@ import {
   StatusBadge, T, Tabs, toast, useQuery, VList,
 } from './ui';
 
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId mfaEnabled createdAt phone';
-export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId commissionPct mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
 const ROLE: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 const useBrokers = () => useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
@@ -82,7 +82,8 @@ export function AdminUsersScreen() {
 }
 
 function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '' });
+  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '', commissionPct: '' });
+  const sole = useSoleAdmin();
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -91,15 +92,17 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
     displayName: !f.displayName.trim() ? 'Enter a name' : null,
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : null,
+    commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : null,
   };
   const bad = Object.values(errs).some(Boolean);
   const e = (k: keyof typeof errs) => (touched ? errs[k] : null);
   return (
-    <Sheet visible title="New account" sub="It can sign in after a Super Admin approves it." onClose={onClose}>
+    <Sheet visible title="New account" sub={sole ? 'It can sign in straight away.' : 'It can sign in after a Super Admin approves it.'} onClose={onClose}>
       <Chips value={f.role} onChange={(role) => setF({ ...f, role })} items={[{ k: 'TRADER', label: 'Trader' }, { k: 'BROKER', label: 'Broker' }]} />
       <Field label="Full name" value={f.displayName} maxLength={120} onChangeText={(v) => setF({ ...f, displayName: v })} error={e('displayName')} />
       <Field label="Username" autoCapitalize="none" autoCorrect={false} value={f.username} onChangeText={(v) => setF({ ...f, username: v.toLowerCase() })} error={e('username')} />
       <Field label="Mobile (optional)" keyboardType="phone-pad" maxLength={10} value={f.phone} onChangeText={(v) => setF({ ...f, phone: v.replace(/\D/g, '') })} error={e('phone')} />
+      {f.role === 'BROKER' && <Field label="Commission (%)" keyboardType="decimal-pad" placeholder="e.g. 40" maxLength={6} value={f.commissionPct} onChangeText={(v) => setF({ ...f, commissionPct: v.replace(/[^\d.]/g, '') })} error={e('commissionPct')} hint="The broker’s share of the brokerage their traders pay. You can change it later." />}
       {f.role === 'TRADER' && brokers.length > 0 && (
         <View style={{ gap: 6 }}><T v="sm" c="text2" w="500">Broker</T><Chips value={f.brokerId} onChange={(brokerId) => setF({ ...f, brokerId })} items={[{ k: '', label: 'None' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} /></View>
       )}
@@ -110,7 +113,7 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
         if (bad) return;
         setBusy(true); setErr(null);
         try {
-          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword } });
+          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined } });
           toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : 'Account created and sent for approval'); onDone(); onClose();
         } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }} />
@@ -119,7 +122,7 @@ function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; 
 }
 
 /* ============================================================== one account */
-type Action = 'approve' | 'suspend' | 'reactivate' | 'broker' | 'password' | 'signout' | 'delete';
+type Action = 'approve' | 'suspend' | 'reactivate' | 'broker' | 'password' | 'signout' | 'delete' | 'commission';
 export function AdminUserScreen({ id }: { id: string }) {
   const t = useTheme();
   const { me } = useAuth();
@@ -142,6 +145,7 @@ export function AdminUserScreen({ id }: { id: string }) {
       <Lines lines={[
         ['Created', when(x.createdAt)], ['Two-step verification', x.mfaEnabled ? 'On' : 'Off'],
         ...(x.role === 'TRADER' ? [['Broker', brokerName ? `${brokerName.displayName} (${brokerName.username})` : 'None'] as [string, string]] : []),
+        ...(x.role === 'BROKER' ? [['Commission', x.commissionPct ? `${Number(x.commissionPct)}%` : 'Platform default'] as [string, string]] : []),
         ...(x.phone ? [['Mobile', x.phone] as [string, string]] : []),
       ]} />
       {self ? <Notice>This is your own account. Use Profile to change your password or devices.</Notice> : (
@@ -149,6 +153,7 @@ export function AdminUserScreen({ id }: { id: string }) {
           {x.status === 'PENDING' && <ActionRow icon="check" tone="pos" label="Approve account" sub="Lets them sign in" onPress={() => setAct('approve')} />}
           {x.status === 'ACTIVE' && <ActionRow icon="lock" tone="neg" label="Suspend account" sub="Signs them out and blocks sign-in" onPress={() => setAct('suspend')} />}
           {x.status === 'SUSPENDED' && <ActionRow icon="check" tone="pos" label="Reactivate account" sub="Lets them sign in again" onPress={() => setAct('reactivate')} />}
+          {x.role === 'BROKER' && <ActionRow icon="briefcase" label="Change commission" sub={x.commissionPct ? `Now ${Number(x.commissionPct)}%` : 'Now the platform default'} onPress={() => setAct('commission')} />}
           {x.role === 'TRADER' && <ActionRow icon="users" label="Assign broker" sub={brokerName ? `Now: ${brokerName.username}` : 'No broker yet'} onPress={() => setAct('broker')} />}
           {!x.isDemo && <ActionRow icon="key" label="Reset password" sub="Set a temporary password and sign them out" onPress={() => setAct('password')} />}
           <ActionRow icon="device" label="Sign out everywhere" sub="Ends all their sessions" onPress={() => setAct('signout')} />
@@ -199,7 +204,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
     setBusy(true); setErr(null);
     try { const d = await gql(q, v); toast(typeof ok === 'string' ? ok : ok(d)); if (act === 'delete' && d?.requestUserDeletion?.status === 'EXECUTED') { router.back(); return; } onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
-  const title = { approve: 'Approve account?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?' }[act];
+  const title = { approve: 'Approve account?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?', commission: 'Change commission' }[act];
   return (
     <Sheet visible title={title} sub={`${u.displayName} (${u.username})`} onClose={onClose}>
       {act === 'approve' && <T c="text2">They can sign in as soon as you approve.</T>}
@@ -207,6 +212,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
       {act === 'broker' && <Chips value={broker} onChange={setBroker} items={[{ k: '', label: 'No broker' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} />}
       {act === 'password' && <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={pw} onChangeText={setPw} hint="At least 10 characters. They’ll be signed out and should change it after signing in." />}
       {act === 'signout' && <T c="text2">Every device signed in as this user is signed out now.</T>}
+      {act === 'commission' && <Field label="Commission (%)" keyboardType="decimal-pad" placeholder={u.commissionPct ? String(Number(u.commissionPct)) : 'e.g. 40'} maxLength={6} value={typed} onChangeText={(v) => setTyped(v.replace(/[^\d.]/g, ''))} hint="The broker’s share of the brokerage their traders pay. Applies to reports from now on." />}
       {act === 'delete' && (<>
         <Notice tone="err">{`Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of ${u.username} are erased and can’t be brought back. ${u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}${sole ? 'This happens right away.' : 'A different Super Admin must approve within 30 minutes.'}`}</Notice>
         <Field label="Reason (recorded in the audit log)" value={reason} onChangeText={setReason} maxLength={300} hint="10–300 characters" />
@@ -221,6 +227,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
         {act === 'broker' && <Button block kind="primary" title="Save" busy={busy} disabled={broker === (u.brokerId ?? '')} onPress={() => run(`mutation($t:ID!,$b:ID){ assignTraderToBroker(traderId:$t, brokerId:$b){ id } }`, { t: u.id, b: broker || null }, 'Broker updated')} />}
         {act === 'password' && <Button block kind="primary" title="Reset" busy={busy} disabled={pw.length < 10} onPress={() => run(`mutation($id:ID!,$p:String!){ resetUserPassword(userId:$id, tempPassword:$p) }`, { id: u.id, p: pw }, 'Password reset; they were signed out')} />}
         {act === 'delete' && <Button block kind="sell" title={sole ? 'Delete now' : 'Ask to delete'} busy={busy} disabled={reason.trim().length < 10 || typed.trim().toLowerCase() !== u.username} onPress={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id status } }`, { u: u.id, r: reason.trim(), w: typed.trim() }, (d) => (d.requestUserDeletion?.status === 'EXECUTED' ? `${u.username} deleted` : 'Sent to another Super Admin for approval'))} />}
+        {act === 'commission' && <Button block kind="primary" title="Save" busy={busy} disabled={!(/^\d{1,3}(\.\d{1,2})?$/.test(typed.trim()) && Number(typed) <= 100)} onPress={() => run(`mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ id } }`, { b: u.id, p: typed.trim() }, 'Commission updated')} />}
         {act === 'signout' && <Button block kind="sell" title="Sign out" busy={busy} onPress={() => run(`mutation($u:ID!,$s:ID){ revokeUserSessions(userId:$u, sessionId:$s) }`, { u: u.id, s: null }, 'Signed out everywhere')} />}
       </Row>
     </Sheet>

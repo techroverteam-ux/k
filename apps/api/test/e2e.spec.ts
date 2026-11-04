@@ -1139,6 +1139,31 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
   });
 });
 
+describe('broker commission percentage', () => {
+  it('needs a percentage when a broker is created, can be changed, and drives the commission report', async () => {
+    const admin = await adminLogin('admin');
+    const su = await stepUp(admin.token, 'admin');
+    const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id role commissionPct } }`;
+    const base = { displayName: 'Commission Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26' };
+    expect(code(await gql(CREATE, { i: { ...base, username: 'broker.pct' } }, { token: admin.token }))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(CREATE, { i: { ...base, username: 'broker.pct', commissionPct: '120' } }, { token: admin.token }))).toBe('BAD_USER_INPUT');
+    const ok = await gql(CREATE, { i: { ...base, username: 'broker.pct', commissionPct: '40' } }, { token: admin.token });
+    expect(ok.data.createUser).toMatchObject({ role: 'BROKER', commissionPct: '40.00' });
+    const id = ok.data.createUser.id;
+    const SET = `mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ commissionPct } }`;
+    expect(code(await gql(SET, { b: id, p: '37.5' }, { token: admin.token }))).toBe('STEP_UP_REQUIRED');
+    expect((await gql(SET, { b: id, p: '37.5' }, { token: admin.token, stepUp: su })).data.setBrokerCommission.commissionPct).toBe('37.50');
+    const rep = await gql(`query($b:ID){ commissionReport(from:"2020-01-01T00:00:00Z", to:"2100-01-01T00:00:00Z", brokerId:$b){ shareBps } }`, { b: id }, { token: admin.token });
+    expect(rep.data.commissionReport.shareBps).toBe(3750);
+    // A broker without their own percentage still uses the platform default.
+    const b1 = (await pg.query(`SELECT id FROM users WHERE username = 'broker.one'`)).rows[0].id;
+    expect((await gql(`query($b:ID){ commissionReport(from:"2020-01-01T00:00:00Z", to:"2100-01-01T00:00:00Z", brokerId:$b){ shareBps } }`, { b: b1 }, { token: admin.token })).data.commissionReport.shareBps).toBe(5000);
+    // Traders never get a commission.
+    const t = await gql(CREATE, { i: { username: 'trader.pct', displayName: 'Pct Trader', role: 'TRADER', tempPassword: 'Trad3r!Pass#26', commissionPct: '10' } }, { token: admin.token });
+    expect(t.data.createUser.commissionPct).toBeNull();
+  });
+});
+
 describe('wipe out', () => {
   const PLACE = `mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status } }`;
   let instrumentId: string;

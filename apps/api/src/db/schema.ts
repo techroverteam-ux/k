@@ -57,6 +57,8 @@ export const users = pgTable(
     mode: accountModeEnum('mode').notNull().default('SIMULATED'),
     isDemo: boolean('is_demo').notNull().default(false),
     brokerId: uuid('broker_id').references((): AnyPgColumn => users.id, { onDelete: 'restrict' }),
+    /** Brokers only: their share of the brokerage their traders pay, in basis points (4000 = 40%). Empty: the platform default (broker.commissionShareBps). */
+    commissionShareBps: integer('commission_share_bps'),
     mfaSecretEnc: text('mfa_secret_enc'),
     mfaEnabled: boolean('mfa_enabled').notNull().default(false),
     failedLoginCount: integer('failed_login_count').notNull().default(0),

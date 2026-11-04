@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "commission_share_bps" integer;
