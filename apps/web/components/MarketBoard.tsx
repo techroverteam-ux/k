@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { gql, pollingPaused } from '@/lib/api';
-import { shortSymbol } from '@/lib/format';
+import { fullName, shortSymbol } from '@/lib/format';
 
 interface Pulse { instrumentId: string; symbol: string; name: string; exchange: string; ltp: string; change: string; changePct: string; source: string }
 
@@ -140,7 +140,7 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' |
           const u = Number(r.change) >= 0;
           return (
             <div key={r.instrumentId} className={`mb-chip ${flash[r.instrumentId] ? `fl-${flash[r.instrumentId]}` : ''}`}>
-              <span className="mb-chip-sym">{shortSymbol(r.symbol)}</span>
+              <span className="mb-chip-sym">{fullName(r)}</span>
               <span className="num">{inr(r.ltp)}</span>
               <span className={`num ${u ? 'mb-up' : 'mb-down'}`}>{pct(r.changePct)}</span>
             </div>
@@ -217,7 +217,7 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' |
             const u = Number(r.change) >= 0;
             return (
               <tr key={r.instrumentId} className={flash[r.instrumentId] ? `fl-${flash[r.instrumentId]}` : ''}>
-                <th scope="row"><span className="mb-sym">{shortSymbol(r.symbol)}</span><span className="mb-name">{plainName(r.name)}</span></th>
+                <th scope="row"><span className="mb-sym">{fullName(r)}</span><span className="mb-name">{shortSymbol(r.symbol)} · {r.exchange}</span></th>
                 <td className="num">{inr(r.ltp)}</td>
                 <td className={`num ${u ? 'mb-up' : 'mb-down'}`}>{pct(r.changePct)}</td>
               </tr>

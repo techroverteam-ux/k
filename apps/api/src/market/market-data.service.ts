@@ -18,6 +18,8 @@ export interface Quote {
   highMinor: bigint;
   lowMinor: bigint;
   prevCloseMinor: bigint;
+  openMinor?: bigint;
+  volume?: number;
   ts: Date;
   source: 'SIMULATED' | 'DHAN';
 }
@@ -61,10 +63,8 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
       const feedMode = env().MARKET_FEED;
       if (feedMode === 'dhan') {
         this.startDhanFeed();
-      } else {
-        this.timer = setInterval(() => this.tick(), 1000);
-    
       }
+      this.timer = setInterval(() => this.tick(), 1000);
       this.flushTimer = setInterval(() => void this.flush(), 60_000);
       this.pruneTimer = setInterval(() => void this.prune(), 3_600_000);
       void this.prune();
@@ -94,7 +94,21 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
       const m = this.meta.get(instId);
       if (!q || !m) return;
 
-      const ltpMinor = BigInt(Math.round(tick.ltp * 100));
+      if (tick.close && tick.close > 0) {
+        q.prevCloseMinor = BigInt(Math.round(tick.close * 100));
+      }
+      if (tick.open && tick.open > 0) {
+        q.openMinor = BigInt(Math.round(tick.open * 100));
+      }
+      if (tick.volume) {
+        q.volume = tick.volume;
+      }
+
+      let ltpMinor = BigInt(Math.round(tick.ltp * 100));
+      // If untraded today (LTP is 0), use previous close as current trading price
+      if (ltpMinor <= 0n && q.prevCloseMinor > 0n) {
+        ltpMinor = q.prevCloseMinor;
+      }
       if (ltpMinor <= 0n) return;
 
       const spread = BigInt(m.tickMinor);
@@ -102,24 +116,32 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
       q.bidMinor = ltpMinor - spread;
       q.askMinor = ltpMinor + spread;
 
-      if (tick.high) {
+      if (tick.high && tick.high > 0) {
         q.highMinor = BigInt(Math.round(tick.high * 100));
       } else if (ltpMinor > q.highMinor) {
         q.highMinor = ltpMinor;
       }
 
-      if (tick.low) {
+      if (tick.low && tick.low > 0) {
         q.lowMinor = BigInt(Math.round(tick.low * 100));
       } else if (ltpMinor < q.lowMinor) {
         q.lowMinor = ltpMinor;
       }
 
-      if (tick.close) {
-        q.prevCloseMinor = BigInt(Math.round(tick.close * 100));
-      }
-
       q.ts = tick.timestamp;
       q.source = 'DHAN';
+
+      // If existing in-memory candles are completely out of range (>10% off), reseed them
+      const lastBar = this.history.last(instId);
+      if (lastBar && Math.abs(Number(ltpMinor) - lastBar.c) / Number(ltpMinor) > 0.10) {
+        const generated = this.history.seed(instId, Number(ltpMinor), Number(q.prevCloseMinor), m.tickMinor, Date.now(), true);
+        if (this.repo && generated.length) {
+          const toSaveMins = generated.map((b) => ({ ...b, instrumentId: instId }));
+          const toSaveDaily = this.history.allDaily(instId).map((b) => ({ ...b, instrumentId: instId }));
+          void this.repo.upsert('candles_1m', toSaveMins).catch(() => undefined);
+          void this.repo.upsert('candles_1d', toSaveDaily).catch(() => undefined);
+        }
+      }
 
       this.emit([q]);
     });
@@ -192,13 +214,15 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
         const q = this.quotes.get(r.id)!;
         const mins = storedMin.get(r.id) ?? [];
         const days = storedDay.get(r.id) ?? [];
-        if (mins.length || days.length) {
+        const lastBar = mins[mins.length - 1];
+        const isOutdated = lastBar && Math.abs(Number(r.refPriceMinor) - lastBar.c) / Number(r.refPriceMinor) > 0.10;
+        if (mins.length >= 120 && days.length >= 10 && !isOutdated) {
           // Continue from stored history: the price picks up where it stopped.
           this.history.restore(r.id, mins, days);
           this.resumeQuote(q, r.tickMinor, now);
         } else {
-          // First run for this instrument: synthetic back-history, saved so it stays the same from now on.
-          const generated = this.history.seed(r.id, Number(q.ltpMinor), Number(q.prevCloseMinor), r.tickMinor);
+          // First run, incomplete history, or recalibrated price: synthetic back-history, saved so it stays the same.
+          const generated = this.history.seed(r.id, Number(q.ltpMinor), Number(q.prevCloseMinor), r.tickMinor, now, true);
           for (const b of generated) {
             if (b.t < today) continue;
             if (BigInt(b.h) > q.highMinor) q.highMinor = BigInt(b.h);
@@ -214,8 +238,16 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
       }
       if (this.repo && (toSave.minutes.length || toSave.daily.length)) {
         try {
-          await this.repo.upsert('candles_1d', toSave.daily);
-          await this.repo.upsert('candles_1m', toSave.minutes);
+          if (toSave.daily.length) {
+            for (let j = 0; j < toSave.daily.length; j += 1000) {
+              await this.repo.upsert('candles_1d', toSave.daily.slice(j, j + 1000));
+            }
+          }
+          if (toSave.minutes.length) {
+            for (let j = 0; j < toSave.minutes.length; j += 1000) {
+              await this.repo.upsert('candles_1m', toSave.minutes.slice(j, j + 1000));
+            }
+          }
         } catch (e) {
           this.log.error(`Couldn't save synthetic history: ${(e as Error).message}`);
         }
@@ -301,9 +333,13 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
 
   private tick() {
     const changed: Quote[] = [];
+    const isDhan = env().MARKET_FEED === 'dhan';
     for (const q of this.quotes.values()) {
+      const m = this.meta.get(q.instrumentId);
+      if (!m) continue;
+      // Skip simulated tick for real exchange instruments subscribed to Dhan feed
+      if (isDhan && m.dhanSecurityId) continue;
       if (Math.random() < 0.5) continue;
-      const m = this.meta.get(q.instrumentId)!;
       const drift = (Math.random() - 0.5) * 0.0016; // ±0.08%
       const next = roundToTick(q.ltpMinor + BigInt(Math.round(Number(q.ltpMinor) * drift)), m.tickMinor);
       const ltp = next > 0n ? next : q.ltpMinor;

@@ -116,8 +116,9 @@ export class CandleStore {
    * Create the synthetic back-history for one instrument (once). Returns every generated 1-minute bar
    * (more than the memory window keeps) so the caller can store them.
    */
-  seed(id: string, ltpMinor: number, prevCloseMinor: number, tickMinor: number, now = Date.now()): Bar[] {
-    if (this.minutes.has(id)) return [];
+  seed(id: string, ltpMinor: number, prevCloseMinor: number, tickMinor: number, now = Date.now(), force = false): Bar[] {
+    const existing = this.minutes.get(id);
+    if (!force && existing && existing.length >= 120) return [];
     const tick = Math.max(1, tickMinor);
     const r = rng(hash(id));
     const today = bucketStart(now, DAY);
@@ -222,7 +223,15 @@ export class CandleStore {
    * the client pages back through history with it. Returned objects are copies.
    */
   candles(id: string, interval: CandleInterval, limit: number, before?: number): Bar[] {
-    const mins = this.minutes.get(id) ?? [];
+    let mins = this.minutes.get(id) ?? [];
+    if (interval !== '1D' && mins.length < 120 && this.daily.get(id)?.length) {
+      const daily = this.daily.get(id)!;
+      const last = daily[daily.length - 1];
+      if (last) {
+        this.seed(id, last.c, last.c, 100);
+        mins = this.minutes.get(id) ?? [];
+      }
+    }
     let out: Bar[];
     if (interval === '1D') {
       // Days before the minute window come from daily bars; days inside it are built from minutes. If the

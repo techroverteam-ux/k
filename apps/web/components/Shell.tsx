@@ -9,7 +9,7 @@ import { useToast } from './ui';
 import { Splash } from './Splash';
 import { ThemeMenu } from './ThemeMenu';
 import { homeFor, useAuth, type Role } from '@/lib/auth';
-import { inr, initials, shortSymbol } from '@/lib/format';
+import { fullName, inr, initials, shortSymbol } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 import { Icon, Logo, type IconName } from './icons';
 import { SkeletonRows } from './ui';
@@ -232,8 +232,8 @@ function GlobalSearch() {
         <ul className="suggest" id="search-list" role="listbox" style={{ listStyle: 'none', margin: 0 }}>
           {hits.length === 0 ? <li className="t2 sm" style={{ padding: '12px 16px' }}>No instruments match “{q}”.</li> : hits.map((h, i) => (
             <li key={h.id} role="option" aria-selected={i === idx} onMouseEnter={() => setIdx(i)} onMouseDown={(e) => { e.preventDefault(); go(h); }}>
-              <span className="mark" aria-hidden>{shortSymbol(h.symbol).slice(0, 2)}</span>
-              <span className="grow"><span className="w6">{shortSymbol(h.symbol)}</span><span className="t3" style={{ display: 'block' }}>{h.name}</span></span>
+              <span className="mark" aria-hidden>{fullName(h).slice(0, 2).toUpperCase()}</span>
+              <span className="grow"><span className="w6">{fullName(h)}</span><span className="t3" style={{ display: 'block' }}>{shortSymbol(h.symbol)} · {h.exchange} {h.segment}</span></span>
               <span className="badge">{h.exchange} {h.segment}</span>
             </li>
           ))}

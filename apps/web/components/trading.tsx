@@ -2,18 +2,59 @@
 import { useSoleAdmin } from '@/lib/sole-admin';
 import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { gql, newKey, subscribe } from '@/lib/api';
-import { inr, shortSymbol, tone, when } from '@/lib/format';
+import { fullName, inr, shortSymbol, tone, when, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
 import { Private, usePrefs } from '@/lib/prefs';
 import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
 
-export interface Quote { instrumentId: string; ltp: string; bid: string; ask: string; high: string; low: string; change: string; changePct: string; ts: string; source: string }
-export interface Instrument { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string }
+export interface DepthLevel {
+  bidQty: number;
+  bidPrice: string;
+  askPrice: string;
+  askQty: number;
+}
 
-export const CATEGORIES = [{ v: '', label: 'All' }, { v: 'MCX', label: 'MCX' }, { v: 'FOREX', label: 'Forex' }, { v: 'NSE', label: 'NSE' }, { v: 'INDICES', label: 'Indices' }] as const;
+export interface MarketDepth {
+  levels: DepthLevel[];
+  totalBidQty: number;
+  totalAskQty: number;
+}
+
+export interface Quote {
+  instrumentId: string;
+  ltp: string;
+  bid: string;
+  ask: string;
+  high: string;
+  low: string;
+  change: string;
+  changePct: string;
+  ts: string;
+  source: string;
+  open?: string;
+  close?: string;
+  volume?: string;
+  avgPrice?: string;
+  lowerCircuit?: string;
+  upperCircuit?: string;
+  depth?: MarketDepth;
+}
+export interface Instrument { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotSize: number; tickSize: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string; quote?: Quote }
+
+export const CATEGORIES = [
+  { v: '', label: 'All' },
+  { v: 'FUTURES', label: 'Futures' },
+  { v: 'MCX', label: 'MCX' },
+  { v: 'OPTIONS', label: 'Options' },
+  { v: 'FOREX', label: 'Forex' },
+  { v: 'CRYPTO', label: 'Crypto' },
+  { v: 'US_STOCK', label: 'US Stock' },
+  { v: 'COMEX', label: 'COMEX' },
+  { v: 'US_INDEX', label: 'US Index' },
+] as const;
 export type CategoryV = (typeof CATEGORIES)[number]['v'];
 const expiryShort = (d?: string) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
 
@@ -26,21 +67,54 @@ export function LotTag({ i }: { i: Pick<Instrument, 'lotClass' | 'lotLabel' | 'c
     </span>
   );
 }
-export const QUOTE_FIELDS = 'instrumentId ltp bid ask high low change changePct ts source';
+export const QUOTE_FIELDS = 'instrumentId ltp bid ask high low change changePct ts source open close volume avgPrice lowerCircuit upperCircuit depth { levels { bidQty bidPrice askPrice askQty } totalBidQty totalAskQty }';
 
-/** Live quotes over WebSocket; seeds with a one-off fetch so the first paint has prices. */
+/** Live quotes over WebSocket with polling heartbeat; seeds with one-off fetch and keeps active. */
 export function useLiveQuotes(ids: string[]) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const key = ids.slice().sort().join(',');
   useEffect(() => {
     if (!key) return;
     const list = key.split(',');
-    gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: list })
-      .then((d) => setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotes.map((x) => [x.instrumentId, x])) })))
-      .catch(() => undefined);
-    return subscribe<{ quotesUpdated: Quote[] }>(`subscription($i:[ID!]!){ quotesUpdated(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: list }, (d) =>
-      setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotesUpdated.map((x) => [x.instrumentId, x])) })),
+    const chunkSize = 100;
+    const chunks: string[][] = [];
+    for (let i = 0; i < list.length; i += chunkSize) {
+      chunks.push(list.slice(i, i + chunkSize));
+    }
+
+    const fetchAll = () => {
+      for (const chunk of chunks) {
+        gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: chunk })
+          .then((d) => {
+            if (d?.quotes) {
+              setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotes.map((x) => [x.instrumentId, x])) }));
+            }
+          })
+          .catch(() => undefined);
+      }
+    };
+
+    fetchAll();
+    const interval = setInterval(fetchAll, 1500);
+
+    const unsubs = chunks.map((chunk) =>
+      subscribe<{ quotesUpdated: Quote[] }>(
+        `subscription($i:[ID!]!){ quotesUpdated(instrumentIds:$i){ ${QUOTE_FIELDS} } }`,
+        { i: chunk },
+        (d) => {
+          if (d?.quotesUpdated?.length) {
+            setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotesUpdated.map((x) => [x.instrumentId, x])) }));
+          }
+        }
+      )
     );
+
+    return () => {
+      clearInterval(interval);
+      for (const unsub of unsubs) {
+        try { unsub(); } catch {}
+      }
+    };
   }, [key]);
   return quotes;
 }
@@ -202,12 +276,46 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
 
 /* ======================================================================= watchlist */
 interface WEntry { id: string; instrument: Instrument; quote?: Quote }
-const WL_Q = `query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry lotSize tickSize } quote{ ${QUOTE_FIELDS} } } }`;
+const WL_Q = `query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category } quote{ ${QUOTE_FIELDS} } } }`;
+const CAT_COUNTS_Q = `query { instrumentCategoryCounts { category count } }`;
+
+const CAT_LABELS: Record<string, string> = {
+  FUTURES: 'Futures',
+  MCX: 'MCX',
+  OPTIONS: 'Options',
+  FOREX: 'Forex',
+  CRYPTO: 'Crypto',
+  US_STOCK: 'US Stock',
+  COMEX: 'COMEX',
+  US_INDEX: 'US Index',
+};
+
+function groupByCategory<T extends { instrument: Instrument }>(items: T[]) {
+  const order: CategoryV[] = ['FUTURES', 'MCX', 'OPTIONS', 'FOREX', 'CRYPTO', 'US_STOCK', 'COMEX', 'US_INDEX'];
+  const groups: { category: string; label: string; items: T[] }[] = [];
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const cat = item.instrument.category || 'FUTURES';
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat)!.push(item);
+  }
+  for (const c of order) {
+    if (map.has(c)) {
+      groups.push({ category: c, label: CAT_LABELS[c] || c, items: map.get(c)! });
+      map.delete(c);
+    }
+  }
+  for (const [c, rem] of map.entries()) {
+    groups.push({ category: c, label: CAT_LABELS[c] || c, items: rem });
+  }
+  return groups;
+}
 
 /** The watchlist: one list, with a search bar on top that finds instruments and adds them in place. */
 export function Watchlist({ compact }: { compact?: boolean }) {
   const { prefs } = usePrefs();
   const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: 0 });
+  const { data: countsData } = useQuery<{ instrumentCategoryCounts: { category: string; count: number }[] }>(CAT_COUNTS_Q);
   const entries = data?.watchlist ?? [];
   const live = useLiveQuotes(entries.map((e) => e.instrument.id));
   const toast = useToast();
@@ -217,128 +325,372 @@ export function Watchlist({ compact }: { compact?: boolean }) {
   const [hits, setHits] = useState<Instrument[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const searching = q.trim().length > 0 || !!cat;
+
+  const categoryCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    let total = 0;
+    for (const c of countsData?.instrumentCategoryCounts ?? []) {
+      map[c.category] = c.count;
+      total += c.count;
+    }
+    map[''] = total;
+    return map;
+  }, [countsData]);
+
   useEffect(() => {
     if (!searching) { setHits(null); return; }
     setHits(null);
-    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ id symbol name exchange segment expiry lotClass lotLabel category } }`, { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined })
+    const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(
+      `query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:500){ id symbol name exchange segment expiry lotClass lotLabel category lotSize tickSize quote{ ${QUOTE_FIELDS} } } }`,
+      { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }
+    )
       .then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
     return () => clearTimeout(t);
   }, [q, cat, lot, searching]);
+
+  const hitQuotes = useLiveQuotes(hits?.map((h) => h.id) ?? []);
   const inList = new Set(entries.map((e) => e.instrument.id));
+
   const add = async (i: Instrument) => {
     setBusy(i.id);
-    try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: i.id }); toast(`${shortSymbol(i.symbol)} added`); await refetch(); }
-    catch (x) { toast((x as Error).message, true); }
-    finally { setBusy(null); }
+    try {
+      await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: i.id });
+      toast(`${fullName(i)} added`);
+      await refetch();
+    } catch (x) {
+      toast((x as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
   };
-  const remove = async (e: WEntry) => {
-    try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); void refetch(); }
-    catch (x) { toast((x as Error).message, true); }
+
+  const remove = async (instId: string, sym: string) => {
+    try {
+      await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: instId });
+      toast(`${fullName({ symbol: sym })} removed`);
+      void refetch();
+    } catch (x) {
+      toast((x as Error).message, true);
+    }
   };
+
+  const hitEntries: WEntry[] = useMemo(() => {
+    return (hits ?? []).map((h) => ({ id: h.id, instrument: h, quote: h.quote }));
+  }, [hits]);
+
+  const displayedGroups = useMemo(() => {
+    if (searching) {
+      return groupByCategory(hitEntries);
+    }
+    return groupByCategory(entries);
+  }, [searching, hitEntries, entries]);
+
+  const totalDisplayed = searching ? (hits?.length ?? 0) : entries.length;
 
   return (
     <section className="panel wl" aria-label="Watchlist">
       <div className="wl-search">
         <div className="input-icon grow">
           <Icon name="search" size={18} />
-          <input className="input" type="search" placeholder="Search and add, e.g. NIFTY, RELIANCE" aria-label="Search instruments to add to your watchlist" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }} />
+          <input
+            className="input"
+            type="search"
+            placeholder="Search and add, e.g. NIFTY, RELIANCE, BTCUSD"
+            aria-label="Search instruments to add to your watchlist"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
+          />
         </div>
         {searching && <button className="btn btn-sm btn-ghost" onClick={() => { setQ(''); setCat(''); setLot(''); }}>Cancel</button>}
       </div>
       {!compact && (
         <div className="wl-cats">
           <div className="chips" role="group" aria-label="Market">
-            {CATEGORIES.map((c) => <button key={c.v} className="chip" aria-pressed={cat === c.v} onClick={() => { setCat(c.v); setLot(''); }}>{c.label}</button>)}
+            {CATEGORIES.map((c) => {
+              const count = categoryCounts[c.v];
+              const countStr = count !== undefined ? ` (${count})` : '';
+              return (
+                <button
+                  key={c.v}
+                  className="chip"
+                  aria-pressed={cat === c.v}
+                  onClick={() => { setCat(c.v); setLot(''); }}
+                >
+                  {c.label}{countStr}
+                </button>
+              );
+            })}
           </div>
           {cat === 'MCX' && (
             <div className="chips" role="group" aria-label="Lot type">
-              {([['', 'All lots'], ['MINI', 'Mini'], ['MEGA', 'Mega']] as const).map(([v, l]) => <button key={v} className="chip" aria-pressed={lot === v} onClick={() => setLot(v)}>{l}</button>)}
+              {([['', 'All lots'], ['MINI', 'Mini'], ['MEGA', 'Mega']] as const).map(([v, l]) => (
+                <button key={v} className="chip" aria-pressed={lot === v} onClick={() => setLot(v)}>{l}</button>
+              ))}
             </div>
           )}
         </div>
       )}
       {searching ? (
-        hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? <Empty icon="search" title={q.trim() ? `Nothing matches “${q.trim()}”` : 'Nothing listed here yet'}>{q.trim() ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty> : (
+        hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? (
+          <Empty icon="search" title={q.trim() ? `Nothing matches “${q.trim()}”` : 'Nothing listed here yet'}>
+            {q.trim() ? 'Try another symbol or clear search filters.' : 'Instruments appear here once they are loaded.'}
+          </Empty>
+        ) : compact ? (
           <div className="list list-pad">
             {hits.map((i) => (
-              <div key={i.id} className="list-row">
-                <Mark text={shortSymbol(i.symbol)} />
-                <Link href={`/trader/instrument/${i.id}`} className="grow" style={{ minWidth: 0 }}>
-                  <div className="w6 row" style={{ gap: 6, flexWrap: 'wrap' }}>{shortSymbol(i.symbol)} <span className="t3 xs">{i.category === 'FOREX' ? 'Forex' : i.exchange}{i.expiry ? ` · ${expiryShort(i.expiry)}` : ''}</span><LotTag i={i} /></div>
-                  <div className="t3 sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.name}</div>
-                </Link>
-                {inList.has(i.id)
-                  ? <span className="t3 sm row" style={{ gap: 4 }}><Icon name="check" size={16} />Added</span>
-                  : <button className="btn btn-sm" disabled={busy === i.id} onClick={() => void add(i)} aria-label={`Add ${shortSymbol(i.symbol)} to watchlist`}><Icon name="plus" size={16} />Add</button>}
-              </div>
+              <CompactRow
+                key={i.id}
+                e={{ id: i.id, instrument: i }}
+                q={hitQuotes[i.id] ?? i.quote}
+                inList={inList.has(i.id)}
+                isBusy={busy === i.id}
+                onToggle={() => (inList.has(i.id) ? void remove(i.id, i.symbol) : void add(i))}
+              />
             ))}
           </div>
+        ) : (
+          <>
+            <div className="list list-pad only-mob">
+              {displayedGroups.map((g) => (
+                <div key={g.category}>
+                  <div className="spread" style={{ padding: '8px 12px', background: 'var(--bg-2)', fontWeight: 600, fontSize: 13, textTransform: 'uppercase' }}>
+                    <span>{g.label}</span>
+                    <span className="badge">{g.items.length}</span>
+                  </div>
+                  {g.items.map((it) => (
+                    <CompactRow
+                      key={it.instrument.id}
+                      e={it}
+                      q={hitQuotes[it.instrument.id] ?? it.quote ?? it.instrument.quote}
+                      withBidAsk={prefs.watchlistView === 'detailed'}
+                      inList={inList.has(it.instrument.id)}
+                      isBusy={busy === it.instrument.id}
+                      onToggle={() => (inList.has(it.instrument.id) ? void remove(it.instrument.id, it.instrument.symbol) : void add(it.instrument))}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="table-wrap only-desk">
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Instrument ({totalDisplayed})</th>
+                    <th className="r">Price</th>
+                    <th className="r hide-sm">Day range</th>
+                    <th className="r">Sell · Buy</th>
+                    <th className="r">Watchlist</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedGroups.map((g) => (
+                    <Fragment key={g.category}>
+                      <tr className="cat-group-row">
+                        <th colSpan={5}>
+                          <div className="cat-group-head">
+                            <span>{g.label}</span>
+                            <span className="badge">{g.items.length}</span>
+                          </div>
+                        </th>
+                      </tr>
+                      {g.items.map((it) => (
+                        <FullRow
+                          key={it.instrument.id}
+                          e={it}
+                          q={hitQuotes[it.instrument.id] ?? it.quote ?? it.instrument.quote}
+                          inList={inList.has(it.instrument.id)}
+                          isBusy={busy === it.instrument.id}
+                          onToggle={() => (inList.has(it.instrument.id) ? void remove(it.instrument.id, it.instrument.symbol) : void add(it.instrument))}
+                        />
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )
       ) : loading && !data ? <SkeletonRows rows={6} pad /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
-        <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>
+        <Empty icon="eye" title="Your watchlist is empty">Search above or click any category to add the instruments you follow.</Empty>
       ) : compact ? (
         <div className="list list-pad">
-          {entries.map((e) => <CompactRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote} />)}
+          {entries.map((e) => (
+            <CompactRow
+              key={e.id}
+              e={e}
+              q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
+              inList
+              onToggle={() => void remove(e.instrument.id, e.instrument.symbol)}
+            />
+          ))}
         </div>
       ) : (
         <>
-        <div className="list list-pad only-mob">
-          {entries.map((e) => <CompactRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote} withBidAsk={prefs.watchlistView === 'detailed'} />)}
-        </div>
-        <div className="table-wrap only-desk">
-          <table className="t">
-            <thead><tr><th>Instrument</th><th className="r">Price</th><th className="r hide-sm">Day range</th><th className="r">Sell · Buy</th><th><span className="sr-only">Remove</span></th></tr></thead>
-            <tbody>{entries.map((e) => <FullRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote} onRemove={() => void remove(e)} />)}</tbody>
-          </table>
-        </div>
+          <div className="list list-pad only-mob">
+            {displayedGroups.map((g) => (
+              <div key={g.category}>
+                <div className="spread" style={{ padding: '8px 12px', background: 'var(--bg-2)', fontWeight: 600, fontSize: 13, textTransform: 'uppercase' }}>
+                  <span>{g.label}</span>
+                  <span className="badge">{g.items.length}</span>
+                </div>
+                {g.items.map((e) => (
+                  <CompactRow
+                    key={e.id}
+                    e={e}
+                    q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
+                    withBidAsk={prefs.watchlistView === 'detailed'}
+                    inList
+                    onToggle={() => void remove(e.instrument.id, e.instrument.symbol)}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="table-wrap only-desk">
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Instrument ({totalDisplayed})</th>
+                  <th className="r">Price</th>
+                  <th className="r hide-sm">Day range</th>
+                  <th className="r">Sell · Buy</th>
+                  <th className="r"><span className="sr-only">Remove</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayedGroups.map((g) => (
+                  <Fragment key={g.category}>
+                    <tr className="cat-group-row">
+                      <th colSpan={5}>
+                        <div className="cat-group-head">
+                          <span>{g.label}</span>
+                          <span className="badge">{g.items.length}</span>
+                        </div>
+                      </th>
+                    </tr>
+                    {g.items.map((e) => (
+                      <FullRow
+                        key={e.id}
+                        e={e}
+                        q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
+                        inList
+                        onRemove={() => void remove(e.instrument.id, e.instrument.symbol)}
+                      />
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </section>
   );
 }
 
-function CompactRow({ e, q, withBidAsk }: { e: WEntry; q?: Quote; withBidAsk?: boolean }) {
+function CompactRow({
+  e,
+  q,
+  withBidAsk,
+  inList = true,
+  isBusy,
+  onToggle,
+}: {
+  e: { id: string; instrument: Instrument };
+  q?: Quote;
+  withBidAsk?: boolean;
+  inList?: boolean;
+  isBusy?: boolean;
+  onToggle?: () => void;
+}) {
   const tick = useTick(q?.ltp);
   const href = `/trader/instrument/${e.instrument.id}`;
+  const name = fullName(e.instrument);
   return (
     <div className={`list-row ${tick}`} style={{ position: 'relative' }}>
       {withBidAsk ? (
         <Link href={href} className="grow" style={{ minWidth: 0 }}>
-          <div><span className="w6">{shortSymbol(e.instrument.symbol)}</span> <span className="t3 xs">{e.instrument.segment}</span></div>
-          <div className="row" style={{ gap: 6 }}><span className="num w6">{inr(q?.ltp)}</span><Change value={q?.change} pct={q?.changePct} size="sm" /></div>
+          <div>
+            <span className="w6">{name}</span>{' '}
+            <span className="t3 xs">{shortSymbol(e.instrument.symbol)} · {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange}</span>
+          </div>
+          <div className="row" style={{ gap: 6 }}>
+            <span className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</span>
+            <Change value={q?.change} pct={q?.changePct} size="sm" />
+          </div>
         </Link>
       ) : (
-      <Link href={href} className="grow" style={{ minWidth: 0 }}>
-        <div className="w6">{shortSymbol(e.instrument.symbol)}</div>
-        <div className="t3">{e.instrument.exchange} · {e.instrument.segment}</div>
-      </Link>
+        <Link href={href} className="grow" style={{ minWidth: 0 }}>
+          <div className="w6">{name}</div>
+          <div className="t3">{shortSymbol(e.instrument.symbol)} · {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange} · {e.instrument.segment}</div>
+        </Link>
       )}
-      {!withBidAsk && <div className="quote-cell">
-        <Link href={href} className="num w6">₹{inr(q?.ltp)}</Link>
-        <Change value={q?.change} pct={q?.changePct} size="sm" />
-      </div>}
+      {!withBidAsk && (
+        <div className="quote-cell">
+          <Link href={href} className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</Link>
+          <Change value={q?.change} pct={q?.changePct} size="sm" />
+        </div>
+      )}
       {withBidAsk && (
         <div className="ba-boxes">
           <span className="ba-box b"><Link href={`${href}?side=SELL`} aria-label={`Sell at ${q?.bid}`}>{inr(q?.bid)}</Link><small>L {inr(q?.low)}</small></span>
           <span className="ba-box a"><Link href={`${href}?side=BUY`} aria-label={`Buy at ${q?.ask}`}>{inr(q?.ask)}</Link><small>H {inr(q?.high)}</small></span>
         </div>
       )}
+      {!inList && onToggle && (
+        <button className="btn btn-sm" disabled={isBusy} onClick={onToggle} aria-label={`Add ${name}`}>
+          <Icon name="plus" size={16} />Add
+        </button>
+      )}
     </div>
   );
 }
 
-function FullRow({ e, q, onRemove }: { e: WEntry; q?: Quote; onRemove: () => void }) {
+function FullRow({
+  e,
+  q,
+  inList = true,
+  isBusy,
+  onToggle,
+  onRemove,
+}: {
+  e: { id: string; instrument: Instrument };
+  q?: Quote;
+  inList?: boolean;
+  isBusy?: boolean;
+  onToggle?: () => void;
+  onRemove?: () => void;
+}) {
   const tick = useTick(q?.ltp);
   const href = `/trader/instrument/${e.instrument.id}`;
+  const action = onToggle ?? onRemove;
+  const name = fullName(e.instrument);
   return (
     <tr className={tick}>
       <td>
         <Link href={href} className="row" style={{ flexWrap: 'nowrap' }}>
-          <Mark text={shortSymbol(e.instrument.symbol)} />
-          <span><span className="w6">{shortSymbol(e.instrument.symbol)}</span><span className="sub" style={{ display: 'block' }}>{e.instrument.exchange} · {e.instrument.segment}{e.instrument.expiry ? ` · ${new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}</span></span>
+          <Mark text={name} />
+          <span>
+            <div className="w6 row" style={{ gap: 6, alignItems: 'center' }}>
+              <span>{name}</span>
+              <LotTag i={e.instrument} />
+            </div>
+            <span className="sub" style={{ display: 'block', marginTop: 2 }}>
+              <span style={{ fontWeight: 500, color: 'var(--text-2)' }}>{shortSymbol(e.instrument.symbol)}</span>
+              {' · '}
+              {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange} · {e.instrument.segment}
+              {e.instrument.expiry ? ` · ${new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}
+            </span>
+          </span>
         </Link>
       </td>
-      <td className="r"><div className="quote-cell"><span className="num w6">₹{inr(q?.ltp)}</span><Change value={q?.change} pct={q?.changePct} size="sm" /></div></td>
+      <td className="r">
+        <div className="quote-cell">
+          <span className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</span>
+          <Change value={q?.change} pct={q?.changePct} size="sm" />
+        </div>
+      </td>
       <td className="r num t2 sm hide-sm">{inr(q?.low)} – {inr(q?.high)}</td>
       <td className="r">
         <span className="bidask">
@@ -346,21 +698,32 @@ function FullRow({ e, q, onRemove }: { e: WEntry; q?: Quote; onRemove: () => voi
           <Link className="a" href={`${href}?side=BUY`} aria-label={`Buy ${e.instrument.symbol} at ${q?.ask}`}>{inr(q?.ask)}</Link>
         </span>
       </td>
-      <td className="r"><button className="icon-btn" aria-label={`Remove ${e.instrument.symbol}`} onClick={onRemove}><Icon name="x" size={18} /></button></td>
+      <td className="r">
+        {inList ? (
+          <button className="icon-btn" aria-label={`Remove ${e.instrument.symbol}`} onClick={action} title="Remove from watchlist">
+            <Icon name="x" size={18} />
+          </button>
+        ) : (
+          <button className="btn btn-sm" disabled={isBusy} onClick={action} aria-label={`Add ${name} to watchlist`}>
+            <Icon name="plus" size={16} />Add
+          </button>
+        )}
+      </td>
     </tr>
   );
 }
 
 /* ======================================================================= market movers (explore) */
 export function Movers() {
-  const { data, loading, error, refetch } = useQuery<{ searchInstruments: Instrument[] }>(`{ searchInstruments(query:"", limit:50){ id symbol name exchange segment } }`);
+  const { data, loading, error, refetch } = useQuery<{ searchInstruments: Instrument[] }>(`{ searchInstruments(query:"", limit:50){ id symbol name exchange segment quote{ ${QUOTE_FIELDS} } } }`);
   const list = data?.searchInstruments ?? [];
-  const quotes = useLiveQuotes(list.map((i) => i.id));
+  const liveQuotes = useLiveQuotes(list.map((i) => i.id));
   const [tab, setTab] = useState<'gainers' | 'losers'>('gainers');
+  const getQ = (i: Instrument) => liveQuotes[i.id] ?? i.quote;
   const sorted = list
-    .filter((i) => quotes[i.id])
-    .sort((a, b) => (Number(quotes[b.id].changePct) - Number(quotes[a.id].changePct)) * (tab === 'gainers' ? 1 : -1))
-    .filter((i) => (tab === 'gainers' ? Number(quotes[i.id].changePct) >= 0 : Number(quotes[i.id].changePct) < 0))
+    .filter((i) => getQ(i))
+    .sort((a, b) => (Number(getQ(b)?.changePct ?? 0) - Number(getQ(a)?.changePct ?? 0)) * (tab === 'gainers' ? 1 : -1))
+    .filter((i) => (tab === 'gainers' ? Number(getQ(i)?.changePct ?? 0) >= 0 : Number(getQ(i)?.changePct ?? 0) < 0))
     .slice(0, 8);
   return (
     <section className="section" aria-label="Top movers">
@@ -378,13 +741,15 @@ export function Movers() {
       ) : (
         <div className="tiles">
           {sorted.map((i) => {
-            const q = quotes[i.id];
+            const q = getQ(i)!;
+            const name = fullName(i);
             return (
               <Link key={i.id} href={`/trader/instrument/${i.id}`} className="tile">
-                <Mark text={shortSymbol(i.symbol)} />
-                <div className="w6" style={{ marginTop: 'auto' }}>{shortSymbol(i.symbol)}</div>
+                <Mark text={name} />
+                <div className="w6" style={{ marginTop: 'auto' }}>{name}</div>
+                <div className="t3 xs">{shortSymbol(i.symbol)}</div>
                 <div>
-                  <div className="num w6">₹{inr(q.ltp)}</div>
+                  <div className="num w6">{curSign(i)}{inr(q.ltp)}</div>
                   <Change value={q.change} pct={q.changePct} size="sm" />
                 </div>
               </Link>
@@ -399,8 +764,8 @@ export function Movers() {
 
 /* ======================================================================= orders */
 export const ORDER_TYPE: Record<string, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
-export interface Order { id: string; side: 'BUY' | 'SELL'; type: string; quantity: number; limitPrice?: string; triggerPrice?: string; triggeredAt?: string; fillPrice?: string; status: string; venue: string; rejectReason?: string; createdAt: string; filledAt?: string; instrument?: { symbol: string } }
-export const ORDER_FIELDS = 'id side type quantity limitPrice triggerPrice triggeredAt fillPrice status venue rejectReason createdAt filledAt instrument{ symbol }';
+export interface Order { id: string; side: 'BUY' | 'SELL'; type: string; quantity: number; limitPrice?: string; triggerPrice?: string; triggeredAt?: string; fillPrice?: string; status: string; venue: string; rejectReason?: string; createdAt: string; filledAt?: string; instrument?: { symbol: string; name?: string } }
+export const ORDER_FIELDS = 'id side type quantity limitPrice triggerPrice triggeredAt fillPrice status venue rejectReason createdAt filledAt instrument{ symbol name }';
 
 export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orders yet', emptyText = 'Orders you place show up here with their status.' }: { userId?: string; statuses?: string[]; canCancel?: boolean; emptyTitle?: string; emptyText?: string }) {
   const { data, loading, error, refetch } = useQuery<{ orders: Order[] }>(`query($u:ID,$s:[OrderStatus!]){ orders(userId:$u, status:$s, limit:100){ ${ORDER_FIELDS} } }`, { u: userId, s: statuses }, { pollMs: 4000 });
@@ -416,7 +781,8 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
       {data!.orders.map((o) => (
         <div key={o.id} className="list-row" style={{ alignItems: 'flex-start' }}>
           <div className="grow">
-            <div className="w6">{o.instrument ? shortSymbol(o.instrument.symbol) : '—'}</div>
+            <div className="w6">{o.instrument ? fullName(o.instrument) : '—'}</div>
+            <div className="t3 xs">{o.instrument ? shortSymbol(o.instrument.symbol) : ''}</div>
             <div className="t3"><span className={o.side === 'BUY' ? 'pos' : 'neg'} style={{ fontWeight: 600 }}>{o.side === 'BUY' ? 'Buy' : 'Sell'}</span> · {o.quantity} qty · {ORDER_TYPE[o.type] ?? o.type}{o.triggerPrice ? ` @ ₹${inr(o.triggerPrice)}` : ''} · {when(o.createdAt)}</div>
             {o.rejectReason && <div className="xs neg">{o.rejectReason}</div>}
           </div>
@@ -435,8 +801,8 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
           {data!.orders.map((o) => (
             <tr key={o.id}>
               <td>
-                <span className="w6">{o.instrument ? shortSymbol(o.instrument.symbol) : '—'}</span>
-                <span className={`sub ${o.side === 'BUY' ? 'pos' : 'neg'}`} style={{ display: 'block', fontWeight: 600 }}>{o.side === 'BUY' ? 'Buy' : 'Sell'}</span>
+                <span className="w6">{o.instrument ? fullName(o.instrument) : '—'}</span>
+                <span className="sub" style={{ display: 'block' }}>{o.instrument ? shortSymbol(o.instrument.symbol) : ''} · <span className={o.side === 'BUY' ? 'pos' : 'neg'} style={{ fontWeight: 600 }}>{o.side === 'BUY' ? 'Buy' : 'Sell'}</span></span>
               </td>
               <td className="t2">{ORDER_TYPE[o.type] ?? o.type}{o.triggerPrice && <span className="sub num" style={{ display: 'block' }}>Trigger ₹{inr(o.triggerPrice)}{o.triggeredAt ? ' · triggered' : ''}</span>}</td>
               <td className="r num">{o.quantity}</td>
@@ -453,7 +819,7 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
         </tbody>
       </table>
       {cancel && (
-        <Confirm title="Cancel this order?" lines={[['Instrument', shortSymbol(cancel.instrument?.symbol ?? '')], ['Side', cancel.side === 'BUY' ? 'Buy' : 'Sell'], ['Quantity', cancel.quantity], [cancel.triggerPrice ? 'Trigger' : 'Limit price', `₹${inr(cancel.limitPrice ?? cancel.triggerPrice)}`]]}
+        <Confirm title="Cancel this order?" lines={[['Instrument', fullName(cancel.instrument)], ['Side', cancel.side === 'BUY' ? 'Buy' : 'Sell'], ['Quantity', cancel.quantity], [cancel.triggerPrice ? 'Trigger' : 'Limit price', `₹${inr(cancel.limitPrice ?? cancel.triggerPrice)}`]]}
           confirmLabel="Cancel order" tone="danger" pending={m.pending} error={m.error} onClose={() => setCancel(null)}
           onConfirm={async () => { if (await m.run({ id: cancel.id })) { toast('Order cancelled'); setCancel(null); void refetch(); } }} />
       )}
@@ -463,9 +829,9 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
 }
 
 /* ======================================================================= positions */
-interface Position { id: string; instrumentId: string; netQty: number; avgPrice: string; realizedPnl: string; unrealizedPnl?: string; ltp?: string; instrument?: { symbol: string } }
+interface Position { id: string; instrumentId: string; netQty: number; avgPrice: string; realizedPnl: string; unrealizedPnl?: string; ltp?: string; instrument?: { symbol: string; name?: string } }
 export function PositionsTable({ userId, canTrade }: { userId?: string; canTrade?: boolean }) {
-  const { data, loading, error, refetch } = useQuery<{ positions: Position[] }>(`query($u:ID){ positions(userId:$u){ id instrumentId netQty avgPrice realizedPnl unrealizedPnl ltp instrument{ symbol } } }`, { u: userId }, { pollMs: 3000 });
+  const { data, loading, error, refetch } = useQuery<{ positions: Position[] }>(`query($u:ID){ positions(userId:$u){ id instrumentId netQty avgPrice realizedPnl unrealizedPnl ltp instrument{ symbol name } } }`, { u: userId }, { pollMs: 3000 });
   if (loading && !data) return <SkeletonRows />;
   if (error && !data) return <ErrorState error={error} retry={refetch} />;
   if (!data!.positions.length) return <Empty icon="briefcase" title="No positions" action={canTrade ? <Link className="btn btn-sm btn-primary" href="/trader">Explore instruments</Link> : undefined}>A position opens when a buy or sell order is executed.</Empty>;
@@ -480,7 +846,8 @@ export function PositionsTable({ userId, canTrade }: { userId?: string; canTrade
         {data!.positions.map((p) => (
           <div key={p.id} className="list-row">
             <div className="grow">
-              <div className="w6">{p.instrument ? shortSymbol(p.instrument.symbol) : '—'}</div>
+              <div className="w6">{p.instrument ? fullName(p.instrument) : '—'}</div>
+              <div className="t3 xs">{p.instrument ? shortSymbol(p.instrument.symbol) : ''}</div>
               <div className="t3 num">{p.netQty} qty · avg ₹{inr(p.avgPrice)} · LTP ₹{inr(p.ltp)}</div>
             </div>
             <div className="quote-cell" style={{ gap: 4 }}>
@@ -496,7 +863,10 @@ export function PositionsTable({ userId, canTrade }: { userId?: string; canTrade
           <tbody>
             {data!.positions.map((p) => (
               <tr key={p.id}>
-                <td><span className="w6">{p.instrument ? shortSymbol(p.instrument.symbol) : '—'}</span><span className="sub" style={{ display: 'block' }}>{p.netQty > 0 ? 'Long' : p.netQty < 0 ? 'Short' : 'Closed'}</span></td>
+                <td>
+                  <span className="w6">{p.instrument ? fullName(p.instrument) : '—'}</span>
+                  <span className="sub" style={{ display: 'block' }}>{p.instrument ? shortSymbol(p.instrument.symbol) : ''} · {p.netQty > 0 ? 'Long' : p.netQty < 0 ? 'Short' : 'Closed'}</span>
+                </td>
                 <td className={`r num w6 ${p.netQty > 0 ? 'pos' : p.netQty < 0 ? 'neg' : 'flat'}`}>{p.netQty}</td>
                 <td className="r"><div className="quote-cell"><span className="num">₹{inr(p.avgPrice)}</span><span className="sub num">LTP ₹{inr(p.ltp)}</span></div></td>
                 <td className={`r num w6 ${tone(p.unrealizedPnl)}`}>{inr(p.unrealizedPnl, { sign: true })}</td>

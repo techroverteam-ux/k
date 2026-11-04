@@ -1,10 +1,11 @@
 import { Args, Float, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
-import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, not, or, sql } from 'drizzle-orm';
 import type { Actor, GqlContext } from '../common/context';
 import { AllowWithoutMfa, Ctx, CurrentActor, Public, Roles } from '../common/context';
 import { AuditService } from '../audit/audit.service';
 import { badInput, notFound } from '../common/errors';
-import { AppSettings, Candle, CandleIntervalGql, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
+import { AppSettings, Candle, CandleIntervalGql, CategoryCount, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
+import { categoryOf, type Category } from '../trading/instrument-meta';
 import { formatMoney } from '../common/money';
 import type { CandleInterval } from './candles';
 import { API_VERSION } from '../common/version';
@@ -71,7 +72,41 @@ export class MarketResolver {
   }
 
   @AllowWithoutMfa()
-  @Query(() => [Instrument], { description: 'Find instruments by symbol or name. With a category (MCX, FOREX, NSE, INDICES) and/or lot class (MINI, MEGA) and an empty query, lists that group.' })
+  @Query(() => [CategoryCount], { description: 'Total active instruments grouped by category.' })
+  async instrumentCategoryCounts(): Promise<CategoryCount[]> {
+    const rows = await this.dbs.db
+      .select({
+        exchange: instruments.exchange,
+        segment: instruments.segment,
+        symbol: instruments.symbol,
+      })
+      .from(instruments)
+      .where(eq(instruments.active, true));
+
+    const counts: Record<Category, number> = {
+      FUTURES: 0,
+      MCX: 0,
+      OPTIONS: 0,
+      FOREX: 0,
+      CRYPTO: 0,
+      US_STOCK: 0,
+      COMEX: 0,
+      US_INDEX: 0,
+    };
+
+    for (const r of rows) {
+      const c = categoryOf(r.exchange, r.segment, r.symbol);
+      counts[c] = (counts[c] ?? 0) + 1;
+    }
+
+    return (Object.entries(counts) as [Category, number][]).map(([category, count]) => ({
+      category,
+      count,
+    }));
+  }
+
+  @AllowWithoutMfa()
+  @Query(() => [Instrument], { description: 'Find instruments by symbol or name. With a category (FUTURES, MCX, OPTIONS, FOREX, CRYPTO, US_STOCK, COMEX, US_INDEX) and/or lot class (MINI, MEGA) and an empty query, lists that group.' })
   async searchInstruments(
     @Args('query') query: string,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
@@ -81,18 +116,22 @@ export class MarketResolver {
     const s = `%${query.trim().replace(/[%_\\]/g, (x) => '\\' + x).slice(0, 30)}%`;
     const cat =
       category === 'MCX' ? eq(instruments.exchange, 'MCX')
-      : category === 'FOREX' ? or(eq(instruments.exchange, 'CDS'), eq(instruments.segment, 'CUR'))
-      : category === 'INDICES' ? eq(instruments.segment, 'INDEX')
-      : category === 'NSE' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('INDEX', 'CUR')`)
+      : category === 'COMEX' ? eq(instruments.exchange, 'COMEX')
+      : category === 'CRYPTO' ? eq(instruments.exchange, 'CRYPTO')
+      : category === 'US_STOCK' ? sql`(${instruments.exchange} IN ('NASDAQ', 'NYSE', 'US_STOCK') OR ${instruments.segment} = 'US_STOCK')`
+      : category === 'US_INDEX' ? sql`(${instruments.exchange} = 'US_INDEX' OR ${instruments.segment} = 'US_INDEX')`
+      : category === 'FOREX' ? sql`(${instruments.exchange} IN ('CDS', 'FOREX') OR ${instruments.segment} IN ('CUR', 'FX'))`
+      : category === 'OPTIONS' ? sql`(${instruments.segment} IN ('OPT', 'OPTIONS', 'CE', 'PE') OR ${instruments.symbol} ILIKE '%CE' OR ${instruments.symbol} ILIKE '%PE')`
+      : category === 'FUTURES' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('OPT', 'OPTIONS', 'CE', 'PE', 'CUR') AND ${instruments.symbol} NOT ILIKE '%CE' AND ${instruments.symbol} NOT ILIKE '%PE'`)
       : category ? sql`false` : undefined;
     const cls = lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined;
     const rows = await this.dbs.db
       .select()
       .from(instruments)
       .where(and(eq(instruments.active, true), query.trim() ? or(ilike(instruments.symbol, s), ilike(instruments.name, s)) : undefined, cat, cls))
-      .orderBy(asc(instruments.symbol), asc(instruments.expiry))
-      .limit(clampLimit(limit, 20, category || lotClass ? 200 : 50));
-    return rows.map(toInstrument);
+      .orderBy(asc(sql`coalesce(${instruments.expiry}, '9999-12-31')`), asc(instruments.symbol))
+      .limit(clampLimit(limit, 50, 500));
+    return rows.map((r) => toInstrument(r, this.market.quote(r.id)));
   }
 
   @Roles('SUPER_ADMIN')
@@ -104,7 +143,7 @@ export class MarketResolver {
       .where(and(eq(instruments.active, true), lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined))
       .orderBy(asc(instruments.exchange), asc(instruments.symbol))
       .limit(2000);
-    return rows.map(toInstrument);
+    return rows.map((r) => toInstrument(r, this.market.quote(r.id)));
   }
 
   @Roles('SUPER_ADMIN')
@@ -121,7 +160,7 @@ export class MarketResolver {
       const m = this.market.instrument(r.id);
       if (m) m.lotClass = lotClass; // fees use the in-memory copy
     }
-    return rows.map(toInstrument);
+    return rows.map((r) => toInstrument(r, this.market.quote(r.id)));
   }
 
   @Roles('SUPER_ADMIN')
@@ -145,13 +184,13 @@ export class MarketResolver {
   async instrument(@Args('id', { type: () => ID }) id: string) {
     const i = this.market.instrument(id);
     if (!i) throw notFound('Instrument');
-    return toInstrument(i);
+    return toInstrument(i, this.market.quote(i.id));
   }
 
   @AllowWithoutMfa()
   @Query(() => [Quote])
   quotes(@Args('instrumentIds', { type: () => [ID] }) ids: string[]) {
-    if (ids.length > 100) throw badInput('Max 100 instruments per request.');
+    if (ids.length > 1000) throw badInput('Max 1000 instruments per request.');
     return ids.map((id) => this.market.quote(id)).filter((q): q is QuoteData => !!q).map(toQuote);
   }
 
@@ -225,7 +264,7 @@ export class MarketResolver {
       payload.quotes.filter((q) => vars.instrumentIds.includes(q.instrumentId)).map(toQuote),
   })
   quotesUpdated(@Args('instrumentIds', { type: () => [ID] }) ids: string[]) {
-    if (ids.length > 100) throw badInput('Max 100 instruments per subscription.');
+    if (ids.length > 1000) throw badInput('Max 1000 instruments per subscription.');
     return pubsub.asyncIterableIterator(TOPIC.quotes);
   }
 }

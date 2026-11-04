@@ -141,7 +141,7 @@ export class DhanFeedService implements OnModuleDestroy {
         return;
       }
 
-      // Response Code 2 = Ticker Packet (8 bytes header + payload)
+      // Response Code 2 = Ticker Packet (8 bytes header + 8 bytes payload = 16 bytes)
       if (responseCode === 2 && buf.length >= 12) {
         const ltp = buf.readFloatLE(8);
         const tick: DhanTick = {
@@ -154,15 +154,29 @@ export class DhanFeedService implements OnModuleDestroy {
         return;
       }
 
-      // Response Code 4 = Quote Packet (8 bytes header + 44 bytes payload = 52 bytes)
-      // Response Code 8 = Full Packet (Quote + Depth)
-      if ((responseCode === 4 || responseCode === 8) && buf.length >= 52) {
+      // Response Code 6 = Prev Close Packet (8 bytes header + 8 bytes payload = 16 bytes)
+      if (responseCode === 6 && buf.length >= 12) {
+        const close = buf.readFloatLE(8);
+        const tick: DhanTick = {
+          securityId,
+          segmentCode,
+          ltp: 0,
+          close,
+          timestamp: new Date(),
+        };
+        this.tickListener?.(tick);
+        return;
+      }
+
+      // Response Code 4 = Quote Packet (8 bytes header + 42 bytes payload = 50 bytes)
+      // Response Code 8 = Full Packet (Quote + Depth, starts with same 50 bytes header + quote)
+      if ((responseCode === 4 || responseCode === 8) && buf.length >= 50) {
         const ltp = buf.readFloatLE(8);
-        const open = buf.readFloatLE(36);
-        const high = buf.readFloatLE(40);
-        const low = buf.readFloatLE(44);
-        const close = buf.readFloatLE(48);
-        const volume = buf.readUInt32LE(24);
+        const volume = buf.readUInt32LE(22);
+        const open = buf.readFloatLE(34);
+        const close = buf.readFloatLE(38);
+        const high = buf.readFloatLE(42);
+        const low = buf.readFloatLE(46);
 
         const tick: DhanTick = {
           securityId,
@@ -176,6 +190,7 @@ export class DhanFeedService implements OnModuleDestroy {
           timestamp: new Date(),
         };
         this.tickListener?.(tick);
+        return;
       }
     } catch (err) {
       this.log.error(`Error parsing Dhan binary packet: ${(err as Error).message}`);

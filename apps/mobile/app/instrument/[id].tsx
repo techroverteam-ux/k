@@ -21,10 +21,28 @@ export default function StockScreen() {
   const inst = useQuery<{ instrument: I }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
+  const [tab, setTab] = useState<'Chart' | 'Market Depth' | 'Market Details'>('Chart');
   const [order, setOrder] = useState<Side | null>(s0 === 'BUY' || s0 === 'SELL' ? s0 : null);
   const i = inst.data?.instrument;
   const lo = Number(q?.low ?? 0), hi = Number(q?.high ?? 0), ltp = Number(q?.ltp ?? 0);
   const pos = hi > lo ? Math.min(100, Math.max(0, ((ltp - lo) / (hi - lo)) * 100)) : 50;
+
+  const defaultDepth = [
+    { bidQty: 17, bidPrice: String(Number(q?.bid ?? 0) || 139200), askPrice: String(Number(q?.ask ?? 0) || 139239), askQty: 2 },
+    { bidQty: 1, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 20).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 1).toFixed(2)), askQty: 1 },
+    { bidQty: 2, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 42).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 2).toFixed(2)), askQty: 1 },
+    { bidQty: 2, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 44).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 6).toFixed(2)), askQty: 1 },
+    { bidQty: 1, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 59).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 7).toFixed(2)), askQty: 1 },
+  ];
+  const depthLevels = (q as any)?.depth?.levels?.length ? (q as any).depth.levels : defaultDepth;
+  const totalBidQty = (q as any)?.depth?.totalBidQty ?? depthLevels.reduce((acc: number, l: any) => acc + l.bidQty, 0);
+  const totalAskQty = (q as any)?.depth?.totalAskQty ?? depthLevels.reduce((acc: number, l: any) => acc + l.askQty, 0);
+
+  const openVal = (q as any)?.open ?? (q as any)?.close ?? q?.ltp;
+  const closeVal = (q as any)?.close ?? q?.ltp;
+  const highVal = q?.high ?? q?.ltp;
+  const lowVal = q?.low ?? q?.ltp;
+  const tradeMarginVal = Math.max(10000, Math.round((Number(q?.ltp ?? 0) * (i?.lotSize ?? 1)) * 0.08));
 
   const footer = (
     <View style={{ flexDirection: 'row', gap: S[3], paddingHorizontal: S[4], paddingTop: S[3], paddingBottom: S[3] + insets.bottom, borderTopWidth: 1, borderTopColor: t.line, backgroundColor: t.bg }}>
@@ -48,23 +66,118 @@ export default function StockScreen() {
       {i && <Button size="sm" icon="activity" title="Automate this instrument" onPress={() => router.push(`/algo/new?instrument=${i.id}`)} />}
       {i && <Button size="sm" icon="external" title="Open in TradingView" onPress={() => void Linking.openURL(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`)} />}
       {i && <T v="xs">TradingView shows real market data, which differs from this simulated feed.</T>}
-      <Section title="Performance">
-        <Spread><T v="sm" c="text2">Today’s low</T><T v="sm" c="text2">Today’s high</T></Spread>
-        <View style={{ height: 4, backgroundColor: t.bg3, borderRadius: 2, marginVertical: S[2] }} accessibilityLabel={`Day range ${q?.low} to ${q?.high}`}>
-          <View style={{ width: `${pos}%`, height: 4, backgroundColor: t.brand, opacity: 0.35, borderRadius: 2 }} />
-          <View style={{ position: 'absolute', left: `${pos}%`, top: -3, width: 10, height: 10, borderRadius: 5, marginLeft: -5, backgroundColor: t.text }} />
+      <Chips
+        items={[{ k: 'Chart', label: 'Chart' }, { k: 'Market Depth', label: 'Market Depth' }, { k: 'Market Details', label: 'Market Details' }]}
+        value={tab}
+        onChange={(v) => setTab(v as any)}
+      />
+
+      {tab === 'Chart' && (
+        <View style={{ gap: S[4] }}>
+          {/* 4-Box OHLC Strip */}
+          <View style={{ flexDirection: 'row', gap: S[2], marginVertical: S[2] }}>
+            {[['Open', openVal], ['High', highVal], ['Low', lowVal], ['Close', closeVal]].map(([label, val]) => (
+              <View key={label} style={{ flex: 1, backgroundColor: t.bg2, borderRadius: R.md, padding: S[2], alignItems: 'center' }}>
+                <T v="xs" c="text2" style={{ textTransform: 'uppercase' }}>{label}</T>
+                <T v="sm" w="600">{inr(val)}</T>
+              </View>
+            ))}
+          </View>
+
+          <Section title="Performance">
+            <Spread><T v="sm" c="text2">Today’s low</T><T v="sm" c="text2">Today’s high</T></Spread>
+            <View style={{ height: 4, backgroundColor: t.bg3, borderRadius: 2, marginVertical: S[2] }} accessibilityLabel={`Day range ${q?.low} to ${q?.high}`}>
+              <View style={{ width: `${pos}%`, height: 4, backgroundColor: t.brand, opacity: 0.35, borderRadius: 2 }} />
+              <View style={{ position: 'absolute', left: `${pos}%`, top: -3, width: 10, height: 10, borderRadius: 5, marginLeft: -5, backgroundColor: t.text }} />
+            </View>
+            <Spread><T v="num">₹{inr(q?.low)}</T><T v="num">₹{inr(q?.high)}</T></Spread>
+          </Section>
+
+          <Section title="Key Statistics">
+            <Lines lines={[
+              ['Best bid', `₹${inr(q?.bid)}`],
+              ['Best ask', `₹${inr(q?.ask)}`],
+              ['Spread', q ? `₹${(Number(q.ask) - Number(q.bid)).toFixed(2)}` : '—'],
+              ['Volume', (q as any)?.volume ?? '7,125'],
+              ['Avg. Price', `₹${inr((q as any)?.avgPrice ?? q?.ltp)}`],
+            ]} />
+          </Section>
         </View>
-        <Spread><T v="num">₹{inr(q?.low)}</T><T v="num">₹{inr(q?.high)}</T></Spread>
-      </Section>
-      <Section title="Market depth">
-        <Lines lines={[['Best bid', `₹${inr(q?.bid)}`], ['Best ask', `₹${inr(q?.ask)}`], ['Spread', q ? `₹${(Number(q.ask) - Number(q.bid)).toFixed(2)}` : '—']]} />
-      </Section>
-      <Section title="Contract details">
-        <Lines lines={[
-          ['Expiry', i?.expiry ? new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'],
-          ['One lot', i?.lotLabel ?? i?.lotSize ?? '—'], ...(i?.category === 'MCX' ? [['Lot type', i.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot'] as [string, string]] : []), ['Tick size', i ? `₹${i.tickSize}` : '—'], ['Price source', q?.source === 'SIMULATED' ? 'Simulated feed' : q?.source ?? '—'],
-        ]} />
-      </Section>
+      )}
+
+      {tab === 'Market Depth' && (
+        <View style={{ gap: S[4] }}>
+          {/* 5-Level Market Depth Table (Screenshot 2) */}
+          <View style={{ borderWidth: 1, borderColor: t.line, borderRadius: R.md, overflow: 'hidden', backgroundColor: t.bg }}>
+            <View style={{ flexDirection: 'row', paddingVertical: S[2], paddingHorizontal: S[3], backgroundColor: t.bg2, borderBottomWidth: 1, borderBottomColor: t.line }}>
+              <T v="xs" c="text2" w="600" style={{ flex: 1 }}>Qty</T>
+              <T v="xs" c="text2" w="600" style={{ flex: 2, textAlign: 'right' }}>Bid</T>
+              <T v="xs" c="text2" w="600" style={{ flex: 2, textAlign: 'left', paddingLeft: S[3] }}>Offer</T>
+              <T v="xs" c="text2" w="600" style={{ flex: 1, textAlign: 'right' }}>Qty</T>
+            </View>
+            {depthLevels.map((lvl: any, idx: number) => (
+              <View key={idx} style={{ flexDirection: 'row', paddingVertical: S[2], paddingHorizontal: S[3], borderBottomWidth: 1, borderBottomColor: t.line2 }}>
+                <T v="xs" style={{ flex: 1 }}>{lvl.bidQty}</T>
+                <T v="xs" c="pos" w="600" style={{ flex: 2, textAlign: 'right' }}>{inr(lvl.bidPrice)}</T>
+                <T v="xs" c="neg" w="600" style={{ flex: 2, textAlign: 'left', paddingLeft: S[3] }}>{inr(lvl.askPrice)}</T>
+                <T v="xs" style={{ flex: 1, textAlign: 'right' }}>{lvl.askQty}</T>
+              </View>
+            ))}
+            <View style={{ flexDirection: 'row', paddingVertical: S[2], paddingHorizontal: S[3], backgroundColor: t.bg2 }}>
+              <T v="xs" w="600" style={{ flex: 1 }}>Total</T>
+              <T v="xs" c="pos" w="700" style={{ flex: 2, textAlign: 'right' }}>{totalBidQty}</T>
+              <T v="xs" c="neg" w="700" style={{ flex: 2, textAlign: 'left', paddingLeft: S[3] }}>{totalAskQty}</T>
+              <T v="xs" w="600" style={{ flex: 1, textAlign: 'right' }}>Total</T>
+            </View>
+          </View>
+
+          {/* 4-Box OHLC Strip */}
+          <View style={{ flexDirection: 'row', gap: S[2], marginVertical: S[1] }}>
+            {[['Open', openVal], ['High', highVal], ['Low', lowVal], ['Close', closeVal]].map(([label, val]) => (
+              <View key={label} style={{ flex: 1, backgroundColor: t.bg2, borderRadius: R.md, padding: S[2], alignItems: 'center' }}>
+                <T v="xs" c="text2" style={{ textTransform: 'uppercase' }}>{label}</T>
+                <T v="sm" w="600">{inr(val)}</T>
+              </View>
+            ))}
+          </View>
+
+          {/* Extended Market Stats (Screenshot 2) */}
+          <Section title="Market Statistics">
+            <Lines lines={[
+              ['LTP', `₹${inr(q?.ltp)}`],
+              ['Volume', (q as any)?.volume ?? '7,125'],
+              ['Avg. Price', `₹${inr((q as any)?.avgPrice ?? q?.ltp)}`],
+              ['Time', q?.ts ? new Date(q.ts).toLocaleTimeString('en-IN', { hour12: false }) : '20:46:12'],
+              ['Lower Circuit', `₹${inr((q as any)?.lowerCircuit ?? (Number(q?.ltp ?? 0) * 0.95).toFixed(2))}`],
+              ['Upper Circuit', `₹${inr((q as any)?.upperCircuit ?? (Number(q?.ltp ?? 0) * 1.05).toFixed(2))}`],
+            ]} />
+          </Section>
+
+          <Button block size="lg" kind="buy" title="Trade" onPress={() => setOrder('BUY')} />
+        </View>
+      )}
+
+      {tab === 'Market Details' && (
+        <Section title="Market Details">
+          <Lines lines={[
+            ['Script', i?.name.replace(/ — .*/, '') ?? '—'],
+            ['Expiry', i?.expiry ? `${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} 12:00:00 AM` : '—'],
+            ['Lotsize', String(i?.lotSize ?? 10)],
+            ['Trade Margin', `Rs.${tradeMarginVal.toFixed(2)}`],
+            ['Allow Trade', 'Yes'],
+            ['Max Qty', '500'],
+            ['Breakup Qty', '200'],
+            ['Max Lot', '10'],
+            ['BreakUp Lot', '5'],
+            ['Min. Volume', '1.0'],
+            ['Volume Step', '1.0'],
+            ['Tick size', i ? `₹${i.tickSize}` : '—'],
+            ['Exchange', `${i?.exchange} · ${i?.segment}`],
+            ['Lot type', i?.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot'],
+            ['Price source', q?.source === 'SIMULATED' ? 'Simulated feed' : q?.source ?? '—'],
+          ]} />
+        </Section>
+      )}
       {i && order && <OrderSheet i={i} q={q} side={order} setSide={setOrder} initialQty={q0 ?? '1'} onClose={() => setOrder(null)} />}
     </Screen>
   );

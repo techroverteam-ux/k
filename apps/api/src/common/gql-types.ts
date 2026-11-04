@@ -41,6 +41,43 @@ registerEnumType(OrderStatusGql, { name: 'OrderStatus' });
 registerEnumType(PaymentTypeGql, { name: 'PaymentType' });
 registerEnumType(PaymentStatusGql, { name: 'PaymentStatus' });
 
+@ObjectType({ description: 'One level of the 5-level market depth' })
+export class DepthLevel {
+  @Field(() => Int) bidQty: number;
+  @Field() bidPrice: string;
+  @Field() askPrice: string;
+  @Field(() => Int) askQty: number;
+}
+
+@ObjectType({ description: '5-level market depth order book' })
+export class MarketDepth {
+  @Field(() => [DepthLevel]) levels: DepthLevel[];
+  @Field(() => Int) totalBidQty: number;
+  @Field(() => Int) totalAskQty: number;
+}
+
+@ObjectType()
+export class Quote {
+  @Field(() => ID) instrumentId: string;
+  @Field() symbol: string;
+  @Field() ltp: string;
+  @Field() bid: string;
+  @Field() ask: string;
+  @Field() high: string;
+  @Field() low: string;
+  @Field() change: string;
+  @Field() changePct: string;
+  @Field() ts: Date;
+  @Field({ description: 'Where this price came from. "SIMULATED" prices are not live market data.' }) source: string;
+  @Field({ nullable: true }) open?: string;
+  @Field({ nullable: true }) close?: string;
+  @Field({ nullable: true }) volume?: string;
+  @Field({ nullable: true }) avgPrice?: string;
+  @Field({ nullable: true }) lowerCircuit?: string;
+  @Field({ nullable: true }) upperCircuit?: string;
+  @Field(() => MarketDepth, { nullable: true }) depth?: MarketDepth;
+}
+
 @ObjectType()
 export class Instrument {
   @Field(() => ID) id: string;
@@ -53,7 +90,14 @@ export class Instrument {
   @Field() tickSize: string;
   @Field({ description: 'MINI or MEGA: decides the brokerage per lot (₹250 or ₹2,500 by default).' }) lotClass: string;
   @Field({ nullable: true, description: 'What one lot is, in words, e.g. "100 g", "5 kg", "10 barrels".' }) lotLabel?: string;
-  @Field({ description: 'MCX, FOREX, NSE or INDICES: the tab the instrument is listed under.' }) category: string;
+  @Field({ description: 'FUTURES, MCX, OPTIONS, FOREX, CRYPTO, US_STOCK, COMEX or US_INDEX: the category the instrument is listed under.' }) category: string;
+  @Field(() => Quote, { nullable: true }) quote?: Quote;
+}
+
+@ObjectType({ description: 'Count of active instruments in a category.' })
+export class CategoryCount {
+  @Field() category: string;
+  @Field(() => Int) count: number;
 }
 
 export enum CandleIntervalGql {
@@ -72,21 +116,6 @@ export class Candle {
   @Field() high: string;
   @Field() low: string;
   @Field() close: string;
-}
-
-@ObjectType()
-export class Quote {
-  @Field(() => ID) instrumentId: string;
-  @Field() symbol: string;
-  @Field() ltp: string;
-  @Field() bid: string;
-  @Field() ask: string;
-  @Field() high: string;
-  @Field() low: string;
-  @Field() change: string;
-  @Field() changePct: string;
-  @Field() ts: Date;
-  @Field({ description: 'Where this price came from. "SIMULATED" prices are not live market data.' }) source: string;
 }
 
 @ObjectType()

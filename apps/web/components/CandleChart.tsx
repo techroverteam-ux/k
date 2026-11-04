@@ -44,7 +44,13 @@ const PAGE = 500; // candles per request
 const Q = `query($i:ID!,$v:CandleInterval!,$n:Int,$b:Float){ candles(instrumentId:$i, interval:$v, limit:$n, before:$b){ t open high low close } }`;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const toBar = (c: Candle): Bar => ({ time: (Math.floor(c.t / 1000) + IST_S) as UTCTimestamp, open: +c.open, high: +c.high, low: +c.low, close: +c.close });
+const toBar = (c: Candle): Bar => ({
+  time: (Math.floor(c.t / 1000) + IST_S) as UTCTimestamp,
+  open: Number(String(c.open).replace(/,/g, '')),
+  high: Number(String(c.high).replace(/,/g, '')),
+  low: Number(String(c.low).replace(/,/g, '')),
+  close: Number(String(c.close).replace(/,/g, '')),
+});
 const barMs = (b: Bar) => (b.time - IST_S) * 1000; // real epoch ms of a bar's start
 const bucketSec = (ms: number, step: number) => (Math.floor((ms + IST_S * 1000) / step) * step) / 1000; // IST-shifted
 const fmt = (v: number) => v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -170,7 +176,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: t.cross, labelBackgroundColor: t.text }, horzLine: { color: t.cross, labelBackgroundColor: t.text } },
       localization: { locale: 'en-IN', priceFormatter: fmt, timeFormatter: (time: Time) => timeLabel(time as number, ivRef.current) },
     });
-    const pf = { type: 'price' as const, precision: 2, minMove: tickSize > 0 ? tickSize : 0.05 };
+    const pf = { type: 'price' as const, precision: 2, minMove: tickSize > 0 && tickSize <= 10 ? tickSize : 0.05 };
     candles.current = c.addSeries(CandlestickSeries, { upColor: t.pos, downColor: t.neg, borderVisible: false, wickUpColor: t.pos, wickDownColor: t.neg, priceFormat: pf });
     line.current = c.addSeries(LineSeries, { color: t.brand, lineWidth: 2, visible: false, priceFormat: pf, crosshairMarkerRadius: 4 });
     // Candle range (high − low) as a faint histogram along the bottom: the feed has no volume, so this shows activity instead.
@@ -269,7 +275,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
   // Live: update the forming candle (or start a new one) from each quote.
   useEffect(() => {
     if (state !== 'ready' || loadedIv !== interval || !quote?.ltp) return;
-    const price = Number(quote.ltp);
+    const price = Number(String(quote.ltp).replace(/,/g, ''));
     const ms = Date.parse(quote.ts) || Date.now();
     const time = bucketSec(ms, STEP_MS[interval]) as UTCTimestamp;
     const list = bars.current;

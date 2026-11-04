@@ -10,6 +10,7 @@
  *   npm --prefix apps/api run instruments:sync-dhan
  */
 import { baseSymbol, defaultLotClass, defaultLotLabel } from '../src/trading/instrument-meta';
+import { resolveFullName } from './update-instrument-names';
 import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { sql } from 'drizzle-orm';
@@ -164,6 +165,26 @@ async function downloadScripMaster(): Promise<ScripRow[]> {
   return parsed;
 }
 
+function defaultRefPrice(symbol: string): bigint {
+  const sym = symbol.toUpperCase();
+  if (sym.startsWith('GOLDGUINEA')) return 62800_00n;
+  if (sym.startsWith('GOLDPETAL')) return 7850_00n;
+  if (sym.startsWith('GOLD')) return 78500_00n;
+  if (sym.startsWith('SILVER')) return 92500_00n;
+  if (sym.startsWith('CRUDEOIL')) return 5850_00n;
+  if (sym.startsWith('NATURALGAS') || sym.startsWith('NATGAS')) return 245_00n;
+  if (sym.startsWith('COPPER')) return 815_00n;
+  if (sym.startsWith('ZINC')) return 265_00n;
+  if (sym.startsWith('LEAD')) return 182_00n;
+  if (sym.startsWith('ALUM')) return 232_00n;
+  if (sym.startsWith('MENTHA')) return 920_00n;
+  if (sym.startsWith('COTTON')) return 54500_00n;
+  if (sym.startsWith('KAPAS')) return 1540_00n;
+  if (sym.includes('NIFTY')) return 24500_00n;
+  if (sym.includes('BANKNIFTY')) return 52000_00n;
+  return 1000_00n;
+}
+
 async function main() {
   const pool = createPool(databaseUrl(), 2);
   const db = drizzle(pool, { schema });
@@ -182,8 +203,10 @@ async function main() {
 
     for (const s of scrips) {
       const cleanSymbol = s.tradingSymbol.slice(0, 40);
-      const cleanName = `${s.customSymbol} (${s.exchange})`.slice(0, 120);
-      const tickMinor = Math.max(1, Math.round(s.tickSize * 100)); // paise
+      const cleanName = resolveFullName({ symbol: s.tradingSymbol, name: s.customSymbol }).slice(0, 120);
+      const tickMinor = s.exchange === 'MCX'
+        ? Math.max(1, Math.round(s.tickSize)) // Dhan MCX tickSize is already in paise
+        : Math.max(1, Math.round(s.tickSize * 100)); // NSE tickSize is in INR
 
       const existing = await db
         .select()
@@ -201,7 +224,7 @@ async function main() {
           lotClass: defaultLotClass(s.exchange, cleanSymbol),
           lotLabel: defaultLotLabel(cleanSymbol),
           tickMinor,
-          refPriceMinor: 100_000n, // ₹1,000 reference default, updated by live quotes
+          refPriceMinor: defaultRefPrice(cleanSymbol),
           active: true,
           dhanSecurityId: s.securityId,
           dhanSegment: s.dhanSegment,
