@@ -36,6 +36,9 @@ export class UserType {
   @Field() isDemo: boolean;
   @Field(() => ID, { nullable: true }) brokerId?: string;
   @Field({ nullable: true, description: 'Brokers: commission share in percent (e.g. "40.00"); empty = platform default. Shown to Super Admins and the broker.' }) commissionPct?: string;
+  @Field({ nullable: true, description: "Brokers: earning per mini lot in rupees (per side), their own or the platform default." }) commissionPerMiniLot?: string;
+  @Field({ nullable: true, description: 'Brokers: earning per mega lot in rupees (per side).' }) commissionPerMegaLot?: string;
+  @Field({ nullable: true, description: 'Brokers: true when the platform default per-lot amounts apply.' }) commissionIsDefault?: boolean;
   @Field({ nullable: true, description: "Traders: their broker's name." }) brokerName?: string;
   @Field({ nullable: true, description: 'Who asked for this account (Super Admins only).' }) createdByName?: string;
   @Field({ nullable: true, description: 'Traders: opening amount asked for at creation (rupees, e.g. "50000.00"); credited when the account is approved. Shown to Super Admins, the trader\'s broker and the trader.' }) openingAmount?: string;

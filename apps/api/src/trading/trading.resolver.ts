@@ -105,7 +105,8 @@ export class TradingResolver {
       this.orderSvc.sessions(),
       this.config.get('trading.brokeragePerLot'),
     ]);
-    return { brokeragePerLot: perLot.toFixed(2), minQty, maxQtyPerOrder, maxQtyPerInstrument, marketHoursEnforced: s.enforced, sessions: s.list.map((x) => ({ ...x, message: x.message ?? undefined })) };
+    const mega = await this.config.get('trading.brokeragePerMegaLot');
+    return { brokeragePerLot: perLot.toFixed(2), brokeragePerMegaLot: mega.toFixed(2), minQty, maxQtyPerOrder, maxQtyPerInstrument, marketHoursEnforced: s.enforced, sessions: s.list.map((x) => ({ ...x, message: x.message ?? undefined })) };
   }
 
   @Mutation(() => Order, { description: 'Places a SIMULATED (paper) order. Rejected orders are returned with status REJECTED.' })

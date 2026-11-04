@@ -4,7 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, forbidden, notFound } from '../common/errors';
 import { ConfigService } from '../config-mgmt/config.service';
-import { feeRule } from '../trading/brokerage';
+import { feeRule, perLotMinor } from '../trading/brokerage';
 import { ConsentService } from '../consent/consent.service';
 import { DbService } from '../db/db';
 import { orders, strategies, strategyEvents, strategyRuns, type StrategyRow } from '../db/schema';
@@ -147,7 +147,7 @@ export class AlgoService {
     const { bars, startIndex } = await this.history(s.instrumentId, interval, fromMs, warmup(rules));
     if (bars.length - startIndex < 10) throw badInput('Not enough candle history for that period at this timeframe. Try a shorter period or a larger timeframe.');
     const fr = await feeRule(this.config);
-    const result: BacktestResult = backtest(bars, rules, s.quantity, { perLot: Number(fr.perLotMinor), bps: fr.bps }, startIndex);
+    const result: BacktestResult = backtest(bars, rules, s.quantity, { perLot: Number(perLotMinor(fr, this.market.instrument(s.instrumentId)?.lotClass)), bps: fr.bps }, startIndex);
     const [run] = await this.dbs.db
       .insert(strategyRuns)
       .values({

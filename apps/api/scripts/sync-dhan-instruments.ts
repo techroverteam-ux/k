@@ -8,6 +8,7 @@
  * Run with:
  *   npm --prefix apps/api run instruments:sync-dhan
  */
+import { defaultLotClass } from '../src/trading/brokerage';
 import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { sql } from 'drizzle-orm';
@@ -174,6 +175,7 @@ async function main() {
           segment: s.segment,
           expiry: s.expiryDate,
           lotSize: s.lotSize,
+          lotClass: defaultLotClass(s.exchange, cleanSymbol),
           tickMinor,
           refPriceMinor: 100_000n, // ₹1,000 reference default, updated by live quotes
           active: true,

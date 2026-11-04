@@ -29,6 +29,14 @@ export function parseCommissionPct(v?: string | number | null): number {
   return bps;
 }
 
+/** "170" or "170.50" rupees → paise. */
+export function parseRupees(v: string | undefined | null, label: string): bigint {
+  const t = String(v ?? '').trim().replace(/[₹,\s]/g, '');
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(t)) throw badInput(`${label}: enter an amount in rupees, e.g. 170.`);
+  const [w, f = ''] = t.split('.');
+  return BigInt(w) * 100n + BigInt((f + '00').slice(0, 2));
+}
+
 export const USERNAME_RE = /^[a-z][a-z0-9_.@#-]{3,39}$/;
 
 @Injectable()
@@ -73,13 +81,15 @@ export class UsersService {
    * Maker step. Super Admin can create brokers and traders; a broker can create traders under itself.
    * New accounts start PENDING and must be approved by a (different) Super Admin.
    */
-  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string; openingAmountMinor?: bigint | null }, ip: string) {
+  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; openingAmountMinor?: bigint | null }, ip: string) {
     const username = input.username.trim().toLowerCase();
     if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     if (input.role === 'SUPER_ADMIN') throw forbidden('Super Admin accounts are provisioned by operations, not via the API.');
     if (actor.role === 'BROKER' && input.role !== 'TRADER') throw forbidden('Brokers can only create trader accounts.');
     const brokerId = actor.role === 'BROKER' ? actor.userId : input.role === 'TRADER' ? input.brokerId : undefined;
-    const commissionShareBps = input.role === 'BROKER' ? parseCommissionPct(input.commissionPct) : null;
+    const commissionShareBps = input.role === 'BROKER' && input.commissionPct?.trim() ? parseCommissionPct(input.commissionPct) : null;
+    const commissionMiniMinor = input.role === 'BROKER' && input.commissionPerMiniLot?.trim() ? parseRupees(input.commissionPerMiniLot, 'Mini lot') : null;
+    const commissionMegaMinor = input.role === 'BROKER' && input.commissionPerMegaLot?.trim() ? parseRupees(input.commissionPerMegaLot, 'Mega lot') : null;
     this.passwords.assertStrong(input.tempPassword, username);
     const phone = input.phone ? normalizePhone(input.phone) : null;
     const email = input.email ? normalizeEmail(input.email) : null;
@@ -106,6 +116,8 @@ export class UsersService {
           ...emailColumns(email),
           brokerId: brokerId ?? null,
           commissionShareBps,
+          commissionMiniMinor,
+          commissionMegaMinor,
           openingAmountMinor: input.role === 'TRADER' ? (input.openingAmountMinor ?? null) : null,
           passwordHash: hash,
           status: 'PENDING',
@@ -275,21 +287,53 @@ export class UsersService {
     });
   }
 
-  /** Broker commissions: broker's share of simulated brokerage from assigned traders. */
+  /** A broker's earning per mini / mega lot (paise): their own amounts, else the platform defaults. */
+  async commissionPerLot(b: { commissionMiniMinor: bigint | null; commissionMegaMinor: bigint | null }) {
+    const [mini, mega] = await Promise.all([this.config.get('broker.commissionPerMiniLot'), this.config.get('broker.commissionPerMegaLot')]);
+    return { miniMinor: b.commissionMiniMinor ?? BigInt(Math.round(mini * 100)), megaMinor: b.commissionMegaMinor ?? BigInt(Math.round(mega * 100)) };
+  }
+
+  /**
+   * Broker commissions: a fixed amount per lot their traders trade, per side — ₹170 per mini lot by default, so
+   * opening 3 mini lots earns 3 × ₹170 and cutting them another 3 × ₹170. Counted from the brokerage actually charged
+   * (one FEE entry per filled order), so cancelled or rejected orders earn nothing.
+   */
   async brokerCommission(actor: Actor, brokerId: string, from: Date, to: Date) {
     if (actor.role === 'BROKER' && actor.userId !== brokerId) throw notFound('Account');
-    const [b] = await this.dbs.db.select({ bps: users.commissionShareBps }).from(users).where(and(eq(users.id, brokerId), eq(users.role, 'BROKER')));
-    const share = b?.bps ?? (await this.config.get('broker.commissionShareBps'));
-    const rows = await this.dbs.db
-      .select({ userId: users.id, username: users.username, fees: sql<string>`COALESCE(-SUM(${ledgerPostings.amountMinor}),0)::text` })
-      .from(users)
-      .innerJoin(ledgerAccounts, and(eq(ledgerAccounts.ownerId, users.id), eq(ledgerAccounts.type, 'TRADER_CASH')))
-      .innerJoin(ledgerPostings, eq(ledgerPostings.accountId, ledgerAccounts.id))
-      .innerJoin(journalEntries, and(eq(journalEntries.id, ledgerPostings.journalId), eq(journalEntries.kind, 'FEE')))
-      .where(and(eq(users.brokerId, brokerId), gte(ledgerPostings.createdAt, from), sql`${ledgerPostings.createdAt} < ${to}`))
-      .groupBy(users.id, users.username);
-    const lines = rows.map((r) => ({ userId: r.userId, username: r.username, brokerageMinor: BigInt(r.fees), commissionMinor: applyBps(BigInt(r.fees), share) }));
-    return { shareBps: share, lines, totalMinor: lines.reduce((a, l) => a + l.commissionMinor, 0n) };
+    const [b] = await this.dbs.db.select().from(users).where(and(eq(users.id, brokerId), eq(users.role, 'BROKER')));
+    if (!b) throw notFound('Broker');
+    const rate = await this.commissionPerLot(b);
+    const r = await this.dbs.db.execute<{ user_id: string; username: string; fees: string; mini: string; mega: string }>(sql`
+      SELECT u.id AS user_id, u.username,
+             COALESCE(-SUM(p.amount_minor), 0)::text AS fees,
+             COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class <> 'MEGA'), 0)::text AS mini,
+             COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class = 'MEGA'), 0)::text AS mega
+        FROM users u
+        JOIN ledger_accounts a ON a.owner_id = u.id AND a.type = 'TRADER_CASH'
+        JOIN ledger_postings p ON p.account_id = a.id
+        JOIN journal_entries j ON j.id = p.journal_id AND j.kind = 'FEE'
+        LEFT JOIN orders o ON j.ref_type = 'order' AND o.id = j.ref_id
+        LEFT JOIN instruments i ON i.id = o.instrument_id
+       WHERE u.broker_id = ${brokerId} AND p.created_at >= ${from} AND p.created_at < ${to}
+       GROUP BY u.id, u.username
+       ORDER BY u.username`);
+    const lines = r.rows.map((x) => {
+      const miniLots = Number(x.mini), megaLots = Number(x.mega);
+      return { userId: x.user_id, username: x.username, brokerageMinor: BigInt(x.fees), miniLots, megaLots, commissionMinor: rate.miniMinor * BigInt(miniLots) + rate.megaMinor * BigInt(megaLots) };
+    });
+    return { shareBps: 0, perMiniLotMinor: rate.miniMinor, perMegaLotMinor: rate.megaMinor, lines, totalMinor: lines.reduce((s, l) => s + l.commissionMinor, 0n) };
+  }
+
+  /** Set a broker's earning per mini and per mega lot (rupees). */
+  async setCommissionPerLot(actor: Actor, brokerId: string, mini: string, mega: string, ip: string) {
+    const miniMinor = parseRupees(mini, 'Mini lot'), megaMinor = parseRupees(mega, 'Mega lot');
+    return this.dbs.db.transaction(async (tx) => {
+      const [b] = await tx.select().from(users).where(eq(users.id, brokerId)).for('update');
+      if (!b || b.role !== 'BROKER') throw notFound('Broker');
+      const [u] = await tx.update(users).set({ commissionMiniMinor: miniMinor, commissionMegaMinor: megaMinor, updatedAt: new Date() }).where(eq(users.id, brokerId)).returning();
+      await this.audit.record(tx, { actor, action: 'user.commission_changed', entityType: 'user', entityId: brokerId, outcome: 'SUCCESS', ip, metadata: { username: b.username, from: { mini: b.commissionMiniMinor, mega: b.commissionMegaMinor }, to: { mini: miniMinor, mega: megaMinor } } });
+      return u;
+    });
   }
 
   async adminOverview() {

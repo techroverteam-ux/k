@@ -1,7 +1,8 @@
 import { Args, Float, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
-import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
-import type { Actor } from '../common/context';
-import { AllowWithoutMfa, CurrentActor, Public } from '../common/context';
+import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import type { Actor, GqlContext } from '../common/context';
+import { AllowWithoutMfa, Ctx, CurrentActor, Public, Roles } from '../common/context';
+import { AuditService } from '../audit/audit.service';
 import { badInput, notFound } from '../common/errors';
 import { AppSettings, Candle, CandleIntervalGql, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
 import { formatMoney } from '../common/money';
@@ -25,6 +26,7 @@ export class MarketResolver {
     private readonly dbs: DbService,
     private readonly market: MarketDataService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   @Public()
@@ -78,6 +80,35 @@ export class MarketResolver {
       .where(and(eq(instruments.active, true), or(ilike(instruments.symbol, s), ilike(instruments.name, s))))
       .orderBy(asc(instruments.symbol))
       .limit(clampLimit(limit, 20, 50));
+    return rows.map(toInstrument);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @Query(() => [Instrument], { description: 'Super Admin: every active instrument, to set which are mini and which are mega lots.' })
+  async allInstruments(@Args('lotClass', { nullable: true }) lotClass?: string) {
+    const rows = await this.dbs.db
+      .select()
+      .from(instruments)
+      .where(and(eq(instruments.active, true), lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined))
+      .orderBy(asc(instruments.exchange), asc(instruments.symbol))
+      .limit(2000);
+    return rows.map(toInstrument);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @Mutation(() => [Instrument], { description: 'Super Admin: mark instruments as MINI or MEGA lots (brokerage and broker earning per lot follow).' })
+  async setInstrumentLotClass(@CurrentActor() a: Actor, @Args('instrumentIds', { type: () => [ID] }) ids: string[], @Args('lotClass') lotClass: string, @Ctx() c: GqlContext) {
+    if (lotClass !== 'MINI' && lotClass !== 'MEGA') throw badInput('Choose MINI or MEGA.');
+    if (!ids.length || ids.length > 500) throw badInput('Pick 1–500 instruments.');
+    const rows = await this.dbs.db.transaction(async (tx) => {
+      const r = await tx.update(instruments).set({ lotClass }).where(inArray(instruments.id, ids)).returning();
+      await this.audit.record(tx, { actor: a, action: 'instrument.lot_class_set', entityType: 'instrument', entityId: ids.length === 1 ? ids[0] : undefined, outcome: 'SUCCESS', ip: c.ip, metadata: { lotClass, symbols: r.map((x) => x.symbol) } });
+      return r;
+    });
+    for (const r of rows) {
+      const m = this.market.instrument(r.id);
+      if (m) m.lotClass = lotClass; // fees use the in-memory copy
+    }
     return rows.map(toInstrument);
   }
 

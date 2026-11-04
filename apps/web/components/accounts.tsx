@@ -9,10 +9,10 @@ import { Icon } from './icons';
 import { LedgerTable, OrdersTable, PAYMENT_FIELDS, PaymentDialog, PortfolioSummary, PositionsTable, type Payment } from './trading';
 import { Dialog, Empty, ErrorState, SkeletonRows, Status, Tabs, useToast } from './ui';
 
-export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled createdAt phone';
 /** "40.00" → "40%"; empty for non-brokers. Brokers without their own value use the platform default. */
-export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPct'>) => (u.role !== 'BROKER' ? '' : u.commissionPct ? `${Number(u.commissionPct)}% commission` : 'default commission');
+export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPerMiniLot' | 'commissionPerMegaLot'>) => (u.role !== 'BROKER' ? '' : u.commissionPerMiniLot ? `₹${Number(u.commissionPerMiniLot).toLocaleString('en-IN')} / mini lot · ₹${Number(u.commissionPerMegaLot).toLocaleString('en-IN')} / mega` : '');
 export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 
 export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username'>; href?: string }) {
@@ -27,7 +27,7 @@ export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username
 
 /** Create a broker or trader. Accounts start PENDING until a Super Admin approves them. */
 export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: ('BROKER' | 'TRADER')[]; brokers?: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commissionPct: '', openingAmount: '' });
+  const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commMini: '', commMega: '', openingAmount: '' });
   const sole = useSoleAdmin();
   const { me, settings } = useAuth();
   const asBroker = me?.role === 'BROKER';
@@ -44,7 +44,8 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
     email: f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email) ? 'Enter a valid email' : '',
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : '',
     openingAmount: f.role === 'TRADER' && (asBroker || f.openingAmount.trim()) && !(/^\d{1,12}(\.\d{1,2})?$/.test(f.openingAmount.trim()) && Number(f.openingAmount) >= minOpen) ? `Enter at least ₹${minLabel}` : '',
-    commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : '',
+    commMini: f.role === 'BROKER' && f.commMini.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMini.trim()) ? 'Enter rupees, e.g. 170' : '',
+    commMega: f.role === 'BROKER' && f.commMega.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMega.trim()) ? 'Enter rupees, e.g. 1700' : '',
   };
   const bad = Object.values(errs).some(Boolean);
   const E = ({ k }: { k: keyof typeof errs }) => (touched && errs[k] ? <span className="err">{errs[k]}</span> : null);
@@ -53,7 +54,7 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
       <form className="stack" noValidate onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
         if (bad) return;
-        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
         if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose(); }
       }}>
         {roles.length > 1 && (
@@ -68,12 +69,12 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
           <div className="field grow"><label htmlFor="em">Email (optional)</label><input id="em" type="email" className="input" value={f.email} onChange={set('email')} aria-invalid={touched && !!errs.email} /><E k="email" /></div>
         </div>
         {f.role === 'BROKER' && (
-          <div className="field"><label htmlFor="cp">Commission</label>
-            <div className="input-icon" style={{ maxWidth: 180 }}>
-              <input id="cp" className="input num" inputMode="decimal" placeholder="e.g. 40" value={f.commissionPct} onChange={(e) => setF({ ...f, commissionPct: e.target.value.replace(/[^\d.]/g, '') })} aria-invalid={touched && !!errs.commissionPct} style={{ paddingLeft: 12, paddingRight: 30 }} />
-              <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>%</span>
+          <div className="field"><label>Broker’s earning per lot</label>
+            <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+              <div className="field grow"><label htmlFor="cmi" className="sm t2">Mini lot (₹)</label><input id="cmi" className="input num" inputMode="decimal" placeholder="170" value={f.commMini} onChange={(e) => setF({ ...f, commMini: e.target.value.replace(/[^\d.]/g, '') })} aria-invalid={touched && !!errs.commMini} /><E k="commMini" /></div>
+              <div className="field grow"><label htmlFor="cmg" className="sm t2">Mega lot (₹)</label><input id="cmg" className="input num" inputMode="decimal" placeholder="1700" value={f.commMega} onChange={(e) => setF({ ...f, commMega: e.target.value.replace(/[^\d.]/g, '') })} aria-invalid={touched && !!errs.commMega} /><E k="commMega" /></div>
             </div>
-            {touched && errs.commissionPct ? <E k="commissionPct" /> : <span className="hint">The broker’s share of the brokerage their traders pay. You can change it later.</span>}
+            <span className="hint">For every lot their traders open or cut. 3 mini lots opened = 3 × ₹{f.commMini || '170'}. Leave empty to use the platform default.</span>
           </div>
         )}
         {f.role === 'TRADER' && brokers && (

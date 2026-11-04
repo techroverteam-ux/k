@@ -16,6 +16,7 @@ import { Pool } from 'pg';
 import { AppModule } from '../src/app.module';
 import { requestContextMiddleware } from '../src/common/request-context';
 import { MarketDataService } from '../src/market/market-data.service';
+import { RiskService } from '../src/risk/risk.service';
 import { ActivityLogService } from '../src/logging/activity-log.service';
 import { archiveDay, verifyArchive } from '../src/logging/archive';
 import { DbService } from '../src/db/db';
@@ -319,6 +320,27 @@ describe('paper trading', () => {
       await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: lots, idempotencyKey: randomUUID() } }, { token: t.accessToken });
       expect(await fees()).toBeCloseTo(before + 500 * lots, 2); // entry + exit
     }
+  });
+
+  it('charges ₹2,500 per mega lot on entry and on exit, and the admin can switch an instrument between mini and mega', async () => {
+    const t = await login('trader.two');
+    const gold = (await pg.query(`SELECT id, lot_class FROM instruments WHERE symbol = 'GOLD26NOVFUT'`)).rows[0];
+    expect(gold.lot_class).toBe('MEGA'); // full-size MCX contract
+    const fees = async () => Number((await gql(`{ accountSummary { fees } }`, {}, { token: t.accessToken })).data.accountSummary.fees);
+    const pv = await gql(`query($i:ID!){ orderPreview(instrumentId:$i, side:BUY, quantity:2){ brokerage } }`, { i: gold.id }, { token: t.accessToken });
+    expect(pv.data.orderPreview.brokerage).toBe('5000.00');
+    const before = await fees();
+    expect((await gql(PLACE, { i: { instrumentId: gold.id, side: 'BUY', type: 'MARKET', quantity: 2, idempotencyKey: randomUUID() } }, { token: t.accessToken })).data.placeOrder.status).toBe('FILLED');
+    expect(await fees()).toBeCloseTo(before + 5000, 2);
+    await gql(PLACE, { i: { instrumentId: gold.id, side: 'SELL', type: 'MARKET', quantity: 2, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    expect(await fees()).toBeCloseTo(before + 10000, 2);
+    // Admin switches it to mini: ₹250 per lot from then on.
+    const admin = await adminLogin('admin');
+    const sw = await gql(`mutation($ids:[ID!]!,$c:String!){ setInstrumentLotClass(instrumentIds:$ids, lotClass:$c){ lotClass } }`, { ids: [gold.id], c: 'MINI' }, { token: admin.token });
+    expect(sw.data.setInstrumentLotClass[0].lotClass).toBe('MINI');
+    expect((await gql(`query($i:ID!){ orderPreview(instrumentId:$i, side:BUY, quantity:2){ brokerage } }`, { i: gold.id }, { token: t.accessToken })).data.orderPreview.brokerage).toBe('500.00');
+    expect(code(await gql(`mutation($ids:[ID!]!,$c:String!){ setInstrumentLotClass(instrumentIds:$ids, lotClass:$c){ lotClass } }`, { ids: [gold.id], c: 'MEGA' }, { token: t.accessToken }))).toBe('FORBIDDEN');
+    await gql(`mutation($ids:[ID!]!,$c:String!){ setInstrumentLotClass(instrumentIds:$ids, lotClass:$c){ lotClass } }`, { ids: [gold.id], c: 'MEGA' }, { token: admin.token });
   });
 
   it('refuses an idempotency key reused for a different order instead of replaying the first one', async () => {
@@ -1139,28 +1161,79 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
   });
 });
 
-describe('broker commission percentage', () => {
-  it('needs a percentage when a broker is created, can be changed, and drives the commission report', async () => {
+describe('broker commission per lot', () => {
+  it('pays the broker ₹170 per mini lot (×lots, on opening and on cutting) and lets the admin set their own amounts', async () => {
     const admin = await adminLogin('admin');
     const su = await stepUp(admin.token, 'admin');
-    const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id role commissionPct } }`;
-    const base = { displayName: 'Commission Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26' };
-    expect(code(await gql(CREATE, { i: { ...base, username: 'broker.pct' } }, { token: admin.token }))).toBe('BAD_USER_INPUT');
-    expect(code(await gql(CREATE, { i: { ...base, username: 'broker.pct', commissionPct: '120' } }, { token: admin.token }))).toBe('BAD_USER_INPUT');
-    const ok = await gql(CREATE, { i: { ...base, username: 'broker.pct', commissionPct: '40' } }, { token: admin.token });
-    expect(ok.data.createUser).toMatchObject({ role: 'BROKER', commissionPct: '40.00' });
-    const id = ok.data.createUser.id;
-    const SET = `mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ commissionPct } }`;
-    expect(code(await gql(SET, { b: id, p: '37.5' }, { token: admin.token }))).toBe('STEP_UP_REQUIRED');
-    expect((await gql(SET, { b: id, p: '37.5' }, { token: admin.token, stepUp: su })).data.setBrokerCommission.commissionPct).toBe('37.50');
-    const rep = await gql(`query($b:ID){ commissionReport(from:"2020-01-01T00:00:00Z", to:"2100-01-01T00:00:00Z", brokerId:$b){ shareBps } }`, { b: id }, { token: admin.token });
-    expect(rep.data.commissionReport.shareBps).toBe(3750);
-    // A broker without their own percentage still uses the platform default.
     const b1 = (await pg.query(`SELECT id FROM users WHERE username = 'broker.one'`)).rows[0].id;
-    expect((await gql(`query($b:ID){ commissionReport(from:"2020-01-01T00:00:00Z", to:"2100-01-01T00:00:00Z", brokerId:$b){ shareBps } }`, { b: b1 }, { token: admin.token })).data.commissionReport.shareBps).toBe(5000);
-    // Traders never get a commission.
-    const t = await gql(CREATE, { i: { username: 'trader.pct', displayName: 'Pct Trader', role: 'TRADER', tempPassword: 'Trad3r!Pass#26', commissionPct: '10' } }, { token: admin.token });
-    expect(t.data.createUser.commissionPct).toBeNull();
+    const REP = `query($b:ID){ commissionReport(from:"2020-01-01T00:00:00Z", to:"2100-01-01T00:00:00Z", brokerId:$b){ perMiniLot perMegaLot total lines{ username miniLots megaLots commission } } }`;
+    const rep = (await gql(REP, { b: b1 }, { token: admin.token })).data.commissionReport;
+    expect(rep).toMatchObject({ perMiniLot: '170.00', perMegaLot: '1700.00' });
+    for (const l of rep.lines) expect(Number(l.commission)).toBeCloseTo(l.miniLots * 170 + l.megaLots * 1700, 2);
+    const traded = rep.lines.find((l: { username: string }) => l.username === 'trader.two');
+    expect(traded.miniLots).toBeGreaterThan(0);
+    expect(traded.megaLots).toBe(4); // 2 gold lots opened + 2 cut
+    // Each broker can have their own amounts.
+    const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id role } }`;
+    const ok = await gql(CREATE, { i: { username: 'broker.lot', displayName: 'Lot Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26', commissionPerMiniLot: '200' } }, { token: admin.token });
+    const id = ok.data.createUser.id;
+    const SET = `mutation($b:ID!,$m:String!,$g:String!){ setBrokerCommissionPerLot(brokerId:$b, perMiniLot:$m, perMegaLot:$g){ commissionPerMiniLot commissionPerMegaLot commissionIsDefault } }`;
+    expect(code(await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token }))).toBe('STEP_UP_REQUIRED');
+    expect((await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token, stepUp: su })).data.setBrokerCommissionPerLot).toEqual({ commissionPerMiniLot: '180.00', commissionPerMegaLot: '1800.00', commissionIsDefault: false });
+    expect(code(await gql(SET, { b: id, m: 'abc', g: '1800' }, { token: admin.token, stepUp: su }))).toBe('BAD_USER_INPUT');
+    // A broker sees only their own report.
+    const b = await login('broker.one');
+    expect((await gql(REP, {}, { token: b.accessToken })).data.commissionReport.perMiniLot).toBe('170.00');
+    expect(code(await gql(REP, { b: id }, { token: b.accessToken }))).toBe('NOT_FOUND');
+  });
+});
+
+describe('loss watch: warning at 80%, all trades cut at 95%', () => {
+  it('warns once at 80% of funds, cuts every open trade at 95% and pauses new trades', async () => {
+    const PLACE = `mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status rejectReason } }`;
+    const market = app.get(MarketDataService);
+    const risk = app.get(RiskService);
+    const inst = (await pg.query(`SELECT id FROM instruments WHERE symbol = 'ABB26NOVFUT'`)).rows[0].id;
+    market.setPrice(inst, 636450n);
+    // A fresh trader with ₹50,000 (approved by the second admin, opening amount credited).
+    const admin = await adminLogin('admin');
+    const created = await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`, { i: { username: 'trader.risk', displayName: 'Risk Trader', role: 'TRADER', tempPassword: PW, openingAmount: '50000' } }, { token: admin.token });
+    const uid = created.data.createUser.id;
+    const chk = await adminLogin('checker');
+    await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: uid }, { token: chk.token, stepUp: await stepUp(chk.token, 'checker') });
+    const t = await login('trader.risk');
+    const tok = { token: t.accessToken };
+    const STATUS = `{ riskStatus { funds loss lossPct state warnPct cutPct openPositions } }`;
+    expect((await gql(STATUS, {}, tok)).data.riskStatus).toMatchObject({ funds: '50000.00', loss: '0.00', state: 'OK', warnPct: 80, cutPct: 95 });
+
+    expect((await gql(PLACE, { i: { instrumentId: inst, side: 'BUY', type: 'MARKET', quantity: 10, idempotencyKey: randomUUID() } }, tok)).data.placeOrder.status).toBe('FILLED');
+    const avg = Number((await pg.query(`SELECT avg_price_minor FROM positions WHERE user_id = $1`, [uid])).rows[0].avg_price_minor);
+    const priceFor = (lossRupees: number) => BigInt(Math.round(avg - ((lossRupees - 2500) * 100) / 10)); // 10 lots; ₹2,500 brokerage already paid
+    const notes = async (kind: string) => (await pg.query(`SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND kind = $2`, [uid, kind])).rows[0].n;
+
+    market.setPrice(inst, priceFor(39_000)); // 78%
+    await risk.check();
+    expect(await notes('risk.warning')).toBe(0);
+    market.setPrice(inst, priceFor(41_000)); // 82%
+    await risk.check();
+    await risk.check(); // a second pass doesn't warn again
+    expect(await notes('risk.warning')).toBe(1);
+    expect((await gql(STATUS, {}, tok)).data.riskStatus.state).toBe('WARN');
+
+    market.setPrice(inst, priceFor(48_000)); // 96%
+    await risk.check();
+    expect((await pg.query(`SELECT net_qty FROM positions WHERE user_id = $1`, [uid])).rows[0].net_qty).toBe(0);
+    expect(await notes('risk.autocut')).toBe(1);
+    const st = (await gql(STATUS, {}, tok)).data.riskStatus;
+    expect(st).toMatchObject({ state: 'CUT', openPositions: 0 });
+    expect(st.lossPct).toBeGreaterThanOrEqual(95);
+    const b1 = (await pg.query(`SELECT count(*)::int AS n FROM notifications n JOIN users u ON u.id = n.user_id WHERE u.username = 'admin' AND n.kind = 'risk.autocut'`)).rows[0].n;
+    expect(b1).toBeGreaterThan(0);
+    // New trades are paused until funds are added.
+    const again = await gql(PLACE, { i: { instrumentId: inst, side: 'BUY', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
+    expect(again.data.placeOrder.status).toBe('REJECTED');
+    expect(again.data.placeOrder.rejectReason).toMatch(/95%/);
+    market.setPrice(inst, 636450n);
   });
 });
 

@@ -1,6 +1,7 @@
 import { View } from 'react-native';
 import { useAuth } from '@/auth';
 import { BellButton, HelplineButton, SummaryBlock, Ticker, WatchlistBlock } from '@/screens';
+import { RiskBanner } from '@/risk';
 import { S } from '@/theme';
 import { Screen } from '@/ui';
 
@@ -9,7 +10,7 @@ export default function Home() {
   const { me } = useAuth();
   return (
     <Screen title={`Hi, ${me?.displayName.split(' ')[0] ?? ''}`} scroll={false} right={<><HelplineButton /><BellButton /></>}>
-      <WatchlistBlock header={<View style={{ gap: S[3], marginBottom: S[1] }}><Ticker /><SummaryBlock compact actions /></View>} />
+      <WatchlistBlock header={<View style={{ gap: S[3], marginBottom: S[1] }}><RiskBanner /><Ticker /><SummaryBlock compact actions /></View>} />
     </Screen>
   );
 }

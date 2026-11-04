@@ -6,7 +6,7 @@ import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { Platform, Vibration } from 'react-native';
 
 export interface Prefs {
   theme: 'system' | 'light' | 'dark';
@@ -67,5 +67,23 @@ export function tradeFeedback(kind: keyof typeof SOUNDS) {
   } catch { /* audio unavailable */ }
   if (Platform.OS !== 'web') {
     void Haptics.notificationAsync(kind === 'reject' ? Haptics.NotificationFeedbackType.Error : Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+  }
+}
+
+/** Loss alarm: three short tones and a vibration, even when "Trade sounds" is off (it is a risk warning). */
+export function riskAlarm() {
+  const beep = () => {
+    try {
+      const p = (players.reject ??= createAudioPlayer(SOUNDS.reject));
+      p.seekTo(0);
+      p.play();
+    } catch { /* audio unavailable */ }
+  };
+  beep();
+  setTimeout(beep, 400);
+  setTimeout(beep, 800);
+  if (Platform.OS !== 'web') {
+    Vibration.vibrate([0, 300, 150, 300, 150, 300]);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
   }
 }

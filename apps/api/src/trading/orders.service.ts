@@ -120,7 +120,7 @@ export class OrdersService implements OnModuleInit {
       valueMinor: value,
       intradayMarginMinor: applyBps(value, await this.config.get('trading.intradayMarginBps')),
       carryForwardMarginMinor: applyBps(value, await this.config.get('trading.carryForwardMarginBps')),
-      brokerageMinor: brokerageMinor(await feeRule(this.config), price, quantity),
+      brokerageMinor: brokerageMinor(await feeRule(this.config), price, quantity, this.market.instrument(instrumentId)?.lotClass),
     };
   }
 
@@ -132,7 +132,7 @@ export class OrdersService implements OnModuleInit {
    * when they started it (checked there), so the per-session consent check is skipped, and the order is
    * stamped with the strategy. Every other check below applies exactly as for a manual order.
    */
-  async place(actor: Actor, input: PlaceOrderInput, ip: string, automation?: { strategyId: string }): Promise<OrderRow> {
+  async place(actor: Actor, input: PlaceOrderInput, ip: string, automation?: { strategyId?: string; reason?: 'risk' }): Promise<OrderRow> {
     if (actor.role !== 'TRADER') throw new AppError('FORBIDDEN', 'Only traders can place orders on their own account.');
     if (!automation) await this.consent.assertConsented(actor); // rules accepted for this signed-in session
     if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw badInput('Quantity must be a positive whole number.');
@@ -146,13 +146,14 @@ export class OrdersService implements OnModuleInit {
     for (const px of [input.limitPriceMinor, input.triggerPriceMinor])
       if (px && px % BigInt(inst.tickMinor) !== 0n) throw badInput(`Price must be a multiple of the tick size (${Number(inst.tickMinor) / 100}).`);
 
-    const [cfgMin, cfgMax, cfgMaxPos, bps, fees, closed] = await Promise.all([
+    const [cfgMin, cfgMax, cfgMaxPos, bps, fees, closed, cutPct] = await Promise.all([
       this.config.get('trading.minQty'),
       this.config.get('trading.maxQtyPerOrder'),
       this.config.get('trading.maxQtyPerInstrument'),
       this.config.get('trading.intradayMarginBps'),
       feeRule(this.config),
       this.closedReason(inst.exchange),
+      this.config.get('risk.autoCutLossPct'),
     ]);
 
     const result = await this.dbs.serializable(async (tx) => {
@@ -185,8 +186,10 @@ export class OrdersService implements OnModuleInit {
       else if (closed) reject = closed;
       else if (isTrigger(input.type) && triggerHit(input.type, input.side, input.triggerPriceMinor!, q.ltpMinor))
         reject = `Trigger ${(Number(input.triggerPriceMinor) / 100).toFixed(2)} is already reached (LTP ${(Number(q.ltpMinor) / 100).toFixed(2)}). Use a market order or move the trigger.`;
+      if (!reject && exposureIncrease > 0 && u.riskState === 'CUT')
+        reject = `Your loss reached ${cutPct}% of your funds, so your trades were cut and new trades are paused. Add funds to trade again.`;
       if (!reject && exposureIncrease > 0) {
-        const need = applyBps(refPrice * BigInt(exposureIncrease), bps) + brokerageMinor(fees, refPrice, input.quantity);
+        const need = applyBps(refPrice * BigInt(exposureIncrease), bps) + brokerageMinor(fees, refPrice, input.quantity, inst.lotClass);
         const balance = await this.ledger.balance(tx, cash);
         const free = balance - (await this.marginUsed(tx, u.id, bps));
         if (need > free) reject = 'Insufficient margin.';
@@ -229,7 +232,7 @@ export class OrdersService implements OnModuleInit {
         entityId: o.id,
         outcome: reject ? 'DENIED' : 'SUCCESS',
         ip,
-        metadata: { symbol: inst.symbol, side: o.side, type: o.type, qty: o.quantity, limit: o.limitPriceMinor, trigger: o.triggerPriceMinor, status: final.status, reason: reject, venue: 'SIMULATED', strategyId: automation?.strategyId },
+        metadata: { symbol: inst.symbol, side: o.side, type: o.type, qty: o.quantity, limit: o.limitPriceMinor, trigger: o.triggerPriceMinor, status: final.status, reason: reject, venue: 'SIMULATED', strategyId: automation?.strategyId, ...(automation?.reason === 'risk' ? { autoCut: true } : {}) },
       });
       return { order: final, replay: false };
     });
@@ -305,7 +308,7 @@ export class OrdersService implements OnModuleInit {
         refId: o.id,
       });
     }
-    const fee = brokerageMinor(fees, price, o.quantity);
+    const fee = brokerageMinor(fees, price, o.quantity, this.market.instrument(o.instrumentId)?.lotClass);
     if (fee > 0n) {
       const feeAcct = await this.ledger.systemAccount(tx, 'FEE_INCOME', 'SIMULATED');
       await this.ledger.post(tx, {

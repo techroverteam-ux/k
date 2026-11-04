@@ -706,3 +706,13 @@ tr.clickable { cursor: pointer; }
 
 /* Feed tables: the line-break cell only exists on phones. */
 .t td.f-break, .t th.f-break { display: none; }
+
+/* Loss watch bar (trader) */
+.risk-bar { display: flex; gap: var(--s3); align-items: flex-start; background: var(--neg); color: #fff; border-radius: var(--r-md); padding: var(--s3) var(--s4); margin-bottom: var(--s5); font-size: var(--fs-sm); line-height: 1.45; animation: riskpulse 1.6s ease-in-out 3; }
+.risk-bar svg { flex: none; margin-top: 1px; }
+.risk-bar a { color: #fff; text-decoration: underline; font-weight: 600; }
+@keyframes riskpulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--neg) 30%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .risk-bar { animation: none; } }
+.seg.sm { display: inline-grid; width: 150px; padding: 3px; }
+.seg.sm button { height: 30px; font-size: var(--fs-sm); }
+.seg.sm button.on:last-child { background: var(--brand); color: #fff; }

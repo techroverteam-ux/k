@@ -51,6 +51,7 @@ export class Instrument {
   @Field({ nullable: true }) expiry?: Date;
   @Field(() => Int) lotSize: number;
   @Field() tickSize: string;
+  @Field({ description: 'MINI or MEGA: decides the brokerage per lot (₹250 or ₹2,500 by default).' }) lotClass: string;
 }
 
 export enum CandleIntervalGql {
@@ -276,12 +277,16 @@ export class CommissionLine {
   @Field(() => ID) userId: string;
   @Field() username: string;
   @Field() brokerage: string;
+  @Field(() => Int, { description: 'Mini lots traded (opening and cutting each count).' }) miniLots: number;
+  @Field(() => Int, { description: 'Mega lots traded (opening and cutting each count).' }) megaLots: number;
   @Field() commission: string;
 }
 
 @ObjectType()
 export class CommissionReport {
-  @Field(() => Int) shareBps: number;
+  @Field(() => Int, { deprecationReason: 'Brokers now earn a fixed amount per lot: see perMiniLot / perMegaLot.' }) shareBps: number;
+  @Field({ description: "Broker's earning per mini lot, in rupees (per side)." }) perMiniLot: string;
+  @Field({ description: "Broker's earning per mega lot, in rupees (per side)." }) perMegaLot: string;
   @Field(() => [CommissionLine]) lines: CommissionLine[];
   @Field() total: string;
 }
@@ -313,7 +318,8 @@ export class MarketSession {
 @ObjectType({ description: 'Order limits and market sessions shown on the order screen.' })
 export class TradingRules {
   @Field(() => Int, { description: 'Minimum quantity per order' }) minQty: number;
-  @Field({ description: 'Brokerage in rupees per lot, charged on entry and again on exit.' }) brokeragePerLot: string;
+  @Field({ description: 'Mini lots: brokerage in rupees per lot, charged on entry and again on exit.' }) brokeragePerLot: string;
+  @Field({ description: 'Mega lots: brokerage in rupees per lot, charged on entry and again on exit.' }) brokeragePerMegaLot: string;
   @Field(() => Int, { description: 'Maximum quantity per order ("punch qty")' }) maxQtyPerOrder: number;
   @Field(() => Int, { description: 'Maximum open quantity per instrument ("total qty")' }) maxQtyPerInstrument: number;
   @Field() marketHoursEnforced: boolean;

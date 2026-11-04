@@ -28,7 +28,9 @@ class CreateUserInput {
   @Field({ nullable: true }) @IsOptional() @IsEmail({}, { message: 'Enter a valid email address.' }) @MaxLength(254) email?: string;
   @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID('all', { message: 'Invalid broker.' }) brokerId?: string;
   @Field({ description: 'Temporary password; the user should change it on first sign-in.' }) @Length(10, 128, { message: 'Password must be 10–128 characters.' }) tempPassword: string;
-  @Field({ nullable: true, description: 'Brokers only (required): their share of their traders\' brokerage, in percent, e.g. "40".' }) @IsOptional() @MaxLength(8) commissionPct?: string;
+  @Field({ nullable: true, description: 'Old percentage share; brokers now earn per lot (commissionPerMiniLot / commissionPerMegaLot).' }) @IsOptional() @MaxLength(8) commissionPct?: string;
+  @Field({ nullable: true, description: 'Brokers: earning in rupees per mini lot their traders trade (per side). Empty: platform default (₹170).' }) @IsOptional() @MaxLength(12) commissionPerMiniLot?: string;
+  @Field({ nullable: true, description: 'Brokers: earning in rupees per mega lot (per side). Empty: platform default (₹1,700).' }) @IsOptional() @MaxLength(12) commissionPerMegaLot?: string;
   @Field({ nullable: true, description: 'Traders only: opening amount in rupees, e.g. "50000". Required when a broker creates the trader; credited when the account is approved.' }) @IsOptional() @Matches(RX.money, { message: 'Enter an amount with up to 2 decimals.' }) openingAmount?: string;
 }
 
@@ -63,6 +65,11 @@ export class UsersResolver {
 
   /** Adds the broker's name and (for Super Admins) who asked for the account, in one lookup for the whole page. */
   private async withNames(out: UserType[], rows: UserRow[], a: Actor) {
+    for (const [i, u] of rows.entries()) {
+      if (u.role !== 'BROKER' || !(a.role === 'SUPER_ADMIN' || a.userId === u.id)) continue;
+      const r = await this.users.commissionPerLot(u);
+      Object.assign(out[i], { commissionPerMiniLot: formatMoney(r.miniMinor), commissionPerMegaLot: formatMoney(r.megaMinor), commissionIsDefault: u.commissionMiniMinor === null && u.commissionMegaMinor === null });
+    }
     const ids = [...new Set(rows.flatMap((u) => [u.brokerId, a.role === 'SUPER_ADMIN' ? u.createdById : null]).filter((x): x is string => !!x))];
     if (!ids.length) return out;
     const names = new Map((await this.dbs.db.select({ id: users.id, username: users.username, displayName: users.displayName }).from(users).where(inArray(users.id, ids))).map((n) => [n.id, n.displayName || n.username]));
@@ -101,6 +108,14 @@ export class UsersResolver {
   @Mutation(() => UserType, { description: "Set a broker's commission share in percent (0–100)." })
   async setBrokerCommission(@CurrentActor() a: Actor, @Args('brokerId', { type: () => ID }) id: string, @Args('commissionPct') pct: string, @Ctx() c: GqlContext) {
     return UserType.from(await this.users.setCommission(a, id, pct, c.ip), a);
+  }
+
+  @Roles('SUPER_ADMIN')
+  @RequireStepUp()
+  @Mutation(() => UserType, { description: "Set a broker's earning per mini lot and per mega lot, in rupees (e.g. 170 and 1700)." })
+  async setBrokerCommissionPerLot(@CurrentActor() a: Actor, @Args('brokerId', { type: () => ID }) id: string, @Args('perMiniLot') mini: string, @Args('perMegaLot') mega: string, @Ctx() c: GqlContext) {
+    const u = await this.users.setCommissionPerLot(a, id, mini, mega, c.ip);
+    return (await this.withNames([UserType.from(u, a)], [u], a))[0];
   }
 
   @Roles('SUPER_ADMIN')
@@ -166,7 +181,9 @@ export class UsersResolver {
     const r = await this.users.brokerCommission(a, brokerId ?? a.userId, from, to);
     return {
       shareBps: r.shareBps,
-      lines: r.lines.map((l) => ({ userId: l.userId, username: l.username, brokerage: formatMoney(l.brokerageMinor), commission: formatMoney(l.commissionMinor) })),
+      perMiniLot: formatMoney(r.perMiniLotMinor),
+      perMegaLot: formatMoney(r.perMegaLotMinor),
+      lines: r.lines.map((l) => ({ userId: l.userId, username: l.username, brokerage: formatMoney(l.brokerageMinor), miniLots: l.miniLots, megaLots: l.megaLots, commission: formatMoney(l.commissionMinor) })),
       total: formatMoney(r.totalMinor),
     };
   }

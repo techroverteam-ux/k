@@ -4,6 +4,7 @@
  *
  *   SEED_PASSWORD="Dev-Only-Passw0rd!" npm run db:seed
  */
+import { defaultLotClass } from '../src/trading/brokerage';
 import { databaseUrl } from '../src/db/database-url';
 import 'reflect-metadata';
 import { eq } from 'drizzle-orm';
@@ -48,7 +49,7 @@ async function main() {
     for (const [base, name, exchange, segment, price, lot, tick] of INSTRUMENTS) {
       await tx
         .insert(instruments)
-        .values({ symbol: `${base}26NOVFUT`, name: `${name} — Nov 26 FUT`, exchange, segment, expiry: EXPIRY, lotSize: lot, tickMinor: tick, refPriceMinor: BigInt(Math.round(price * 100)) })
+        .values({ symbol: `${base}26NOVFUT`, name: `${name} — Nov 26 FUT`, exchange, segment, expiry: EXPIRY, lotSize: lot, lotClass: defaultLotClass(exchange, `${base}26NOVFUT`), tickMinor: tick, refPriceMinor: BigInt(Math.round(price * 100)) })
         .onConflictDoNothing();
     }
 

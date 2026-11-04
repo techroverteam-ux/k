@@ -26,7 +26,7 @@ export function useUserActions(onDone: () => void) {
   const toast = useToast();
   const brokers = useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
-  const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setPw(''); setTyped(kind === 'commission' ? (u.commissionPct ? String(Number(u.commissionPct)) : '') : ''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
+  const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setTyped(kind === 'commission' ? (u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '') : ''); setPw(kind === 'commission' ? (u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '') : ''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
   const close = () => setAct(null);
   const run = async (q: string, v: Record<string, unknown>, ok: string | ((d: Record<string, { status?: string } | undefined>) => string)) => {
     setBusy(true); setErr(null);
@@ -79,16 +79,18 @@ export function useUserActions(onDone: () => void) {
     </Dialog>
   );
   if (act?.kind === 'commission') {
-    const okPct = /^\d{1,3}(\.\d{1,2})?$/.test(typed.trim()) && Number(typed) <= 100;
+    const rx = /^\d{1,7}(\.\d{1,2})?$/;
+    const ok = rx.test(typed.trim()) && rx.test(pw.trim());
     node = (
-      <Dialog title={`Commission for ${act.u.displayName}`} sub="The broker’s share of the brokerage their traders pay. Applies to commission reports from now on." onClose={close}>
-        <div className="field"><label htmlFor="cpc">Commission</label>
-          <div className="input-icon" style={{ maxWidth: 180 }}><input id="cpc" className="input num" inputMode="decimal" placeholder="e.g. 40" value={typed} onChange={(e) => setTyped(e.target.value.replace(/[^\d.]/g, ''))} style={{ paddingLeft: 12, paddingRight: 30 }} /><span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>%</span></div>
-          <span className={typed && !okPct ? 'err' : 'hint'}>{typed && !okPct ? 'A percentage from 0 to 100, e.g. 40 or 37.5' : act.u.commissionPct ? `Now ${Number(act.u.commissionPct)}%` : 'Now using the platform default'}</span>
+      <Dialog title={`Commission for ${act.u.displayName}`} sub="What the broker earns for every lot their traders open or cut. 3 mini lots opened = 3 × the mini amount." onClose={close}>
+        <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+          <div className="field grow"><label htmlFor="cmi2">Per mini lot (₹)</label><input id="cmi2" className="input num" inputMode="decimal" placeholder="170" value={typed} onChange={(e) => setTyped(e.target.value.replace(/[^\d.]/g, ''))} /></div>
+          <div className="field grow"><label htmlFor="cmg2">Per mega lot (₹)</label><input id="cmg2" className="input num" inputMode="decimal" placeholder="1700" value={pw} onChange={(e) => setPw(e.target.value.replace(/[^\d.]/g, ''))} /></div>
         </div>
+        <span className="hint">{act.u.commissionIsDefault ? 'Now using the platform default.' : `Now ₹${inr(act.u.commissionPerMiniLot)} per mini lot and ₹${inr(act.u.commissionPerMegaLot)} per mega lot.`}</span>
         <ErrBox />
         <div className="actions"><button className="btn" onClick={close}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !okPct} onClick={() => run(`mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ id } }`, { b: act.u.id, p: typed.trim() }, 'Commission updated')}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="btn btn-primary" disabled={busy || !ok} onClick={() => run(`mutation($b:ID!,$m:String!,$g:String!){ setBrokerCommissionPerLot(brokerId:$b, perMiniLot:$m, perMegaLot:$g){ id } }`, { b: act.u.id, m: typed.trim(), g: pw.trim() }, 'Commission updated')}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </Dialog>
     );

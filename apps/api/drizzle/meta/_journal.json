@@ -134,6 +134,13 @@
       "when": 1793900000000,
       "tag": "0018_opening_amount",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793910000000,
+      "tag": "0019_lots_risk",
+      "breakpoints": true
     }
   ]
 }

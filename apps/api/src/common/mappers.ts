@@ -13,6 +13,7 @@ export function toInstrument(r: InstrumentRow): Instrument {
     expiry: r.expiry ?? undefined,
     lotSize: r.lotSize,
     tickSize: formatMoney(BigInt(r.tickMinor)),
+    lotClass: r.lotClass === 'MEGA' ? 'MEGA' : 'MINI',
   };
 }
 

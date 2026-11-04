@@ -30,8 +30,9 @@ export default function Funds() {
   const r = useMemo(() => range(p, cf, ct), [p, cf, ct]);
   const sum = useQuery<{ periodSummary: { realizedPnl: string; brokerage: string; trades: number; volume: string } }>(`query($f:DateTime!,$t:DateTime!){ periodSummary(from:$f,to:$t){ realizedPnl brokerage trades volume } }`, r, { skip: badRange });
   const s = sum.data?.periodSummary;
-  const rules = useQuery<{ tradingRules: { brokeragePerLot: string } }>(`{ tradingRules { brokeragePerLot } }`);
+  const rules = useQuery<{ tradingRules: { brokeragePerLot: string; brokeragePerMegaLot: string } }>(`{ tradingRules { brokeragePerLot brokeragePerMegaLot } }`);
   const perLot = rules.data?.tradingRules.brokeragePerLot;
+  const perMega = rules.data?.tradingRules.brokeragePerMegaLot;
   return (
     <div className="stack" style={{ gap: 40 }}>
       <PortfolioSummary actions title="Available balance" />
@@ -52,7 +53,7 @@ export default function Funds() {
             { k: 'Turnover', v: s ? `₹${inr(s.volume, { decimals: false })}` : '…' },
           ]} />
         )}
-        {perLot && <p className="t3 sm" style={{ margin: 0 }}>Brokerage is ₹{inr(perLot)} per lot, charged when you enter and again when you exit. 1 lot: ₹{inr(perLot)} + ₹{inr(perLot)}; 2 lots: ₹{inr(String(Number(perLot) * 2))} + ₹{inr(String(Number(perLot) * 2))}.</p>}
+        {perLot && <p className="t3 sm" style={{ margin: 0 }}>Brokerage is charged per lot when you open a trade and again when you cut it. Mini: ₹{inr(perLot)} per lot (2 lots: ₹{inr(String(Number(perLot) * 2))} + ₹{inr(String(Number(perLot) * 2))}). Mega: ₹{inr(perMega)} per lot (1 lot: ₹{inr(perMega)} + ₹{inr(perMega)}).</p>}
       </section>
       <PayFees />
       <Statement />

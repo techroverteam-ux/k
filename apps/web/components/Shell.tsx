@@ -1,4 +1,5 @@
 'use client';
+import { RiskBanner } from './RiskBanner';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -34,6 +35,7 @@ const NAV: Record<Role, Item[]> = {
     { href: '/admin/users', label: 'Accounts', icon: 'users' },
     { href: '/admin/payments', label: 'Transactions', icon: 'rupee' },
     { href: '/admin/config', label: 'Configuration', icon: 'sliders' },
+    { href: '/admin/lots', label: 'Mini & mega lots', icon: 'briefcase' },
     { href: '/admin/activity', label: 'Activity log', icon: 'activity' },
     { href: '/admin/logins', label: 'Login & consent', icon: 'lock' },
     { href: '/admin/audit', label: 'Audit trail', icon: 'file' },
@@ -151,7 +153,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
           <div className="banner offline" role="status"><Icon name="wifiOff" size={16} />{!online ? "You're offline. Showing the last data we received." : 'Live prices reconnecting…'}</div>
         )}
         <Ticker messages={settings?.tickerMessages ?? []} />
-        <main className="content" id="main">{children}</main>
+        <main className="content" id="main">{me?.role === 'TRADER' && <RiskBanner />}{children}</main>
       </div>
 
       <nav className="bottom-nav" aria-label="Main">

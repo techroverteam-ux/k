@@ -23,7 +23,8 @@ export const CONFIG_REGISTRY = {
   'trading.maxQtyPerOrder': { schema: z.number().int().min(1).max(100000), default: 50, description: 'Max quantity in a single order ("punch qty").' },
   'trading.maxQtyPerInstrument': { schema: z.number().int().min(1).max(1000000), default: 150, description: 'Max absolute open position per instrument.' },
   'trading.minQty': { schema: z.number().int().min(1), default: 1, description: 'Minimum order quantity.' },
-  'trading.brokeragePerLot': { schema: z.number().min(0).max(100000), default: 250, description: 'Brokerage in rupees per lot, charged on every fill (entry and exit). 1 lot = ₹250 + ₹250.' },
+  'trading.brokeragePerLot': { schema: z.number().min(0).max(100000), default: 250, description: 'Mini lots: brokerage in rupees per lot, charged when the trade is opened and again when it is cut. 1 lot = ₹250 + ₹250; 2 lots = ₹500 + ₹500.' },
+  'trading.brokeragePerMegaLot': { schema: z.number().min(0).max(1000000), default: 2500, description: 'Mega lots: brokerage in rupees per lot, charged when the trade is opened and again when it is cut. 1 lot = ₹2,500 + ₹2,500.' },
   'trading.brokerageBps': { schema: z.number().int().min(0).max(500), default: 0, description: 'Extra brokerage per side in basis points of turnover (added to the per-lot fee). 0 = per-lot only.' },
   'trading.enforceMarketHours': { schema: z.boolean(), default: true, description: 'Reject orders outside market sessions (and on weekends and listed holidays).' },
   'trading.marketHolidays': {
@@ -40,7 +41,11 @@ export const CONFIG_REGISTRY = {
   'payments.maxDepositMinor': { schema: minor, default: '1000000000', description: 'Max single deposit request (paise).' },
   'payments.maxWithdrawalMinor': { schema: minor, default: '500000000', description: 'Max single withdrawal request (paise).' },
   'payments.brokerMaySubmit': { schema: z.boolean(), default: true, description: 'Brokers may submit payment requests for their own traders.' },
-  'broker.commissionShareBps': { schema: z.number().int().min(0).max(10000), default: 5000, description: "Broker's share of brokerage from assigned traders." },
+  'broker.commissionShareBps': { schema: z.number().int().min(0).max(10000), default: 5000, description: "Old percentage share (only used when the per-lot amounts below are 0)." },
+  'broker.commissionPerMiniLot': { schema: z.number().min(0).max(100000), default: 170, description: "Broker's earning in rupees per mini lot their traders trade, per side (opening and cutting). Brokers can have their own amount." },
+  'broker.commissionPerMegaLot': { schema: z.number().min(0).max(1000000), default: 1700, description: "Broker's earning in rupees per mega lot their traders trade, per side. Brokers can have their own amount." },
+  'risk.warnLossPct': { schema: z.number().int().min(10).max(99), default: 80, description: 'Warn the trader (notification and sound) when their loss reaches this % of the funds in their account.' },
+  'risk.autoCutLossPct': { schema: z.number().int().min(10).max(100), default: 95, description: 'Cut all the trader\'s open trades automatically when their loss reaches this % of their funds.' },
   'security.adminMfaRequired': { schema: z.boolean(), default: true, description: 'Super Admins must use TOTP MFA.' },
   'security.maxFailedLogins': { schema: z.number().int().min(3).max(20), default: 5, description: 'Failed logins before temporary lockout.' },
   'security.sessionPolicy': {

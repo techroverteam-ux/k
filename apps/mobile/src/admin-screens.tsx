@@ -19,8 +19,8 @@ import {
   StatusBadge, T, Tabs, toast, useQuery, VList,
 } from './ui';
 
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct mfaEnabled createdAt phone';
-export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled createdAt phone';
+export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
 const ROLE: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 const useBrokers = () => useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
@@ -83,7 +83,7 @@ export function AdminUsersScreen() {
 
 /** New account. A broker uses it to ask for a trader account (with the opening amount); a Super Admin approves it. */
 export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '', commissionPct: '', openingAmount: '' });
+  const [f, setF] = useState({ username: '', displayName: '', role: 'TRADER' as 'TRADER' | 'BROKER', phone: '', brokerId: '', tempPassword: '', commMini: '', commMega: '', openingAmount: '' });
   const sole = useSoleAdmin();
   const { me, settings } = useAuth();
   const asBroker = me?.role === 'BROKER';
@@ -97,7 +97,8 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
     displayName: !f.displayName.trim() ? 'Enter a name' : null,
     phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : null,
-    commissionPct: f.role === 'BROKER' && !(/^\d{1,3}(\.\d{1,2})?$/.test(f.commissionPct.trim()) && Number(f.commissionPct) <= 100) ? 'Enter a percentage from 0 to 100, e.g. 40' : null,
+    commMini: f.role === 'BROKER' && f.commMini.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMini.trim()) ? 'Enter rupees, e.g. 170' : null,
+    commMega: f.role === 'BROKER' && f.commMega.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMega.trim()) ? 'Enter rupees, e.g. 1700' : null,
     openingAmount: f.role === 'TRADER' && (asBroker || f.openingAmount.trim()) && !(/^\d{1,12}(\.\d{1,2})?$/.test(f.openingAmount.trim()) && Number(f.openingAmount) >= minOpen) ? `Enter at least ₹${minLabel}` : null,
   };
   const bad = Object.values(errs).some(Boolean);
@@ -108,7 +109,8 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
       <Field label="Full name" value={f.displayName} maxLength={120} onChangeText={(v) => setF({ ...f, displayName: v })} error={e('displayName')} />
       <Field label="Username" autoCapitalize="none" autoCorrect={false} value={f.username} onChangeText={(v) => setF({ ...f, username: v.toLowerCase() })} error={e('username')} />
       <Field label="Mobile (optional)" keyboardType="phone-pad" maxLength={10} value={f.phone} onChangeText={(v) => setF({ ...f, phone: v.replace(/\D/g, '') })} error={e('phone')} />
-      {f.role === 'BROKER' && <Field label="Commission (%)" keyboardType="decimal-pad" placeholder="e.g. 40" maxLength={6} value={f.commissionPct} onChangeText={(v) => setF({ ...f, commissionPct: v.replace(/[^\d.]/g, '') })} error={e('commissionPct')} hint="The broker’s share of the brokerage their traders pay. You can change it later." />}
+      {f.role === 'BROKER' && <Field label="Broker earns per mini lot (₹)" keyboardType="decimal-pad" placeholder="170" maxLength={10} value={f.commMini} onChangeText={(v) => setF({ ...f, commMini: v.replace(/[^\d.]/g, '') })} error={e('commMini')} hint="For every lot their traders open or cut. Empty: platform default." />}
+      {f.role === 'BROKER' && <Field label="Broker earns per mega lot (₹)" keyboardType="decimal-pad" placeholder="1700" maxLength={10} value={f.commMega} onChangeText={(v) => setF({ ...f, commMega: v.replace(/[^\d.]/g, '') })} error={e('commMega')} />}
       {f.role === 'TRADER' && brokers.length > 0 && (
         <View style={{ gap: 6 }}><T v="sm" c="text2" w="500">Broker</T><Chips value={f.brokerId} onChange={(brokerId) => setF({ ...f, brokerId })} items={[{ k: '', label: 'None' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} /></View>
       )}
@@ -120,7 +122,7 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
         if (bad) return;
         setBusy(true); setErr(null);
         try {
-          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPct: f.role === 'BROKER' ? f.commissionPct.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
           toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose();
         } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }} />
@@ -153,7 +155,7 @@ export function AdminUserScreen({ id }: { id: string }) {
         [x.status === 'PENDING' ? 'Requested' : 'Created', `${when(x.createdAt)}${x.createdByName ? ` by ${x.createdByName}` : ''}`], ['Two-step verification', x.mfaEnabled ? 'On' : 'Off'],
         ...(x.status === 'PENDING' && x.openingAmount ? [['Opening amount', `₹${inr(x.openingAmount)}`] as [string, string]] : []),
         ...(x.role === 'TRADER' ? [['Broker', brokerName ? `${brokerName.displayName} (${brokerName.username})` : x.brokerName ?? 'None'] as [string, string]] : []),
-        ...(x.role === 'BROKER' ? [['Commission', x.commissionPct ? `${Number(x.commissionPct)}%` : 'Platform default'] as [string, string]] : []),
+        ...(x.role === 'BROKER' ? [['Commission', x.commissionPerMiniLot ? `₹${inr(x.commissionPerMiniLot)} per mini lot · ₹${inr(x.commissionPerMegaLot)} per mega lot${x.commissionIsDefault ? ' (default)' : ''}` : '—'] as [string, string]] : []),
         ...(x.phone ? [['Mobile', x.phone] as [string, string]] : []),
       ]} />
       {self ? <Notice>This is your own account. Use Profile to change your password or devices.</Notice> : (
@@ -161,7 +163,7 @@ export function AdminUserScreen({ id }: { id: string }) {
           {x.status === 'PENDING' && <ActionRow icon="check" tone="pos" label="Approve account" sub={x.openingAmount ? `Lets them sign in and adds ₹${inr(x.openingAmount)}` : 'Lets them sign in'} onPress={() => setAct('approve')} />}
           {x.status === 'ACTIVE' && <ActionRow icon="lock" tone="neg" label="Suspend account" sub="Signs them out and blocks sign-in" onPress={() => setAct('suspend')} />}
           {x.status === 'SUSPENDED' && <ActionRow icon="check" tone="pos" label="Reactivate account" sub="Lets them sign in again" onPress={() => setAct('reactivate')} />}
-          {x.role === 'BROKER' && <ActionRow icon="briefcase" label="Change commission" sub={x.commissionPct ? `Now ${Number(x.commissionPct)}%` : 'Now the platform default'} onPress={() => setAct('commission')} />}
+          {x.role === 'BROKER' && <ActionRow icon="briefcase" label="Change commission" sub={x.commissionPerMiniLot ? `Now ₹${inr(x.commissionPerMiniLot)} mini · ₹${inr(x.commissionPerMegaLot)} mega` : 'Per mini and mega lot'} onPress={() => setAct('commission')} />}
           {x.role === 'TRADER' && <ActionRow icon="users" label="Assign broker" sub={brokerName ? `Now: ${brokerName.username}` : 'No broker yet'} onPress={() => setAct('broker')} />}
           {!x.isDemo && <ActionRow icon="key" label="Reset password" sub="Set a temporary password and sign them out" onPress={() => setAct('password')} />}
           <ActionRow icon="device" label="Sign out everywhere" sub="Ends all their sessions" onPress={() => setAct('signout')} />
@@ -203,8 +205,8 @@ function UserSessions({ userId }: { userId: string }) {
 function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u: UserRow; brokers: { id: string; username: string; displayName: string }[]; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const [broker, setBroker] = useState(u.brokerId ?? '');
-  const [pw, setPw] = useState('');
-  const [typed, setTyped] = useState('');
+  const [pw, setPw] = useState(act === 'commission' && u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '');
+  const [typed, setTyped] = useState(act === 'commission' && u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '');
   const sole = useSoleAdmin();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -221,7 +223,8 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
       {act === 'broker' && <Chips value={broker} onChange={setBroker} items={[{ k: '', label: 'No broker' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} />}
       {act === 'password' && <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={pw} onChangeText={setPw} hint="At least 10 characters. They’ll be signed out and should change it after signing in." />}
       {act === 'signout' && <T c="text2">Every device signed in as this user is signed out now.</T>}
-      {act === 'commission' && <Field label="Commission (%)" keyboardType="decimal-pad" placeholder={u.commissionPct ? String(Number(u.commissionPct)) : 'e.g. 40'} maxLength={6} value={typed} onChangeText={(v) => setTyped(v.replace(/[^\d.]/g, ''))} hint="The broker’s share of the brokerage their traders pay. Applies to reports from now on." />}
+      {act === 'commission' && <Field label="Per mini lot (₹)" keyboardType="decimal-pad" placeholder={u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '170'} maxLength={10} value={typed} onChangeText={(v) => setTyped(v.replace(/[^\d.]/g, ''))} hint="What the broker earns for every lot their traders open or cut." />}
+      {act === 'commission' && <Field label="Per mega lot (₹)" keyboardType="decimal-pad" placeholder={u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '1700'} maxLength={10} value={pw} onChangeText={(v) => setPw(v.replace(/[^\d.]/g, ''))} />}
       {act === 'delete' && (<>
         <Notice tone="err">{`Orders, positions, ledger, fund and fee requests, strategies, watchlist, notifications and sign-ins of ${u.username} are erased and can’t be brought back. ${u.role === 'BROKER' ? 'Their traders stay, without a broker. ' : ''}${sole ? 'This happens right away.' : 'A different Super Admin must approve within 30 minutes.'}`}</Notice>
         <Field label="Reason (recorded in the audit log)" value={reason} onChangeText={setReason} maxLength={300} hint="10–300 characters" />
@@ -236,7 +239,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
         {act === 'broker' && <Button block kind="primary" title="Save" busy={busy} disabled={broker === (u.brokerId ?? '')} onPress={() => run(`mutation($t:ID!,$b:ID){ assignTraderToBroker(traderId:$t, brokerId:$b){ id } }`, { t: u.id, b: broker || null }, 'Broker updated')} />}
         {act === 'password' && <Button block kind="primary" title="Reset" busy={busy} disabled={pw.length < 10} onPress={() => run(`mutation($id:ID!,$p:String!){ resetUserPassword(userId:$id, tempPassword:$p) }`, { id: u.id, p: pw }, 'Password reset; they were signed out')} />}
         {act === 'delete' && <Button block kind="sell" title={sole ? 'Delete now' : 'Ask to delete'} busy={busy} disabled={reason.trim().length < 10 || typed.trim().toLowerCase() !== u.username} onPress={() => run(`mutation($u:ID!,$r:String!,$w:String!){ requestUserDeletion(userId:$u, reason:$r, confirm:$w){ id status } }`, { u: u.id, r: reason.trim(), w: typed.trim() }, (d) => (d.requestUserDeletion?.status === 'EXECUTED' ? `${u.username} deleted` : 'Sent to another Super Admin for approval'))} />}
-        {act === 'commission' && <Button block kind="primary" title="Save" busy={busy} disabled={!(/^\d{1,3}(\.\d{1,2})?$/.test(typed.trim()) && Number(typed) <= 100)} onPress={() => run(`mutation($b:ID!,$p:String!){ setBrokerCommission(brokerId:$b, commissionPct:$p){ id } }`, { b: u.id, p: typed.trim() }, 'Commission updated')} />}
+        {act === 'commission' && <Button block kind="primary" title="Save" busy={busy} disabled={!(/^\d{1,7}(\.\d{1,2})?$/.test(typed.trim()) && /^\d{1,7}(\.\d{1,2})?$/.test(pw.trim()))} onPress={() => run(`mutation($b:ID!,$m:String!,$g:String!){ setBrokerCommissionPerLot(brokerId:$b, perMiniLot:$m, perMegaLot:$g){ id } }`, { b: u.id, m: typed.trim(), g: pw.trim() }, 'Commission updated')} />}
         {act === 'signout' && <Button block kind="sell" title="Sign out" busy={busy} onPress={() => run(`mutation($u:ID!,$s:ID){ revokeUserSessions(userId:$u, sessionId:$s) }`, { u: u.id, s: null }, 'Signed out everywhere')} />}
       </Row>
     </Sheet>
@@ -320,8 +323,8 @@ export function CommissionsScreen() {
   const t = useTheme();
   const [m, setM] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const range = useMemo(() => ({ f: new Date(m.y, m.m, 1).toISOString(), t: new Date(m.y, m.m + 1, 1).toISOString() }), [m]);
-  const q = useQuery<{ commissionReport: { shareBps: number; total: string; lines: { userId: string; username: string; brokerage: string; commission: string }[] } }>(
-    `query($f:DateTime!,$t:DateTime!){ commissionReport(from:$f,to:$t){ shareBps total lines{ userId username brokerage commission } } }`, range);
+  const q = useQuery<{ commissionReport: { perMiniLot: string; perMegaLot: string; total: string; lines: { userId: string; username: string; brokerage: string; miniLots: number; megaLots: number; commission: string }[] } }>(
+    `query($f:DateTime!,$t:DateTime!){ commissionReport(from:$f,to:$t){ perMiniLot perMegaLot total lines{ userId username brokerage miniLots megaLots commission } } }`, range);
   const r = q.data?.commissionReport;
   const brokerage = r?.lines.reduce((a, l) => a + Number(l.brokerage), 0).toFixed(2);
   const now = new Date();
@@ -330,7 +333,7 @@ export function CommissionsScreen() {
   const shift = (n: number) => setM((c) => { const d = new Date(c.y, c.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   return (
     <Screen back title="Commissions">
-      <T v="sm" c="text2">Your share of brokerage from assigned traders. These figures are simulated.</T>
+      <T v="sm" c="text2">You earn a fixed amount for every lot your traders open or cut. These figures are simulated.</T>
       <Spread>
         <Pressable onPress={() => shift(-1)} accessibilityRole="button" accessibilityLabel="Previous month" hitSlop={8} style={{ padding: S[2] }}><Icon name="chevronLeft" size={20} color={t.text} /></Pressable>
         <T v="h3">{label}</T>
@@ -338,10 +341,10 @@ export function CommissionsScreen() {
       </Spread>
       {q.error && !r ? <ErrorState error={q.error} retry={q.refetch} /> : !r ? <Skeleton /> : (
         <>
-          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: 'Brokerage from traders', v: `₹${inr(brokerage)}` }, { k: 'Your share', v: `${(r.shareBps / 100).toFixed(2)}%` }, { k: 'Traders with trades', v: r.lines.length }]} />
+          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: 'Brokerage from traders', v: `₹${inr(brokerage)}` }, { k: 'Per lot', v: `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` }, { k: 'Traders with trades', v: r.lines.length }]} />
           <Section title="By trader">
             {!r.lines.length ? <Empty icon="users" title="No trades this month" /> : r.lines.map((l) => (
-              <ListRow key={l.userId} onPress={() => router.push(`/trader-detail/${l.userId}`)} label={`${l.username} commission`} title={l.username} sub={`Brokerage ₹${inr(l.brokerage)}`} right={<T v="num" c="pos">₹{inr(l.commission)}</T>} />
+              <ListRow key={l.userId} onPress={() => router.push(`/trader-detail/${l.userId}`)} label={`${l.username} commission`} title={l.username} sub={`${l.miniLots} mini · ${l.megaLots} mega lots · brokerage ₹${inr(l.brokerage)}`} right={<T v="num" c="pos">₹{inr(l.commission)}</T>} />
             ))}
           </Section>
         </>

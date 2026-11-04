@@ -61,6 +61,11 @@ export const users = pgTable(
     commissionShareBps: integer('commission_share_bps'),
     /** Traders only: the opening amount asked for when the account was created (paise); credited when the account is approved. */
     openingAmountMinor: money('opening_amount_minor'),
+    /** Brokers only: their earning per mini / mega lot (paise, per side). Empty: the platform default. */
+    commissionMiniMinor: money('commission_mini_minor'),
+    commissionMegaMinor: money('commission_mega_minor'),
+    /** Traders: loss watch. OK, WARN (loss passed the warning level), CUT (trades were cut at the auto-cut level). */
+    riskState: varchar('risk_state', { length: 5 }).notNull().default('OK'),
     mfaSecretEnc: text('mfa_secret_enc'),
     mfaEnabled: boolean('mfa_enabled').notNull().default(false),
     failedLoginCount: integer('failed_login_count').notNull().default(0),
@@ -279,6 +284,8 @@ export const instruments = pgTable(
     segment: varchar('segment', { length: 10 }).notNull(),
     expiry: ts('expiry'),
     lotSize: integer('lot_size').notNull().default(1),
+    /** MINI or MEGA: decides the brokerage per lot (trading.brokeragePerLot / trading.brokeragePerMegaLot) and the broker's earning. */
+    lotClass: varchar('lot_class', { length: 5 }).notNull().default('MINI'),
     tickMinor: integer('tick_minor').notNull().default(5),
     refPriceMinor: money('ref_price_minor').notNull(),
     active: boolean('active').notNull().default(true),
