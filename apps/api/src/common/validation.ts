@@ -39,21 +39,25 @@ const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F‪-‮⁦-⁩]/; 
 const MAX_STRING = 5000;
 const MAX_ARRAY = 500;
 const MAX_DEPTH = 8;
+/** The one long string allowed: a payment screenshot (data URL) sent to submitFeePayment. Checked again in FeesService. */
+const IMAGE_DATA_URL = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+const MAX_IMAGE = 800_000;
 
-function check(v: unknown, path: string, depth = 0): string | null {
+function check(v: unknown, path: string, depth = 0, image = false): string | null {
   if (depth > MAX_DEPTH) return `${path}: too deeply nested`;
   if (typeof v === 'string') {
+    if (image && v.length <= MAX_IMAGE && IMAGE_DATA_URL.test(v)) return null;
     if (v.length > MAX_STRING) return `${path}: too long`;
     if (CONTROL.test(v)) return `${path}: contains control characters`;
     return null;
   }
   if (Array.isArray(v)) {
     if (v.length > MAX_ARRAY) return `${path}: too many items`;
-    for (let i = 0; i < v.length; i++) { const e = check(v[i], `${path}[${i}]`, depth + 1); if (e) return e; }
+    for (let i = 0; i < v.length; i++) { const e = check(v[i], `${path}[${i}]`, depth + 1, image); if (e) return e; }
     return null;
   }
   if (v && typeof v === 'object') {
-    for (const [k, x] of Object.entries(v)) { const e = check(x, `${path}.${k}`, depth + 1); if (e) return e; }
+    for (const [k, x] of Object.entries(v)) { const e = check(x, `${path}.${k}`, depth + 1, image); if (e) return e; }
   }
   return null;
 }
@@ -68,7 +72,9 @@ export function inputHygienePlugin(): ApolloServerPlugin {
     async requestDidStart() {
       return {
         async didResolveOperation({ request, document }) {
-          const bad = check(request.variables ?? {}, 'variables');
+          let image = false;
+          visit(document, { Field: (n) => { if (n.name.value === 'submitFeePayment') image = true; } });
+          const bad = check(request.variables ?? {}, 'variables', 0, image);
           let lit: string | null = null;
           visit(document, { StringValue: (n) => { if (!lit && (n.value.length > MAX_STRING || CONTROL.test(n.value))) lit = 'a string argument is too long or contains control characters'; } });
           const msg = bad ?? lit;

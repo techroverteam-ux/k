@@ -1,9 +1,9 @@
 import 'reflect-metadata';
+import { jsonBodyLimits } from './common/body-limits';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
-import { json } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { env } from './config/env';
@@ -22,7 +22,7 @@ async function bootstrap() {
   if (cfg.TRUST_PROXY) app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(requestContextMiddleware); // request id + trusted client IP for every request, before anything else
-  app.use(json({ limit: '100kb' }));
+  app.use(jsonBodyLimits()); // 100 kB; 800 kB only for a fee payment with its screenshot
   app.use(cookieParser());
   app.use(
     helmet({
@@ -35,7 +35,7 @@ async function bootstrap() {
   app.enableCors({
     origin: (origin, cb) => cb(null, !origin || origins.includes(origin)),
     credentials: true,
-    allowedHeaders: ['content-type', 'authorization', 'x-step-up', 'x-client', 'x-request-id', 'apollo-require-preflight'],
+    allowedHeaders: ['x-upload', 'content-type', 'authorization', 'x-step-up', 'x-client', 'x-request-id', 'apollo-require-preflight'],
     exposedHeaders: ['x-request-id'],
     methods: ['GET', 'POST', 'OPTIONS'],
     maxAge: 600,

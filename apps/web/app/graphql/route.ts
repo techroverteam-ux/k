@@ -31,9 +31,10 @@ const API = secureApiUrl(process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC
 const SECRET = process.env.PROXY_SHARED_SECRET;
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 
-const FORWARD_REQ = ['content-type', 'authorization', 'cookie', 'user-agent', 'x-client', 'x-step-up', 'x-request-id', 'apollo-require-preflight', 'accept', 'accept-language'];
+const FORWARD_REQ = ['x-upload', 'content-type', 'authorization', 'cookie', 'user-agent', 'x-client', 'x-step-up', 'x-request-id', 'apollo-require-preflight', 'accept', 'accept-language'];
 const FORWARD_RES = ['content-type', 'x-request-id', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after', 'cache-control'];
-const MAX_BODY = 100 * 1024; // same limit as the API
+const MAX_BODY = 100 * 1024; // same limits as the API
+const MAX_UPLOAD_BODY = 800 * 1024; // fee payment with a screenshot (x-upload: fee-proof)
 
 /** Browser IP as seen by this server's load balancer (right-most X-Forwarded-For entry). */
 function browserIp(req: NextRequest): string | null {
@@ -44,7 +45,7 @@ function browserIp(req: NextRequest): string | null {
 
 export async function POST(req: NextRequest) {
   const body = await req.arrayBuffer();
-  if (body.byteLength > MAX_BODY) return Response.json({ errors: [{ message: 'Request too large.', extensions: { code: 'BAD_REQUEST' } }] }, { status: 413 });
+  if (body.byteLength > (req.headers.get('x-upload') === 'fee-proof' ? MAX_UPLOAD_BODY : MAX_BODY)) return Response.json({ errors: [{ message: 'Request too large.', extensions: { code: 'BAD_REQUEST' } }] }, { status: 413 });
 
   const headers = new Headers();
   for (const h of FORWARD_REQ) {

@@ -141,6 +141,13 @@
       "when": 1793910000000,
       "tag": "0019_lots_risk",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793920000000,
+      "tag": "0020_fee_proofs",
+      "breakpoints": true
     }
   ]
 }

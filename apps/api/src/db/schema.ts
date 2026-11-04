@@ -694,3 +694,12 @@ export const feePayments = pgTable(
   },
   (t) => [index('fee_payments_user_idx').on(t.userId, t.createdAt), index('fee_payments_status_idx').on(t.status, t.createdAt)],
 );
+
+/** Screenshot proof for a fee payment: the image (base64) encrypted with AES-256-GCM (AAD "fee_payment_proofs.data"). */
+export const feePaymentProofs = pgTable('fee_payment_proofs', {
+  feePaymentId: uuid('fee_payment_id').primaryKey().references(() => feePayments.id, { onDelete: 'cascade' }),
+  mime: varchar('mime', { length: 20 }).notNull(),
+  bytes: integer('bytes').notNull(),
+  data: text('data').notNull(),
+  createdAt: ts('created_at').notNull().defaultNow(),
+});

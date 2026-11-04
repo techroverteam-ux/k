@@ -3,12 +3,13 @@ import { useSoleAdmin } from '@/sole-admin';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { gql } from '@/api';
+import { ProofImage } from '@/proof';
 import { useAuth } from '@/auth';
 import { inr, S, when } from '@/theme';
 import { Badge, Button, Chips, Empty, ErrorState, Field, ListRow, Notice, Row, Screen, Section, Sheet, Skeleton, T, Tabs, toast, useQuery } from '@/ui';
 
 interface Payee { id: string; kind: 'BANK' | 'UPI'; label: string; accountName: string; bankName?: string; accountNumber?: string; ifsc?: string; upiId?: string; status: string; createdById: string; createdAt: string }
-interface Fee { id: string; displayName: string; username: string; payee: string; amount: string; purpose: string; utr: string; status: string; reviewNote?: string; createdAt: string }
+interface Fee { id: string; displayName: string; username: string; payee: string; amount: string; purpose: string; utr: string; hasProof?: boolean; status: string; reviewNote?: string; createdAt: string }
 const PSTATUS: Record<string, [string, 'warn' | 'ok' | 'bad' | undefined]> = { PENDING: ['Waiting for approval', 'warn'], ACTIVE: ['Live', 'ok'], REJECTED: ['Rejected', 'bad'], DISABLED: ['Disabled', undefined] };
 
 export default function AdminFees() {
@@ -17,9 +18,10 @@ export default function AdminFees() {
   const [tab, setTab] = useState<'details' | 'payments'>('payments');
   const payees = useQuery<{ payeeAccounts: Payee[] }>(`{ payeeAccounts { id kind label accountName bankName accountNumber ifsc upiId status createdById createdAt } }`);
   const [st, setSt] = useState<'SUBMITTED' | 'VERIFIED' | 'REJECTED'>('SUBMITTED');
-  const fees = useQuery<{ feePayments: Fee[] }>(`query($s:[String!]){ feePayments(status:$s, limit:200){ id displayName username payee amount purpose utr status reviewNote createdAt } }`, { s: [st] }, 20000);
+  const fees = useQuery<{ feePayments: Fee[] }>(`query($s:[String!]){ feePayments(status:$s, limit:200){ id displayName username payee amount purpose utr hasProof status reviewNote createdAt } }`, { s: [st] }, 20000);
   const [adding, setAdding] = useState(false);
   const [review, setReview] = useState<{ f: Fee; ok: boolean } | null>(null);
+  const [show, setShow] = useState<Fee | null>(null);
   const act = async (q: string, id: string, msg: string) => { try { await gql(q, { id }); toast(msg); void payees.refetch(); } catch (e) { toast((e as Error).message, true); } };
   return (
     <Screen back title="Fees · bank & UPI">
@@ -30,6 +32,7 @@ export default function AdminFees() {
           {fees.error && !fees.data ? <ErrorState error={fees.error} retry={fees.refetch} /> : !fees.data ? <Skeleton /> : !fees.data.feePayments.length ? <Empty icon="inbox" title="Nothing here" /> : fees.data.feePayments.map((f) => (
             <View key={f.id} style={{ gap: S[2], paddingVertical: S[3] }}>
               <Row><View style={{ flex: 1 }}><T w="600">{f.displayName} · ₹{inr(f.amount)}</T><T v="xs" c="text2">{f.purpose}</T><T v="xs" c="text3" selectable>Ref {f.utr} · to {f.payee} · {when(f.createdAt)}</T>{f.reviewNote ? <T v="xs" c="text3">{f.reviewNote}</T> : null}</View></Row>
+              {f.hasProof ? <Button size="sm" icon="eye" title="View screenshot" onPress={() => setShow(f)} /> : <T v="xs" c="text3">No screenshot</T>}
               {st === 'SUBMITTED' && <Row gap={S[2]}><View style={{ flex: 1 }}><Button block size="sm" title="Not found" onPress={() => setReview({ f, ok: false })} /></View><View style={{ flex: 1 }}><Button block size="sm" kind="primary" title="Received" onPress={() => setReview({ f, ok: true })} /></View></Row>}
             </View>
           ))}
@@ -60,6 +63,12 @@ export default function AdminFees() {
         </>
       )}
       {adding && <AddSheet onClose={() => setAdding(false)} onDone={() => { setAdding(false); void payees.refetch(); }} />}
+      {show && (
+        <Sheet visible title="Payment screenshot" sub={`₹${inr(show.amount)} from ${show.displayName} · ref ${show.utr}`} onClose={() => setShow(null)}>
+          <ProofImage id={show.id} height={420} />
+          {show.status === 'SUBMITTED' && <Row gap={S[2]}><View style={{ flex: 1 }}><Button block title="Not found" onPress={() => { setShow(null); setReview({ f: show, ok: false }); }} /></View><View style={{ flex: 1 }}><Button block kind="primary" title="Received" onPress={() => { setShow(null); setReview({ f: show, ok: true }); }} /></View></Row>}
+        </Sheet>
+      )}
       {review && <ReviewSheet f={review.f} ok={review.ok} onClose={() => setReview(null)} onDone={() => { setReview(null); void fees.refetch(); }} />}
     </Screen>
   );
@@ -104,6 +113,7 @@ function ReviewSheet({ f, ok, onClose, onDone }: { f: Fee; ok: boolean; onClose:
   const [err, setErr] = useState<string | null>(null);
   return (
     <Sheet visible title={ok ? 'Mark as received?' : 'Mark as not found?'} sub={`₹${inr(f.amount)} from ${f.displayName} · ref ${f.utr}`} onClose={onClose}>
+      {f.hasProof && <ProofImage id={f.id} height={220} />}
       <T c="text2">{ok ? 'Only confirm after you see this amount and reference in the bank statement.' : 'The trader is told why. Say what to do next.'}</T>
       <Field label={ok ? 'Note (optional)' : 'Reason'} maxLength={300} value={note} onChangeText={setNote} />
       {err && <Notice tone="err">{err}</Notice>}

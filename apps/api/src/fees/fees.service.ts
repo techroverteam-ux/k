@@ -4,9 +4,9 @@ import { and, asc, desc, eq, inArray, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, notFound } from '../common/errors';
 import { AuditService } from '../audit/audit.service';
-import { blindIndex, encryptField, openOpt, sealOpt } from '../common/crypto';
+import { blindIndex, decryptField, encryptField, openOpt, sealOpt } from '../common/crypto';
 import { DbService } from '../db/db';
-import { feePayments, payeeAccounts, users } from '../db/schema';
+import { feePaymentProofs, feePayments, payeeAccounts, users } from '../db/schema';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -19,6 +19,25 @@ const tail = (v?: string | null) => (v ? `…${v.slice(-4)}` : undefined);
 /** Payee row with account number / UPI ID decrypted (stored encrypted at rest). */
 const openPayee = <P extends { accountNumber: string | null; upiId: string | null }>(p: P): P => ({ ...p, accountNumber: openOpt(p.accountNumber, A_ACC), upiId: openOpt(p.upiId, A_UPI) });
 const openFee = <F extends { utr: string }>(f: F): F => ({ ...f, utr: openOpt(f.utr, A_UTR) ?? '' });
+
+const A_PROOF = 'fee_payment_proofs.data';
+export const MAX_PROOF_BYTES = 550 * 1024;
+const MAGIC: Record<string, (b: Buffer) => boolean> = {
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  'image/webp': (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
+
+/** "data:image/jpeg;base64,…" → checked image (JPEG, PNG or WebP, up to 550 kB; the file's bytes must match its type). */
+export function parseProof(dataUrl: string): { mime: string; base64: string; bytes: number } {
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl.trim());
+  if (!m) throw badInput('Attach a screenshot of the payment (JPG, PNG or WebP).');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length < 100) throw badInput('That image looks empty. Attach the payment screenshot.');
+  if (buf.length > MAX_PROOF_BYTES) throw badInput('The screenshot is too large (max 550 kB). Crop it or take a smaller one.');
+  if (!MAGIC[m[1]](buf)) throw badInput('That file is not a real image. Attach the payment screenshot.');
+  return { mime: m[1], base64: buf.toString('base64'), bytes: buf.length };
+}
 
 export interface PayeeInput { kind: 'BANK' | 'UPI'; label: string; accountName: string; bankName?: string; accountNumber?: string; ifsc?: string; branch?: string; upiId?: string }
 
@@ -85,7 +104,8 @@ export class FeesService {
     });
   }
 
-  async submit(actor: Actor, i: { payeeAccountId: string; amountMinor: bigint; purpose: string; utr: string }, ip: string) {
+  async submit(actor: Actor, i: { payeeAccountId: string; amountMinor: bigint; purpose: string; utr: string; proof: string }, ip: string) {
+    const proof = parseProof(i.proof);
     const purpose = i.purpose.trim();
     const utr = i.utr.trim().toUpperCase();
     if (i.amountMinor <= 0n || i.amountMinor > MAX_FEE_MINOR) throw badInput('Enter the amount you paid.');
@@ -98,7 +118,11 @@ export class FeesService {
     if (dup) throw new AppError('CONFLICT', dup.userId === actor.userId ? 'You already submitted this reference number.' : 'This reference number was already used.');
     return this.dbs.db.transaction(async (tx) => {
       const [f] = await tx.insert(feePayments).values({ userId: actor.userId, payeeAccountId: payee.id, amountMinor: i.amountMinor, purpose, utr: encryptField(utr, A_UTR), utrHash, ip }).returning();
-      await this.audit.record(tx, { actor, action: 'fees.payment_submitted', entityType: 'fee_payment', entityId: f.id, outcome: 'SUCCESS', ip, metadata: { amountMinor: i.amountMinor.toString(), payee: payee.label, utrTail: tail(utr) } });
+      await tx.insert(feePaymentProofs).values({ feePaymentId: f.id, mime: proof.mime, bytes: proof.bytes, data: encryptField(proof.base64, A_PROOF) });
+      await this.audit.record(tx, { actor, action: 'fees.payment_submitted', entityType: 'fee_payment', entityId: f.id, outcome: 'SUCCESS', ip, metadata: { amountMinor: i.amountMinor.toString(), payee: payee.label, utrTail: tail(utr), proof: { mime: proof.mime, bytes: proof.bytes } } });
+      const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
+      const [who] = await tx.select({ username: users.username }).from(users).where(eq(users.id, actor.userId));
+      for (const a of admins) await this.notifications.notify(tx, a.id, 'fees.review', 'Fee payment to check', `${who?.username ?? 'A trader'} paid ₹${(Number(i.amountMinor) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} to ${payee.label} (${purpose}). Screenshot attached.`);
       return openFee(f);
     });
   }
@@ -110,14 +134,29 @@ export class FeesService {
     else if (actor.role === 'BROKER') where.push(inArray(feePayments.userId, this.dbs.db.select({ id: users.id }).from(users).where(eq(users.brokerId, actor.userId))));
     if (status?.length) where.push(inArray(feePayments.status, status));
     return this.dbs.db
-      .select({ f: feePayments, username: users.username, displayName: users.displayName, payee: payeeAccounts.label })
+      .select({ f: feePayments, username: users.username, displayName: users.displayName, payee: payeeAccounts.label, proofBytes: feePaymentProofs.bytes })
       .from(feePayments)
       .innerJoin(users, eq(users.id, feePayments.userId))
       .innerJoin(payeeAccounts, eq(payeeAccounts.id, feePayments.payeeAccountId))
+      .leftJoin(feePaymentProofs, eq(feePaymentProofs.feePaymentId, feePayments.id))
       .where(and(...where))
       .orderBy(desc(feePayments.createdAt))
       .limit(limit)
       .then((rows) => rows.map((r) => ({ ...r, f: openFee(r.f) })));
+  }
+
+  /** The screenshot as a data URL: the trader who paid, their broker, or a Super Admin. */
+  async proof(actor: Actor, id: string, ip: string) {
+    const [r] = await this.dbs.db
+      .select({ p: feePaymentProofs, userId: feePayments.userId, brokerId: users.brokerId })
+      .from(feePaymentProofs)
+      .innerJoin(feePayments, eq(feePayments.id, feePaymentProofs.feePaymentId))
+      .innerJoin(users, eq(users.id, feePayments.userId))
+      .where(eq(feePaymentProofs.feePaymentId, id));
+    const allowed = r && (actor.role === 'SUPER_ADMIN' || (actor.role === 'TRADER' && r.userId === actor.userId) || (actor.role === 'BROKER' && r.brokerId === actor.userId));
+    if (!allowed) throw notFound('Screenshot');
+    if (actor.role === 'SUPER_ADMIN') await this.audit.recordStandalone({ actor, action: 'fees.proof_viewed', entityType: 'fee_payment', entityId: id, outcome: 'SUCCESS', ip });
+    return `data:${r.p.mime};base64,${decryptField(r.p.data, A_PROOF)}`;
   }
 
   async review(actor: Actor, id: string, verified: boolean, note: string | undefined, ip: string) {

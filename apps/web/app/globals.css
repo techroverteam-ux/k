@@ -716,3 +716,13 @@ tr.clickable { cursor: pointer; }
 .seg.sm { display: inline-grid; width: 150px; padding: 3px; }
 .seg.sm button { height: 30px; font-size: var(--fs-sm); }
 .seg.sm button.on:last-child { background: var(--brand); color: #fff; }
+/* Fee payment screenshot */
+.proof-drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: var(--s5) var(--s4); border: 1.5px dashed var(--line-2); border-radius: var(--r-lg); text-align: center; cursor: pointer; color: var(--text-2); }
+.proof-drop:hover, .proof-drop:focus-within { border-color: var(--brand); color: var(--text); background: var(--brand-soft); }
+.proof-drop.busy { opacity: .6; pointer-events: none; }
+.proof-pick { display: flex; gap: var(--s3); align-items: flex-start; }
+.proof-pick img { width: 96px; height: 128px; object-fit: cover; border-radius: var(--r-md); border: 1px solid var(--line); }
+.proof-img { display: block; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); background: var(--bg-2); }
+.proof-img img { display: block; width: 100%; max-height: 70vh; object-fit: contain; }
+.proof-img.compact img { max-height: 220px; }
+.proof-img.skel { height: 240px; }

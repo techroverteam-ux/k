@@ -8,7 +8,7 @@ import 'reflect-metadata';
 import { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
-import { json } from 'express';
+import { jsonBodyLimits } from '../src/common/body-limits';
 import { authenticator } from 'otplib';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
@@ -130,7 +130,7 @@ beforeAll(async () => {
   await setConfig('security.sessionPolicy', OPEN_POLICY);
   app = await NestFactory.create(AppModule, { logger: ['error'], bodyParser: false });
   app.use(requestContextMiddleware);
-  app.use(json({ limit: '100kb' }));
+  app.use(jsonBodyLimits());
   app.use(cookieParser());
   await app.listen(0);
   url = `${await app.getUrl()}/graphql`.replace('[::1]', '127.0.0.1');
@@ -1145,12 +1145,24 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
 
     const balance = async () => (await gql(`{ accountSummary { balance } }`, {}, { token: t.accessToken })).data.accountSummary.balance;
     const before = await balance();
-    const PAY = `mutation($p:ID!,$a:String!,$u:String!){ submitFeePayment(payeeAccountId:$p, amount:$a, purpose:"Course fee, November batch", utr:$u){ id status amount } }`;
-    expect(code(await gql(PAY, { p: id, a: '4999', u: '12' }, { token: t.accessToken }))).toBe('BAD_USER_INPUT');
+    const PAY = `mutation($p:ID!,$a:String!,$u:String!,$s:String!){ submitFeePayment(payeeAccountId:$p, amount:$a, purpose:"Course fee, November batch", utr:$u, proof:$s){ id status amount hasProof } }`;
+    // A real (tiny) PNG, padded to a realistic size; the upload header allows the larger body.
+    const png = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a1e2ad3d0000000049454e44ae426082', 'hex'), Buffer.alloc(150 * 1024)]);
+    const proof = `data:image/png;base64,${png.toString('base64')}`;
+    const up = { token: t.accessToken, headers: { 'x-upload': 'fee-proof' } };
+    expect(code(await gql(PAY, { p: id, a: '4999', u: '12', s: proof }, up))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(PAY, { p: id, a: '4999', u: 'UTRFAKE123', s: `data:image/png;base64,${Buffer.from('not an image at all, just text pretending'.repeat(5)).toString('base64')}` }, up))).toBe('BAD_USER_INPUT');
+    expect((await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${t.accessToken}`, 'x-client': 'mobile' }, body: JSON.stringify({ query: PAY, variables: { p: id, a: '1', u: 'UTRBIG1234', s: proof } }) })).status).toBe(413); // too big without the upload header
     const utr = `UTR${Date.now()}`;
-    const paid = await gql(PAY, { p: id, a: '4999', u: utr }, { token: t.accessToken });
-    expect(paid.data.submitFeePayment).toMatchObject({ status: 'SUBMITTED', amount: '4999.00' });
-    expect(code(await gql(PAY, { p: id, a: '4999', u: utr.toLowerCase() }, { token: t.accessToken }))).toBe('CONFLICT');
+    const paid = await gql(PAY, { p: id, a: '4999', u: utr, s: proof }, up);
+    expect(paid.data.submitFeePayment).toMatchObject({ status: 'SUBMITTED', amount: '4999.00', hasProof: true });
+    expect(code(await gql(PAY, { p: id, a: '4999', u: utr.toLowerCase(), s: proof }, up))).toBe('CONFLICT');
+    const PROOF = `query($id:ID!){ feePaymentProof(id:$id) }`;
+    expect((await gql(PROOF, { id: paid.data.submitFeePayment.id }, { token: admin.token })).data.feePaymentProof).toBe(proof);
+    expect((await gql(PROOF, { id: paid.data.submitFeePayment.id }, { token: t.accessToken })).data.feePaymentProof).toBe(proof);
+    const other = await login('trader.three');
+    expect(code(await gql(PROOF, { id: paid.data.submitFeePayment.id }, { token: other.accessToken }))).toBe('NOT_FOUND');
+    expect((await pg.query(`SELECT data FROM fee_payment_proofs WHERE fee_payment_id = $1`, [paid.data.submitFeePayment.id])).rows[0].data).not.toContain(png.toString('base64').slice(0, 40)); // encrypted at rest
 
     const REVIEW = `mutation($id:ID!,$v:Boolean!,$n:String){ reviewFeePayment(id:$id, verified:$v, note:$n){ status } }`;
     expect(code(await gql(REVIEW, { id: paid.data.submitFeePayment.id, v: false }, { token: admin.token }))).toBe('BAD_USER_INPUT');
