@@ -879,3 +879,15 @@ tr.clickable { cursor: pointer; }
 .lot-step input { flex: 1; min-width: 0; border: 0; border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); background: transparent; color: var(--text); text-align: center; font-size: var(--fs-lg); font-weight: 600; outline: none; }
 .ohlc-box .val.pos { color: var(--pos); }
 .ohlc-box .val.neg { color: var(--neg); }
+
+/* demo add-funds preview (sample details only) */
+.demo-pay { display: flex; flex-direction: column; gap: var(--s3); border: 1px dashed var(--line-2); border-radius: var(--r-md); padding: var(--s3); }
+.demo-pay-row { display: flex; gap: var(--s3); align-items: flex-start; }
+.demo-qr { flex: none; width: 92px; height: 92px; border-radius: var(--r-md); background: repeating-linear-gradient(45deg, var(--bg-2), var(--bg-2) 8px, var(--bg-3) 8px, var(--bg-3) 16px); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-2); text-align: center; }
+.demo-qr small { font-size: 11px; }
+.demo-bank { margin: 0; flex: 1; min-width: 0; display: grid; gap: 4px; font-size: var(--fs-sm); }
+.demo-bank div { display: flex; justify-content: space-between; gap: var(--s2); }
+.demo-bank dt { color: var(--text-2); }
+.demo-bank dd { margin: 0; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.demo-label { font-size: var(--fs-sm); font-weight: 500; }
+.demo-shot { width: 64px; height: 84px; object-fit: cover; border-radius: var(--r-md); border: 1px solid var(--line); }

@@ -1,5 +1,6 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
 import { useSoleAdmin } from './sole-admin';
+import { DemoDepositDetails } from './demo-deposit';
 import { router } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -264,6 +265,7 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
     <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
       <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
       {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={[min, min * 2, min * 4, min * 10].map(String).map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
+      {type === 'DEPOSIT' && !sole && <DemoDepositDetails />}
       {err && <Notice tone="err">{err}</Notice>}
       <Button kind="primary" size="lg" title="Send request" busy={busy} onPress={async () => {
         setTouched(true);

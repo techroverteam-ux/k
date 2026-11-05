@@ -7,6 +7,7 @@ import { gql, newKey, subscribe } from '@/lib/api';
 import { fullName, inr, shortSymbol, tone, when, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
+import { DemoDepositDetails } from './demo-deposit';
 import { Private, usePrefs } from '@/lib/prefs';
 import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
 
@@ -287,6 +288,7 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
             {[min, min * 2, min * 4, min * 10].map(String).map((v) => <button type="button" key={v} className="chip" aria-pressed={amount === v} onClick={() => setAmount(v)}>+₹{inr(v, { decimals: false })}</button>)}
           </div>
         )}
+        {type === 'DEPOSIT' && !sole && <DemoDepositDetails />}
         {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}
         <div className="actions" style={{ marginTop: 4 }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
