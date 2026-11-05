@@ -7,7 +7,7 @@ import * as schema from '../src/db/schema';
 import { instruments } from '../src/db/schema';
 import { defaultLotClass, defaultLotLabel } from '../src/trading/instrument-meta';
 
-interface SeedItem {
+export interface SeedItem {
   symbol: string;
   name: string;
   exchange: string;
@@ -24,7 +24,7 @@ interface SeedItem {
 
 const nearMonthExpiry = new Date(Date.now() + 25 * 86400000);
 
-const ITEMS: SeedItem[] = [
+export const ITEMS: SeedItem[] = [
   // OPTIONS (NSE NIFTY & BANKNIFTY Call and Put options)
   { symbol: 'NIFTY25000CE', name: 'NIFTY 50 25000 Call Option', exchange: 'NSE', segment: 'OPT', expiry: nearMonthExpiry, lotSize: 25, tickMinor: 5, refPriceMinor: 145_00n, lotClass: 'MINI', lotLabel: '25 units' },
   { symbol: 'NIFTY25000PE', name: 'NIFTY 50 25000 Put Option', exchange: 'NSE', segment: 'OPT', expiry: nearMonthExpiry, lotSize: 25, tickMinor: 5, refPriceMinor: 110_00n, lotClass: 'MINI', lotLabel: '25 units' },
@@ -77,23 +77,37 @@ const ITEMS: SeedItem[] = [
   { symbol: 'RUT', name: 'Russell 2000 Index (IWM ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 225_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10005457', dhanSegment: 'INX_EQ' },
 ];
 
-async function main() {
-  const pool = createPool(databaseUrl(), 2);
-  const db = drizzle(pool, { schema });
+export async function seedCategories(db: any): Promise<{ inserted: number; updated: number }> {
+  let inserted = 0;
+  let updated = 0;
 
-  try {
-    let inserted = 0;
-    let updated = 0;
+  for (const item of ITEMS) {
+    const existing = await db
+      .select()
+      .from(instruments)
+      .where(sql`${instruments.symbol} = ${item.symbol}`);
 
-    for (const item of ITEMS) {
-      const existing = await db
-        .select()
-        .from(instruments)
-        .where(sql`${instruments.symbol} = ${item.symbol}`);
-
-      if (existing.length === 0) {
-        await db.insert(instruments).values({
-          symbol: item.symbol,
+    if (existing.length === 0) {
+      await db.insert(instruments).values({
+        symbol: item.symbol,
+        name: item.name,
+        exchange: item.exchange,
+        segment: item.segment,
+        expiry: item.expiry,
+        lotSize: item.lotSize,
+        lotClass: item.lotClass ?? defaultLotClass(item.exchange, item.symbol),
+        lotLabel: item.lotLabel ?? defaultLotLabel(item.symbol),
+        tickMinor: item.tickMinor,
+        refPriceMinor: item.refPriceMinor,
+        active: true,
+        dhanSecurityId: item.dhanSecurityId,
+        dhanSegment: item.dhanSegment,
+      });
+      inserted++;
+    } else {
+      await db
+        .update(instruments)
+        .set({
           name: item.name,
           exchange: item.exchange,
           segment: item.segment,
@@ -106,38 +120,30 @@ async function main() {
           active: true,
           dhanSecurityId: item.dhanSecurityId,
           dhanSegment: item.dhanSegment,
-        });
-        inserted++;
-      } else {
-        await db
-          .update(instruments)
-          .set({
-            name: item.name,
-            exchange: item.exchange,
-            segment: item.segment,
-            expiry: item.expiry,
-            lotSize: item.lotSize,
-            lotClass: item.lotClass ?? defaultLotClass(item.exchange, item.symbol),
-            lotLabel: item.lotLabel ?? defaultLotLabel(item.symbol),
-            tickMinor: item.tickMinor,
-            refPriceMinor: item.refPriceMinor,
-            active: true,
-            dhanSecurityId: item.dhanSecurityId,
-            dhanSegment: item.dhanSegment,
-          })
-          .where(sql`${instruments.symbol} = ${item.symbol}`);
-        updated++;
-      }
+        })
+        .where(sql`${instruments.symbol} = ${item.symbol}`);
+      updated++;
     }
+  }
 
+  return { inserted, updated };
+}
+
+async function main() {
+  const pool = createPool(databaseUrl(), 2);
+  const db = drizzle(pool, { schema });
+
+  try {
+    const { inserted, updated } = await seedCategories(db);
     console.log(`Successfully seeded categories! Inserted: ${inserted}, Updated: ${updated}`);
   } finally {
     await pool.end();
   }
 }
 
-main().catch((err) => {
-  console.error('Fatal seed error:', err);
-  process.exit(1);
-});
-
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('Fatal seed error:', err);
+    process.exit(1);
+  });
+}

@@ -18,6 +18,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { createPool } from '../src/db/db';
 import * as schema from '../src/db/schema';
 import { instruments } from '../src/db/schema';
+import { seedCategories } from './seed-all-categories';
 
 const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 
@@ -249,6 +250,7 @@ async function main() {
       }
     }
 
+    await seedCategories(db);
     console.log(`Sync complete! Inserted: ${inserted}, Updated: ${updated}`);
   } finally {
     await pool.end();

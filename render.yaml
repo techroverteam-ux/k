@@ -46,7 +46,11 @@ services:
       - key: LIVE_TRADING_ENABLED
         value: "false"
       - key: MARKET_FEED
-        value: simulated
+        value: dhan
+      - key: DHAN_CLIENT_ID
+        sync: false
+      - key: DHAN_ACCESS_TOKEN
+        sync: false
       - key: MARKET_HOURS
         value: always_open # demo only; use "config" for real NSE session hours
       - key: LOG_FORMAT

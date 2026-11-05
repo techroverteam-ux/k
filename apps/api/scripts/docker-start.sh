@@ -11,6 +11,8 @@ fi
 if $TS scripts/instruments-empty.ts; then
   $TS scripts/sync-dhan-instruments.ts || echo "instruments: sync failed; the API starts anyway."
 fi
+# Seed/sync all categories (Forex, Crypto, US Stock, COMEX, US Index, Options): idempotent insert or update
+$TS scripts/seed-all-categories.ts || echo "seed-all-categories: failed; the API starts anyway."
 # Demo accounts only when asked for explicitly (SEED_DEMO_ACCOUNTS=true), never in production.
 if [ "$SEED_DEMO_ACCOUNTS" = "true" ] && [ -n "$SEED_PASSWORD" ] && [ "$NODE_ENV" != "production" ]; then
   $TS scripts/seed.ts

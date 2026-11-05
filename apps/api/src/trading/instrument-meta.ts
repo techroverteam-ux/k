@@ -34,7 +34,7 @@ export function categoryOf(exchange: string, segment: string, symbol?: string): 
   if (ex === 'NASDAQ' || ex === 'NYSE' || ex === 'US_STOCK' || seg === 'US_STOCK') return 'US_STOCK';
   if (ex === 'US_INDEX' || seg === 'US_INDEX') return 'US_INDEX';
   if (ex === 'CDS' || ex === 'FOREX' || seg === 'CUR' || seg === 'FX') return 'FOREX';
-  if (seg === 'OPT' || seg === 'OPTIONS' || seg === 'CE' || seg === 'PE' || sym.endsWith('CE') || sym.endsWith('PE')) return 'OPTIONS';
+  if (seg !== 'EQ' && (seg === 'OPT' || seg === 'OPTIONS' || seg === 'CE' || seg === 'PE' || /\d+(CE|PE)$/i.test(sym))) return 'OPTIONS';
   return 'FUTURES';
 }
 

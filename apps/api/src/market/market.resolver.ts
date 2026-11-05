@@ -121,8 +121,8 @@ export class MarketResolver {
       : category === 'US_STOCK' ? sql`(${instruments.exchange} IN ('NASDAQ', 'NYSE', 'US_STOCK') OR ${instruments.segment} = 'US_STOCK')`
       : category === 'US_INDEX' ? sql`(${instruments.exchange} = 'US_INDEX' OR ${instruments.segment} = 'US_INDEX')`
       : category === 'FOREX' ? sql`(${instruments.exchange} IN ('CDS', 'FOREX') OR ${instruments.segment} IN ('CUR', 'FX'))`
-      : category === 'OPTIONS' ? sql`(${instruments.segment} IN ('OPT', 'OPTIONS', 'CE', 'PE') OR ${instruments.symbol} ILIKE '%CE' OR ${instruments.symbol} ILIKE '%PE')`
-      : category === 'FUTURES' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('OPT', 'OPTIONS', 'CE', 'PE', 'CUR') AND ${instruments.symbol} NOT ILIKE '%CE' AND ${instruments.symbol} NOT ILIKE '%PE'`)
+      : category === 'OPTIONS' ? sql`(${instruments.segment} IN ('OPT', 'OPTIONS', 'CE', 'PE') OR (${instruments.segment} != 'EQ' AND (${instruments.symbol} ILIKE '%CE' OR ${instruments.symbol} ILIKE '%PE') AND ${instruments.symbol} ~* '[0-9]+(CE|PE)$'))`
+      : category === 'FUTURES' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('OPT', 'OPTIONS', 'CE', 'PE', 'CUR') AND (${instruments.segment} = 'EQ' OR (${instruments.symbol} NOT ILIKE '%CE' AND ${instruments.symbol} NOT ILIKE '%PE') OR ${instruments.symbol} !~* '[0-9]+(CE|PE)$')`)
       : category ? sql`false` : undefined;
     const cls = lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined;
     // Only contracts that can still be traded: no expiry (stocks, indices) or expiring today or later (IST).
