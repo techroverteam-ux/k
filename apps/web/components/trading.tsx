@@ -120,6 +120,29 @@ export function useLiveQuotes(ids: string[]) {
 }
 
 /** Briefly tints a row when its price ticks up or down. */
+/** Last update time of a quote, e.g. 18:54:12 (IST). */
+const quoteTime = (ts?: string) => (ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }) : '—');
+const expiryText = (d?: string) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
+
+/** Bid (red) and ask (green) boxes that blink green when the price rises and red when it falls; day low and high below. */
+function BidAskBoxes({ href, q, label }: { href: string; q?: Quote; label: string }) {
+  const tb = useTick(q?.bid);
+  const ta = useTick(q?.ask);
+  return (
+    <div className="ba-boxes">
+      <span className="ba-box b"><Link className={tb} href={`${href}?side=SELL`} aria-label={`Sell ${label} at ${q?.bid ?? ''}`}>{inr(q?.bid)}</Link><small>L {inr(q?.low)}</small></span>
+      <span className="ba-box a"><Link className={ta} href={`${href}?side=BUY`} aria-label={`Buy ${label} at ${q?.ask ?? ''}`}>{inr(q?.ask)}</Link><small>H {inr(q?.high)}</small></span>
+    </div>
+  );
+}
+
+/** Change % only, coloured up/down. */
+function ChgPct({ q }: { q?: Quote }) {
+  if (!q?.changePct) return <span className="t3">—</span>;
+  const t = tone(q.change);
+  return <span className={`chg sm ${t}`}>{inr(q.changePct, { sign: true })}%</span>;
+}
+
 function useTick(v?: string) {
   const prev = useRef(v);
   const [cls, setCls] = useState('');
@@ -477,9 +500,11 @@ export function Watchlist({ compact }: { compact?: boolean }) {
                 <thead>
                   <tr>
                     <th>Instrument ({totalDisplayed})</th>
-                    <th className="r">Price</th>
-                    <th className="r hide-sm">Day range</th>
-                    <th className="r">Sell · Buy</th>
+                    <th className="r">LTP</th>
+                    <th className="r">Chg %</th>
+                    <th className="hide-sm">Expiry</th>
+                    <th className="r hide-sm">Time</th>
+                    <th className="r">Bid · Ask <span className="t3 xs">(Low · High)</span></th>
                     <th className="r">Watchlist</th>
                   </tr>
                 </thead>
@@ -487,7 +512,7 @@ export function Watchlist({ compact }: { compact?: boolean }) {
                   {displayedGroups.map((g) => (
                     <Fragment key={g.category}>
                       <tr className="cat-group-row">
-                        <th colSpan={5}>
+                        <th colSpan={7}>
                           <div className="cat-group-head">
                             <span>{g.label}</span>
                             <span className="badge">{g.items.length}</span>
@@ -552,9 +577,11 @@ export function Watchlist({ compact }: { compact?: boolean }) {
               <thead>
                 <tr>
                   <th>Instrument ({totalDisplayed})</th>
-                  <th className="r">Price</th>
-                  <th className="r hide-sm">Day range</th>
-                  <th className="r">Sell · Buy</th>
+                  <th className="r">LTP</th>
+                  <th className="r">Chg %</th>
+                  <th className="hide-sm">Expiry</th>
+                  <th className="r hide-sm">Time</th>
+                  <th className="r">Bid · Ask <span className="t3 xs">(Low · High)</span></th>
                   <th className="r"><span className="sr-only">Remove</span></th>
                 </tr>
               </thead>
@@ -562,7 +589,7 @@ export function Watchlist({ compact }: { compact?: boolean }) {
                 {displayedGroups.map((g) => (
                   <Fragment key={g.category}>
                     <tr className="cat-group-row">
-                      <th colSpan={5}>
+                      <th colSpan={7}>
                         <div className="cat-group-head">
                           <span>{g.label}</span>
                           <span className="badge">{g.items.length}</span>
@@ -610,15 +637,14 @@ function CompactRow({
   return (
     <div className={`list-row ${tick}`} style={{ position: 'relative' }}>
       {withBidAsk ? (
-        <Link href={href} className="grow" style={{ minWidth: 0 }}>
-          <div>
-            <span className="w6">{name}</span>{' '}
-            <span className="t3 xs">{shortSymbol(e.instrument.symbol)} · {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange}</span>
-          </div>
+        <Link href={href} className="grow wl-left" style={{ minWidth: 0 }}>
+          <div className="one-line w6">{name}</div>
+          <div className="one-line t3 xs">{shortSymbol(e.instrument.symbol)} · {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange}</div>
           <div className="row" style={{ gap: 6 }}>
             <span className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</span>
-            <Change value={q?.change} pct={q?.changePct} size="sm" />
+            <ChgPct q={q} />
           </div>
+          <div className="one-line t3 xs">{e.instrument.expiry ? `${new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · ` : ''}{quoteTime(q?.ts)}</div>
         </Link>
       ) : (
         <Link href={href} className="grow" style={{ minWidth: 0 }}>
@@ -633,14 +659,11 @@ function CompactRow({
         </div>
       )}
       {withBidAsk && (
-        <div className="ba-boxes">
-          <span className="ba-box b"><Link href={`${href}?side=SELL`} aria-label={`Sell at ${q?.bid}`}>{inr(q?.bid)}</Link><small>L {inr(q?.low)}</small></span>
-          <span className="ba-box a"><Link href={`${href}?side=BUY`} aria-label={`Buy at ${q?.ask}`}>{inr(q?.ask)}</Link><small>H {inr(q?.high)}</small></span>
-        </div>
+        <BidAskBoxes href={href} q={q} label={name} />
       )}
       {!inList && onToggle && (
-        <button className="btn btn-sm" disabled={isBusy} onClick={onToggle} aria-label={`Add ${name}`}>
-          <Icon name="plus" size={16} />Add
+        <button className="icon-btn wl-add" disabled={isBusy} onClick={onToggle} aria-label={`Add ${name} to watchlist`} title="Add to watchlist">
+          <Icon name="plus" size={18} />
         </button>
       )}
     </div>
@@ -680,24 +703,15 @@ function FullRow({
               <span style={{ fontWeight: 500, color: 'var(--text-2)' }}>{shortSymbol(e.instrument.symbol)}</span>
               {' · '}
               {e.instrument.category === 'FOREX' ? 'Forex' : e.instrument.exchange} · {e.instrument.segment}
-              {e.instrument.expiry ? ` · ${new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}
             </span>
           </span>
         </Link>
       </td>
-      <td className="r">
-        <div className="quote-cell">
-          <span className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</span>
-          <Change value={q?.change} pct={q?.changePct} size="sm" />
-        </div>
-      </td>
-      <td className="r num t2 sm hide-sm">{inr(q?.low)} – {inr(q?.high)}</td>
-      <td className="r">
-        <span className="bidask">
-          <Link className="b" href={`${href}?side=SELL`} aria-label={`Sell ${e.instrument.symbol} at ${q?.bid}`}>{inr(q?.bid)}</Link>
-          <Link className="a" href={`${href}?side=BUY`} aria-label={`Buy ${e.instrument.symbol} at ${q?.ask}`}>{inr(q?.ask)}</Link>
-        </span>
-      </td>
+      <td className="r"><span className="num w6">{curSign(e.instrument)}{inr(q?.ltp)}</span></td>
+      <td className="r"><ChgPct q={q} /></td>
+      <td className="t2 sm hide-sm" style={{ whiteSpace: 'nowrap' }}>{expiryText(e.instrument.expiry)}</td>
+      <td className="r num t2 sm hide-sm">{quoteTime(q?.ts)}</td>
+      <td className="r"><BidAskBoxes href={href} q={q} label={e.instrument.symbol} /></td>
       <td className="r">
         {inList ? (
           <button className="icon-btn" aria-label={`Remove ${e.instrument.symbol}`} onClick={action} title="Remove from watchlist">

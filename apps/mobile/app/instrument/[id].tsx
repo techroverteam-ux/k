@@ -22,6 +22,7 @@ export default function StockScreen() {
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
   const [tab, setTab] = useState<'Chart' | 'Market Depth' | 'Market Details'>('Chart');
+  const [chartOn, setChartOn] = useState(false); // the chart loads only when the trader taps Show chart
   const [order, setOrder] = useState<Side | null>(s0 === 'BUY' || s0 === 'SELL' ? s0 : null);
   const i = inst.data?.instrument;
   const lo = Number(q?.low ?? 0), hi = Number(q?.high ?? 0), ltp = Number(q?.ltp ?? 0);
@@ -62,7 +63,8 @@ export default function StockScreen() {
         <T v="hero">₹{inr(q?.ltp)}</T>
         <Row gap={6}><Change value={q?.change} pct={q?.changePct} size="md" /><T v="xs">vs previous close</T></Row>
       </View>
-      {prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>}
+      <Button size="sm" icon="trend" kind={chartOn ? 'primary' : undefined} title={chartOn ? 'Hide chart' : 'Show chart'} onPress={() => setChartOn((c) => !c)} />
+      {chartOn ? (prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>) : null}
       {i && <Button size="sm" icon="activity" title="Automate this instrument" onPress={() => router.push(`/algo/new?instrument=${i.id}`)} />}
       {i && <Button size="sm" icon="external" title="Open in TradingView" onPress={() => void Linking.openURL(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`)} />}
       {i && <T v="xs">TradingView shows real market data, which differs from this simulated feed.</T>}

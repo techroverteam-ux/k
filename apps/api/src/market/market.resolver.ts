@@ -125,10 +125,12 @@ export class MarketResolver {
       : category === 'FUTURES' ? and(eq(instruments.exchange, 'NSE'), sql`${instruments.segment} NOT IN ('OPT', 'OPTIONS', 'CE', 'PE', 'CUR') AND ${instruments.symbol} NOT ILIKE '%CE' AND ${instruments.symbol} NOT ILIKE '%PE'`)
       : category ? sql`false` : undefined;
     const cls = lotClass === 'MINI' || lotClass === 'MEGA' ? eq(instruments.lotClass, lotClass) : undefined;
+    // Only contracts that can still be traded: no expiry (stocks, indices) or expiring today or later (IST).
+    const notExpired = sql`(${instruments.expiry} IS NULL OR (${instruments.expiry} AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)`;
     const rows = await this.dbs.db
       .select()
       .from(instruments)
-      .where(and(eq(instruments.active, true), query.trim() ? or(ilike(instruments.symbol, s), ilike(instruments.name, s)) : undefined, cat, cls))
+      .where(and(eq(instruments.active, true), notExpired, query.trim() ? or(ilike(instruments.symbol, s), ilike(instruments.name, s)) : undefined, cat, cls))
       .orderBy(asc(sql`coalesce(${instruments.expiry}, '9999-12-31')`), asc(instruments.symbol))
       .limit(clampLimit(limit, 50, 500));
     return rows.map((r) => toInstrument(r, this.market.quote(r.id)));

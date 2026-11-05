@@ -856,3 +856,16 @@ tr.clickable { cursor: pointer; }
   color: var(--text);
   text-align: right;
 }
+
+/* Bid / ask boxes blink with the market: solid green when the price rises, solid red when it falls */
+.ba-box a.tick-up { animation: ba-up 0.7s ease-out; }
+.ba-box a.tick-down { animation: ba-down 0.7s ease-out; }
+@keyframes ba-up { from { background: var(--pos); color: #fff; } }
+@keyframes ba-down { from { background: var(--neg); color: #fff; } }
+
+/* Instrument rows: single-line text, compact add button, chips that scroll instead of wrapping */
+.one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-cats .chip { white-space: nowrap; flex: none; }
+.wl-add { border: 1px solid var(--line-2); border-radius: var(--r-md); flex: none; }
+.ba-boxes { gap: 8px; }
+@media (max-width: 720px) { .ba-boxes { gap: 6px; } .ba-box a { min-width: 64px; padding: 4px 5px; font-size: var(--fs-xs); } .ba-box small { font-size: 10px; } .wl-left .num { font-size: var(--fs-sm); } }

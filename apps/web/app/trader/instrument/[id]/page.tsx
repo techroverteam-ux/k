@@ -24,6 +24,8 @@ function StockPage() {
   // Focus mode hides the order panel so the chart can use the full width. Remembered in this browser.
   const [focus, setFocusState] = useState(false);
   const [tab, setTab] = useState<'chart' | 'depth' | 'details'>('chart');
+  // The candle chart loads only when the trader asks for it (Show chart), not on every page open.
+  const [chartOn, setChartOn] = useState(false);
   useEffect(() => { try { setFocusState(localStorage.getItem('k.chartFocus') === '1'); } catch { /* storage unavailable */ } }, []);
   const setFocus = (v: boolean) => { setFocusState(v); try { localStorage.setItem('k.chartFocus', v ? '1' : '0'); } catch { /* ignore */ } };
   const openOrder = (s: Side) => { setFocus(false); setTimeout(() => { window.dispatchEvent(new CustomEvent('td:side', { detail: s })); document.getElementById('order')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 0); };
@@ -93,7 +95,8 @@ function StockPage() {
 
           {tab === 'chart' && (
             <div className="stack" style={{ gap: 16 }}>
-              {prefs.charts ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : <p className="t3">Charts are turned off in Profile → Preferences.</p>}
+              <button className={`btn btn-sm${chartOn ? ' btn-primary' : ''}`} style={{ alignSelf: 'flex-start' }} aria-pressed={chartOn} onClick={() => setChartOn(!chartOn)}><Icon name="trend" size={16} />{chartOn ? 'Hide chart' : 'Show chart'}</button>
+              {chartOn && (prefs.charts ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : <p className="t3">Charts are turned off in Profile → Preferences.</p>)}
 
               {/* 4-Box OHLC Card (Screenshots 2 & 3) */}
               <div className="ohlc-grid">
