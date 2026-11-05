@@ -195,7 +195,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
       <View style={{ borderWidth: StyleSheet.hairlineWidth, borderColor: t.line2, borderRadius: 16, padding: S[4], gap: S[3] }}>
         <View style={{ gap: 2 }}>
           <T v="sm" c="text2">{title}</T>
-          <T style={{ fontSize: 24, fontWeight: '700' }} accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
+          <T style={{ fontSize: 20, fontWeight: '700' }} accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: S[3], rowGap: 2 }}>
             <T v="xs" c="text2">Open P&L <T v="xs" w="600" c={toneC(s?.unrealizedPnl)}>{inr(s?.unrealizedPnl, true)}</T></T>
             <T v="xs" c="text2">Booked <T v="xs" w="600" c={toneC(s?.realizedPnl)}>{inr(s?.realizedPnl, true)}</T></T>
@@ -224,7 +224,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
     <View style={{ gap: S[4] }}>
       <View style={{ gap: 2 }}>
         <T c="text2">{title}</T>
-        <T v="hero" accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
+        <T style={{ fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] }} accessibilityRole="text">{priv(`₹${inr(s?.available)}`, 8)}</T>
         <Row gap={6}><T v="sm" c="text2">Open P&L</T><T v="sm" w="600" c={toneOfValue(s?.unrealizedPnl) === 'flat' ? 'text2' : (toneOfValue(s?.unrealizedPnl) as 'pos')}>{inr(s?.unrealizedPnl, true)}</T><T v="sm" c="text3">· Margin {priv(`₹${inr(s?.marginUsed)}`)}</T></Row>
         {actions && <Row gap={6}><T v="xs" c="text2">Deposits</T><T v="xs" c="pos" w="600">{priv(`₹${inr(s?.deposits)}`)}</T><T v="xs" c="text2">· Withdrawals</T><T v="xs" c="neg" w="600">{priv(`₹${inr(s?.withdrawals)}`)}</T></Row>}
       </View>

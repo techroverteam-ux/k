@@ -6,8 +6,8 @@ import { tradeFeedback, usePrefs, usePrivate } from '@/prefs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gql, newKey } from '@/api';
 import { useLiveQuotes, useSummary } from '@/screens';
-import { inr, R, S, shortSymbol, useTheme } from '@/theme';
-import { Badge, Button, Change, Chips, Divider, Field, Lines, Mark, Notice, Row, Screen, Section, Sheet, Spread, T, tap, toast, useQuery } from '@/ui';
+import { inr, ohlcTone, R, S, shortSymbol, useTheme } from '@/theme';
+import { Badge, Button, Change, Chips, Divider, Field, Lines, LotStepper, Mark, Notice, Row, Screen, Section, Sheet, Spread, T, toast, useQuery } from '@/ui';
 
 type Side = 'BUY' | 'SELL';
 interface Preview { price: string; value: string; intradayMargin: string; carryForwardMargin: string; brokerage: string }
@@ -77,7 +77,7 @@ export default function StockScreen() {
             {[['Open', openVal], ['High', highVal], ['Low', lowVal], ['Close', closeVal]].map(([label, val]) => (
               <View key={label} style={{ flex: 1, backgroundColor: t.bg2, borderRadius: R.md, padding: S[2], alignItems: 'center' }}>
                 <T v="xs" c="text2" style={{ textTransform: 'uppercase' }}>{label}</T>
-                <T v="sm" w="600">{inr(val)}</T>
+                <T v="sm" w="600" c={ohlcTone(String(label), val, q?.ltp, closeVal)}>{inr(val)}</T>
               </View>
             ))}
           </View>
@@ -135,7 +135,7 @@ export default function StockScreen() {
             {[['Open', openVal], ['High', highVal], ['Low', lowVal], ['Close', closeVal]].map(([label, val]) => (
               <View key={label} style={{ flex: 1, backgroundColor: t.bg2, borderRadius: R.md, padding: S[2], alignItems: 'center' }}>
                 <T v="xs" c="text2" style={{ textTransform: 'uppercase' }}>{label}</T>
-                <T v="sm" w="600">{inr(val)}</T>
+                <T v="sm" w="600" c={ohlcTone(String(label), val, q?.ltp, closeVal)}>{inr(val)}</T>
               </View>
             ))}
           </View>
@@ -259,11 +259,8 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
           <Chips value={type} onChange={(k) => { setType(k); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }, { k: 'TAKE_PROFIT', label: 'TP' }]} />
           <Row style={{ alignItems: 'flex-start' }}>
             <View style={{ flex: 1.2, gap: 6 }}>
-              <Row gap={4} style={{ alignItems: 'flex-end' }}>
-                <Stepper label="Decrease quantity" sign="−" onPress={() => setQty(String(Math.max(1, (n || 1) - 1)))} />
-                <View style={{ flex: 1 }}><Field label="Quantity (lots)" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} /></View>
-                <Stepper label="Increase quantity" sign="+" onPress={() => setQty(String((n || 0) + 1))} />
-              </Row>
+              <T v="sm" c="text2" w="500">Quantity (lots)</T>
+              <LotStepper value={qty} onChange={setQty} />
               {qtyErr ? <T v="sm" c="neg">{qtyErr}</T> : null}
               {r ? <T v="xs" c="text3">{`${i.lotLabel ? `1 lot = ${i.lotLabel}. ` : ''}${i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega' : 'Mini') + ' lot: ' : ''}brokerage ₹${inr((i.lotClass === 'MEGA' ? r.brokeragePerMegaLot : r.brokeragePerLot) ?? '0')} per lot to open and again to cut.`}</T> : null}
             </View>
@@ -314,12 +311,3 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
   );
 }
 
-function Stepper({ label, sign, onPress }: { label: string; sign: string; onPress: () => void }) {
-  const t = useTheme();
-  return (
-    <Pressable onPress={() => { tap('select'); onPress(); }} accessibilityRole="button" accessibilityLabel={label} hitSlop={4}
-      style={({ pressed }) => ({ width: 40, height: 48, borderRadius: R.md, borderWidth: 1, borderColor: t.line2, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? t.bg3 : t.bg })}>
-      <T v="h3" c="text2">{sign}</T>
-    </Pressable>
-  );
-}

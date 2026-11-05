@@ -7,7 +7,7 @@ import { Icon } from '@/components/icons';
 import { QUOTE_FIELDS, useLiveQuotes, useSummary, type Instrument } from '@/components/trading';
 import { Change, Chips, Confirm, ErrorState, Mark, Metrics, SkeletonRows, useToast } from '@/components/ui';
 import { gql, newKey, pollingPaused } from '@/lib/api';
-import { fullName, inr, shortSymbol, curSign } from '@/lib/format';
+import { fullName, inr, ohlcTone, shortSymbol, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Private, playTone, usePrefs } from '@/lib/prefs';
 
@@ -100,10 +100,10 @@ function StockPage() {
 
               {/* 4-Box OHLC Card (Screenshots 2 & 3) */}
               <div className="ohlc-grid">
-                <div className="ohlc-box"><div className="label">Open</div><div className="val">{inr(openVal)}</div></div>
-                <div className="ohlc-box"><div className="label">High</div><div className="val">{inr(highVal)}</div></div>
-                <div className="ohlc-box"><div className="label">Low</div><div className="val">{inr(lowVal)}</div></div>
-                <div className="ohlc-box"><div className="label">Close</div><div className="val">{inr(closeVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Open</div><div className={`val ${ohlcTone('Open', openVal, q?.ltp, closeVal) ?? ''}`}>{inr(openVal)}</div></div>
+                <div className="ohlc-box"><div className="label">High</div><div className={`val ${ohlcTone('High', highVal, q?.ltp, closeVal) ?? ''}`}>{inr(highVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Low</div><div className={`val ${ohlcTone('Low', lowVal, q?.ltp, closeVal) ?? ''}`}>{inr(lowVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Close</div><div className={`val ${ohlcTone('Close', closeVal, q?.ltp, closeVal) ?? ''}`}>{inr(closeVal)}</div></div>
               </div>
 
               <div>
@@ -158,10 +158,10 @@ function StockPage() {
 
               {/* 4-Box OHLC Card (Screenshot 2) */}
               <div className="ohlc-grid">
-                <div className="ohlc-box"><div className="label">Open</div><div className="val">{inr(openVal)}</div></div>
-                <div className="ohlc-box"><div className="label">High</div><div className="val">{inr(highVal)}</div></div>
-                <div className="ohlc-box"><div className="label">Low</div><div className="val">{inr(lowVal)}</div></div>
-                <div className="ohlc-box"><div className="label">Close</div><div className="val">{inr(closeVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Open</div><div className={`val ${ohlcTone('Open', openVal, q?.ltp, closeVal) ?? ''}`}>{inr(openVal)}</div></div>
+                <div className="ohlc-box"><div className="label">High</div><div className={`val ${ohlcTone('High', highVal, q?.ltp, closeVal) ?? ''}`}>{inr(highVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Low</div><div className={`val ${ohlcTone('Low', lowVal, q?.ltp, closeVal) ?? ''}`}>{inr(lowVal)}</div></div>
+                <div className="ohlc-box"><div className="label">Close</div><div className={`val ${ohlcTone('Close', closeVal, q?.ltp, closeVal) ?? ''}`}>{inr(closeVal)}</div></div>
               </div>
 
               {/* Extended Market Stats Grid (Screenshot 2) */}
@@ -322,10 +322,10 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         <Chips label="Order type" value={type} onChange={(t) => { setType(t); setPrice(''); }} items={(['MARKET', 'LIMIT', 'STOP_LOSS', 'TAKE_PROFIT'] as OType[]).map((t) => ({ v: t, label: t === 'STOP_LOSS' ? 'SL' : t === 'TAKE_PROFIT' ? 'TP' : TYPE_LABEL[t], title: TYPE_LABEL[t] }))} />
         <div className="field">
           <label htmlFor="qty">Quantity (lots)</label>
-          <div className="row" style={{ flexWrap: 'nowrap', gap: 8 }}>
-            <button type="button" className="btn" aria-label="Decrease quantity" onClick={() => setQty(String(Math.max(1, (n || 1) - 1)))}>−</button>
-            <input id="qty" className="input num" inputMode="numeric" style={{ textAlign: 'center' }} value={qty} aria-invalid={!!qtyErr} aria-describedby="qty-limits" onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} />
-            <button type="button" className="btn" aria-label="Increase quantity" onClick={() => setQty(String((n || 0) + 1))}>+</button>
+          <div className="lot-step">
+            <button type="button" aria-label="Decrease quantity" onClick={() => setQty(String(Math.max(1, (n || 1) - 1)))}>−</button>
+            <input id="qty" className="num" inputMode="numeric" value={qty} aria-invalid={!!qtyErr} aria-describedby="qty-limits" onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} />
+            <button type="button" aria-label="Increase quantity" onClick={() => setQty(String((n || 0) + 1))}>+</button>
           </div>
           {qtyErr && <span className="err">{qtyErr}</span>}
           {r && (

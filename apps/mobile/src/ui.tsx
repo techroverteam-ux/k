@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import * as Haptics from 'expo-haptics';
 import { useActive } from './active';
 import {
-  ActivityIndicator, Animated, Easing, FlatList, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput,
+  ActivityIndicator, Animated, Easing, FlatList, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput,
   View, type RefreshControlProps, type TextInputProps, type TextStyle, type ViewStyle,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -492,15 +492,27 @@ export function Sheet({ visible, title, sub, onClose, children, dismissable = tr
     },
     onPanResponderTerminate: () => Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start(),
   }), [dismissable, close, y]);
+  // Android draws the app edge to edge, so a modal is not resized when the keyboard opens: lift the sheet by the
+  // part of the keyboard the window did not already make room for. iOS is handled by KeyboardAvoidingView.
+  const [kb, setKb] = useState(0);
+  const boxH = useRef({ base: 0, now: 0 });
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKb(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKb(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const lift = kb ? Math.max(0, kb - Math.max(0, boxH.current.base - boxH.current.now)) : 0;
   if (!mounted) return null;
   return (
     <Modal visible transparent animationType="none" onRequestClose={close} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, justifyContent: 'flex-end' }}
+        onLayout={(e) => { const h = e.nativeEvent.layout.height; boxH.current.now = h; if (!kb || !boxH.current.base) boxH.current.base = Math.max(boxH.current.base, h); }}>
         <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: t.overlay, opacity: fade }]}>
           <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel="Close" accessibilityRole="button" />
         </Animated.View>
         <Animated.View onLayout={(e) => { height.current = e.nativeEvent.layout.height; }}
-          style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: S[5], paddingBottom: S[5] + insets.bottom, gap: S[4], maxHeight: '90%', transform: [{ translateY: y }] }}>
+          style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: S[5], paddingBottom: kb ? S[4] : S[5] + insets.bottom, gap: S[4], maxHeight: lift && boxH.current.now ? (boxH.current.now - lift) * 0.92 : '90%', marginBottom: lift, transform: [{ translateY: y }] }}>
           <View {...pan.panHandlers} style={{ paddingTop: S[3], gap: S[3] }}>
             <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: t.line2 }} />
             <Spread>
@@ -676,5 +688,26 @@ export function ToastHost() {
       <Icon name={msg.err ? 'alert' : 'check'} size={18} color={msg.err ? '#fff' : t.bg} />
       <Text style={{ color: msg.err ? '#fff' : t.bg, fontWeight: '500', flex: 1 }}>{msg.m}</Text>
     </Animated.View>
+  );
+}
+
+/** Lots input with − and + joined into one control, all three the same height. */
+export function LotStepper({ value, onChange, label = 'Lots', min = 1 }: { value: string; onChange: (v: string) => void; label?: string; min?: number }) {
+  const t = useTheme();
+  const n = Number(value) || 0;
+  const side = (sign: string, a11y: string, next: number) => (
+    <Pressable onPress={() => { tap('select'); onChange(String(next)); }} accessibilityRole="button" accessibilityLabel={a11y} hitSlop={4}
+      style={({ pressed }) => ({ width: 52, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? t.bg3 : t.bg2 })}>
+      <Text style={{ fontSize: 22, fontWeight: '600', color: t.text, lineHeight: 26 }}>{sign}</Text>
+    </Pressable>
+  );
+  return (
+    <View style={{ flexDirection: 'row', height: CTL.h, borderWidth: 1, borderColor: t.line2, borderRadius: R.md, overflow: 'hidden', backgroundColor: t.bg }}>
+      {side('\u2212', `Decrease ${label.toLowerCase()}`, Math.max(min, (n || min) - 1))}
+      <TextInput accessibilityLabel={label} keyboardType="number-pad" value={value} selectTextOnFocus
+        onChangeText={(v) => onChange(v.replace(/\D/g, ''))}
+        style={{ flex: 1, textAlign: 'center', fontSize: FS.lg, fontWeight: '600', color: t.text, paddingVertical: 0, borderLeftWidth: 1, borderRightWidth: 1, borderColor: t.line2 }} />
+      {side('+', `Increase ${label.toLowerCase()}`, n + 1)}
+    </View>
   );
 }

@@ -51,3 +51,9 @@ export const toneOf = toneColor;
 export const shortSymbol = (s: string) => s.replace(/\d{2}[A-Z]{3}FUT$/, '');
 export const when = (d: string) => new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 export const initials = (n: string) => n.split(/[\s._]+/).filter(Boolean).slice(0, 2).map((s) => s[0]!.toUpperCase()).join('');
+
+/** OHLC colours: High green, Low red, Open against the previous close (gap up / down), Close (the previous close) by today's move. */
+const num = (v: unknown) => (v == null || v === '' ? NaN : Number(String(v).replace(/,/g, '')));
+const dir = (a: unknown, b: unknown) => { const x = num(a), y = num(b); return Number.isNaN(x) || Number.isNaN(y) || x === y ? undefined : x > y ? 'pos' : 'neg'; };
+export const ohlcTone = (k: string, v: unknown, ltp: unknown, close: unknown): 'pos' | 'neg' | undefined =>
+  k === 'High' ? 'pos' : k === 'Low' ? 'neg' : k === 'Open' ? dir(v, close) : dir(ltp, close);

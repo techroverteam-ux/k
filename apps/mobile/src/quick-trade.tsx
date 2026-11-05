@@ -12,8 +12,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { gql, newKey } from './api';
 import { tradeFeedback } from './prefs';
 import { useLiveQuotes, type Quote } from './screens';
-import { inr, R, S, shortSymbol, toneOfValue, useTheme } from './theme';
-import { Badge, Button, Chips, Empty, ErrorState, Field, Flash, Notice, Row, SearchBox, Sheet, Skeleton, Spread, T, Tabs, tap, toast, useQuery, VList } from './ui';
+import { inr, ohlcTone, R, S, shortSymbol, toneOfValue, useTheme } from './theme';
+import { Badge, Button, Chips, Empty, ErrorState, Field, Flash, LotStepper, Notice, Row, SearchBox, Sheet, Skeleton, Spread, T, Tabs, tap, toast, useQuery, VList } from './ui';
 
 type Side = 'BUY' | 'SELL';
 type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS';
@@ -96,11 +96,7 @@ export function QuickTradeSheet({ instrumentId, initialSide, initialQty, onClose
       <Row style={{ alignItems: 'flex-start' }}>
         <View style={{ flex: 1, gap: 4 }}>
           <T v="sm" c="text2" w="500">Lots</T>
-          <Row gap={4} style={{ alignItems: 'center' }}>
-            <Button size="sm" title="−" onPress={() => setQty(String(Math.max(1, (n || 1) - 1)))} />
-            <View style={{ flex: 1 }}><Field label="" accessibilityLabel="Lots" keyboardType="number-pad" value={qty} onChangeText={(v) => setQty(v.replace(/\D/g, ''))} style={{ textAlign: 'center' }} /></View>
-            <Button size="sm" title="+" onPress={() => setQty(String((n || 0) + 1))} />
-          </Row>
+          <LotStepper value={qty} onChange={setQty} />
           {qtyErr ? <T v="xs" c="neg">{qtyErr}</T> : null}
         </View>
         {type !== 'MARKET' && (
@@ -126,7 +122,7 @@ export function QuickTradeSheet({ instrumentId, initialSide, initialQty, onClose
       <View style={{ flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.line, paddingVertical: S[2] }}>
         {([['Open', x?.open], ['High', q?.high], ['Low', q?.low], ['Close', x?.close]] as const).map(([k, v], idx) => (
           <View key={k} style={{ flex: 1, alignItems: 'center', borderLeftWidth: idx ? StyleSheet.hairlineWidth : 0, borderColor: t.line2 }}>
-            <T v="sm" c="text2">{k}</T><T v="num">{inr(v)}</T>
+            <T v="sm" c="text2">{k}</T><T v="num" w="600" c={ohlcTone(k, v, q?.ltp, x?.close)}>{inr(v)}</T>
           </View>
         ))}
       </View>

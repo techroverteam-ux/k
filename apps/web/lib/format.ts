@@ -121,3 +121,9 @@ export function curSign(inst?: { exchange?: string; category?: string } | null):
   }
   return '₹';
 }
+
+/** OHLC colours: High green, Low red, Open against the previous close (gap up / down), Close (the previous close) by today's move. */
+const num = (v: unknown) => (v == null || v === '' ? NaN : Number(String(v).replace(/,/g, '')));
+const dir = (a: unknown, b: unknown) => { const x = num(a), y = num(b); return Number.isNaN(x) || Number.isNaN(y) || x === y ? undefined : x > y ? 'pos' : 'neg'; };
+export const ohlcTone = (k: string, v: unknown, ltp: unknown, close: unknown): 'pos' | 'neg' | undefined =>
+  k === 'High' ? 'pos' : k === 'Low' ? 'neg' : k === 'Open' ? dir(v, close) : dir(ltp, close);

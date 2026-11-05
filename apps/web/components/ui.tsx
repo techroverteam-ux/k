@@ -54,7 +54,19 @@ export function Dialog({ title, sub, children, onClose }: { title: string; sub?:
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keydown', onKey); prev?.focus(); };
+    // Phones: size the overlay to the part of the screen the keyboard leaves visible, so the dialog sits above it.
+    const vv = window.visualViewport;
+    const fit = () => {
+      const o = ref.current?.parentElement;
+      if (!o || !vv) return;
+      o.style.setProperty('--vv-h', `${vv.height}px`);
+      o.style.setProperty('--vv-top', `${vv.offsetTop}px`);
+      const a = document.activeElement as HTMLElement | null;
+      if (a && ref.current?.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) a.scrollIntoView({ block: 'nearest' });
+    };
+    fit();
+    vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit);
+    return () => { window.removeEventListener('keydown', onKey); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); prev?.focus(); };
   }, []);
   // Rendered at the end of <body>, so no sticky panel, chart or other stacking context can cover it.
   const node = (
