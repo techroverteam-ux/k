@@ -1,7 +1,7 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { CandleChart } from '@/candle-chart';
-import { Linking, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { tradeFeedback, usePrefs, usePrivate } from '@/prefs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gql, newKey } from '@/api';
@@ -17,33 +17,33 @@ interface I { id: string; symbol: string; name: string; exchange: string; segmen
 export default function StockScreen() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { id, side: s0, qty: q0 } = useLocalSearchParams<{ id: string; side?: string; qty?: string }>();
+  const { id, side: s0, qty: q0, view } = useLocalSearchParams<{ id: string; side?: string; qty?: string; view?: string }>();
   const inst = useQuery<{ instrument: I }>(`query($id:ID!){ instrument(id:$id){ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category } }`, { id });
   const q = useLiveQuotes([id])[id];
   const { prefs } = usePrefs();
-  const [tab, setTab] = useState<'Chart' | 'Market Depth' | 'Market Details'>('Chart');
-  const [chartOn, setChartOn] = useState(false); // the chart loads only when the trader taps Show chart
+  const [tab, setTab] = useState<'Chart' | 'Market Depth' | 'Market Details'>(view === 'chart' ? 'Chart' : view === 'details' ? 'Market Details' : 'Market Depth'); // the chart loads only when the Chart tab is tapped
   const [order, setOrder] = useState<Side | null>(s0 === 'BUY' || s0 === 'SELL' ? s0 : null);
   const i = inst.data?.instrument;
   const lo = Number(q?.low ?? 0), hi = Number(q?.high ?? 0), ltp = Number(q?.ltp ?? 0);
   const pos = hi > lo ? Math.min(100, Math.max(0, ((ltp - lo) / (hi - lo)) * 100)) : 50;
 
-  const defaultDepth = [
-    { bidQty: 17, bidPrice: String(Number(q?.bid ?? 0) || 139200), askPrice: String(Number(q?.ask ?? 0) || 139239), askQty: 2 },
-    { bidQty: 1, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 20).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 1).toFixed(2)), askQty: 1 },
-    { bidQty: 2, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 42).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 2).toFixed(2)), askQty: 1 },
-    { bidQty: 2, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 44).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 6).toFixed(2)), askQty: 1 },
-    { bidQty: 1, bidPrice: String(((Number(q?.bid ?? 0) || 139200) - 59).toFixed(2)), askPrice: String(((Number(q?.ask ?? 0) || 139239) + 7).toFixed(2)), askQty: 1 },
-  ];
-  const depthLevels = (q as any)?.depth?.levels?.length ? (q as any).depth.levels : defaultDepth;
-  const totalBidQty = (q as any)?.depth?.totalBidQty ?? depthLevels.reduce((acc: number, l: any) => acc + l.bidQty, 0);
-  const totalAskQty = (q as any)?.depth?.totalAskQty ?? depthLevels.reduce((acc: number, l: any) => acc + l.askQty, 0);
-
-  const openVal = (q as any)?.open ?? (q as any)?.close ?? q?.ltp;
-  const closeVal = (q as any)?.close ?? q?.ltp;
-  const highVal = q?.high ?? q?.ltp;
-  const lowVal = q?.low ?? q?.ltp;
-  const tradeMarginVal = Math.max(10000, Math.round((Number(q?.ltp ?? 0) * (i?.lotSize ?? 1)) * 0.08));
+  // Only real data: when the feed has no order book / volume / circuits for this instrument, show "—".
+  const qx = q as (typeof q & { depth?: { levels: { bidQty: number; bidPrice: string; askPrice: string; askQty: number }[]; totalBidQty?: number; totalAskQty?: number }; open?: string; close?: string; volume?: string; avgPrice?: string; lowerCircuit?: string; upperCircuit?: string }) | undefined;
+  const extra = useQuery<{ quotes: { open?: string; close?: string; volume?: string; avgPrice?: string; lowerCircuit?: string; upperCircuit?: string; depth?: { levels: { bidQty: number; bidPrice: string; askPrice: string; askQty: number }[]; totalBidQty?: number; totalAskQty?: number } }[] }>(
+    `query($i:[ID!]!){ quotes(instrumentIds:$i){ open close volume avgPrice lowerCircuit upperCircuit depth { levels { bidQty bidPrice askPrice askQty } totalBidQty totalAskQty } } }`, { i: [id] }, 3000);
+  const xq = { ...(qx ?? {}), ...(extra.data?.quotes[0] ?? {}) };
+  const depthLevels = xq.depth?.levels ?? [];
+  const totalBidQty = xq.depth?.totalBidQty ?? depthLevels.reduce((acc, l) => acc + l.bidQty, 0);
+  const totalAskQty = xq.depth?.totalAskQty ?? depthLevels.reduce((acc, l) => acc + l.askQty, 0);
+  const openVal = xq.open;
+  const closeVal = xq.close;
+  const highVal = q?.high;
+  const lowVal = q?.low;
+  const rules = useQuery<{ tradingRules: { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; sessions: { exchange: string; isOpen: boolean }[] } }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument sessions { exchange isOpen } } }`);
+  const rl = rules.data?.tradingRules;
+  const margin = useQuery<{ orderPreview: { intradayMargin: string } }>(`query($i:ID!){ orderPreview(instrumentId:$i, side:BUY, quantity:1){ intradayMargin } }`, { i: id }, 15000);
+  const allowTrade = i && rl ? (rl.sessions.find((x) => x.exchange === i.exchange)?.isOpen ?? true) : undefined;
+  const dash = (v?: string | number | null) => (v === undefined || v === null || v === '' ? '—' : String(v));
 
   const footer = (
     <View style={{ flexDirection: 'row', gap: S[3], paddingHorizontal: S[4], paddingTop: S[3], paddingBottom: S[3] + insets.bottom, borderTopWidth: 1, borderTopColor: t.line, backgroundColor: t.bg }}>
@@ -63,11 +63,6 @@ export default function StockScreen() {
         <T v="hero">₹{inr(q?.ltp)}</T>
         <Row gap={6}><Change value={q?.change} pct={q?.changePct} size="md" /><T v="xs">vs previous close</T></Row>
       </View>
-      <Button size="sm" icon="trend" kind={chartOn ? 'primary' : undefined} title={chartOn ? 'Hide chart' : 'Show chart'} onPress={() => setChartOn((c) => !c)} />
-      {chartOn ? (prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>) : null}
-      {i && <Button size="sm" icon="activity" title="Automate this instrument" onPress={() => router.push(`/algo/new?instrument=${i.id}`)} />}
-      {i && <Button size="sm" icon="external" title="Open in TradingView" onPress={() => void Linking.openURL(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`)} />}
-      {i && <T v="xs">TradingView shows real market data, which differs from this simulated feed.</T>}
       <Chips
         items={[{ k: 'Chart', label: 'Chart' }, { k: 'Market Depth', label: 'Market Depth' }, { k: 'Market Details', label: 'Market Details' }]}
         value={tab}
@@ -76,6 +71,7 @@ export default function StockScreen() {
 
       {tab === 'Chart' && (
         <View style={{ gap: S[4] }}>
+          {prefs.charts ? (i ? <CandleChart instrumentId={i.id} quote={q} tickSize={Number(i.tickSize)} /> : null) : <T v="xs">Charts are turned off in Profile → Preferences.</T>}
           {/* 4-Box OHLC Strip */}
           <View style={{ flexDirection: 'row', gap: S[2], marginVertical: S[2] }}>
             {[['Open', openVal], ['High', highVal], ['Low', lowVal], ['Close', closeVal]].map(([label, val]) => (
@@ -100,8 +96,8 @@ export default function StockScreen() {
               ['Best bid', `₹${inr(q?.bid)}`],
               ['Best ask', `₹${inr(q?.ask)}`],
               ['Spread', q ? `₹${(Number(q.ask) - Number(q.bid)).toFixed(2)}` : '—'],
-              ['Volume', (q as any)?.volume ?? '7,125'],
-              ['Avg. Price', `₹${inr((q as any)?.avgPrice ?? q?.ltp)}`],
+              ['Volume', dash(xq.volume)],
+              ['Avg. Price', xq.avgPrice ? `₹${inr(xq.avgPrice)}` : '—'],
             ]} />
           </Section>
         </View>
@@ -117,7 +113,8 @@ export default function StockScreen() {
               <T v="xs" c="text2" w="600" style={{ flex: 2, textAlign: 'left', paddingLeft: S[3] }}>Offer</T>
               <T v="xs" c="text2" w="600" style={{ flex: 1, textAlign: 'right' }}>Qty</T>
             </View>
-            {depthLevels.map((lvl: any, idx: number) => (
+            {!depthLevels.length ? <View style={{ padding: S[3] }}><T v="sm" c="text2">Market depth isn’t available for this instrument right now.</T></View> : null}
+            {depthLevels.map((lvl, idx) => (
               <View key={idx} style={{ flexDirection: 'row', paddingVertical: S[2], paddingHorizontal: S[3], borderBottomWidth: 1, borderBottomColor: t.line2 }}>
                 <T v="xs" style={{ flex: 1 }}>{lvl.bidQty}</T>
                 <T v="xs" c="pos" w="600" style={{ flex: 2, textAlign: 'right' }}>{inr(lvl.bidPrice)}</T>
@@ -147,11 +144,11 @@ export default function StockScreen() {
           <Section title="Market Statistics">
             <Lines lines={[
               ['LTP', `₹${inr(q?.ltp)}`],
-              ['Volume', (q as any)?.volume ?? '7,125'],
-              ['Avg. Price', `₹${inr((q as any)?.avgPrice ?? q?.ltp)}`],
-              ['Time', q?.ts ? new Date(q.ts).toLocaleTimeString('en-IN', { hour12: false }) : '20:46:12'],
-              ['Lower Circuit', `₹${inr((q as any)?.lowerCircuit ?? (Number(q?.ltp ?? 0) * 0.95).toFixed(2))}`],
-              ['Upper Circuit', `₹${inr((q as any)?.upperCircuit ?? (Number(q?.ltp ?? 0) * 1.05).toFixed(2))}`],
+              ['Volume', dash(xq.volume)],
+              ['Avg. Price', xq.avgPrice ? `₹${inr(xq.avgPrice)}` : '—'],
+              ['Time', q?.ts ? new Date(q.ts).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' }) : '—'],
+              ['Lower Circuit', xq.lowerCircuit ? `₹${inr(xq.lowerCircuit)}` : '—'],
+              ['Upper Circuit', xq.upperCircuit ? `₹${inr(xq.upperCircuit)}` : '—'],
             ]} />
           </Section>
 
@@ -163,16 +160,14 @@ export default function StockScreen() {
         <Section title="Market Details">
           <Lines lines={[
             ['Script', i?.name.replace(/ — .*/, '') ?? '—'],
-            ['Expiry', i?.expiry ? `${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} 12:00:00 AM` : '—'],
-            ['Lotsize', String(i?.lotSize ?? 10)],
-            ['Trade Margin', `Rs.${tradeMarginVal.toFixed(2)}`],
-            ['Allow Trade', 'Yes'],
-            ['Max Qty', '500'],
-            ['Breakup Qty', '200'],
-            ['Max Lot', '10'],
-            ['BreakUp Lot', '5'],
-            ['Min. Volume', '1.0'],
-            ['Volume Step', '1.0'],
+            ['Expiry', i?.expiry ? new Date(i.expiry).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '—'],
+            ['Lot size', i ? (i.lotLabel ?? String(i.lotSize)) : '—'],
+            ['Trade margin (1 lot)', margin.data ? `₹${inr(margin.data.orderPreview.intradayMargin)}` : '—'],
+            ['Allow trade', allowTrade === undefined ? '—' : allowTrade ? 'Yes' : 'No (market closed)'],
+            ['Max lots (open)', dash(rl?.maxQtyPerInstrument)],
+            ['Max lots per order', dash(rl?.maxQtyPerOrder)],
+            ['Min lots', dash(rl?.minQty)],
+            ['Lot step', '1'],
             ['Tick size', i ? `₹${i.tickSize}` : '—'],
             ['Exchange', `${i?.exchange} · ${i?.segment}`],
             ['Lot type', i?.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot'],

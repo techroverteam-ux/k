@@ -10,6 +10,7 @@ import { NUM_SCALE, usePrefs, usePrivate } from './prefs';
 import { useSplashActive } from './splash';
 import { CONSENT_FIELDS, deviceLabel, LOGIN_FIELDS, LOGIN_LABEL, stamp, type ConsentRecord, type LoginEvent } from './activity';
 import { useAuth } from './auth';
+import { QuickTradeSheet } from './quick-trade';
 import { Icon } from './icons';
 import { CTL, inr, initials, R, S, shortSymbol, toneOfValue, useTheme, when } from './theme';
 import {
@@ -21,15 +22,15 @@ export interface Quote { instrumentId: string; ltp: string; bid: string; ask: st
 export const QF = 'instrumentId ltp bid ask high low change changePct ts source';
 interface Inst { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string }
 const INST_FIELDS = 'id symbol name exchange segment expiry lotClass lotLabel category';
-type Cat = '' | 'MCX' | 'FOREX' | 'NSE' | 'INDICES';
+type Cat = '' | 'FUTURES' | 'MCX' | 'OPTIONS' | 'FOREX' | 'CRYPTO' | 'US_STOCK' | 'COMEX' | 'US_INDEX';
 type Lot = '' | 'MINI' | 'MEGA';
 
-/** Market tabs (All · MCX · Forex · NSE · Indices) and, for MCX, Mini / Mega. */
+/** Market tabs (same as the web portal) and, for MCX, Mini / Mega. */
 function MarketFilter({ cat, lot, onCat, onLot }: { cat: Cat; lot: Lot; onCat: (c: Cat) => void; onLot: (l: Lot) => void }) {
   return (
     <View style={{ gap: S[2] }}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: S[4] }}>
-        <Chips value={cat} onChange={(c) => { onCat(c); onLot(''); }} items={[{ k: '', label: 'All' }, { k: 'MCX', label: 'MCX' }, { k: 'FOREX', label: 'Forex' }, { k: 'NSE', label: 'NSE' }, { k: 'INDICES', label: 'Indices' }]} />
+        <Chips value={cat} onChange={(c) => { onCat(c); onLot(''); }} items={[{ k: '', label: 'All' }, { k: 'FUTURES', label: 'Futures' }, { k: 'MCX', label: 'MCX' }, { k: 'OPTIONS', label: 'Options' }, { k: 'FOREX', label: 'Forex' }, { k: 'CRYPTO', label: 'Crypto' }, { k: 'US_STOCK', label: 'US Stock' }, { k: 'COMEX', label: 'COMEX' }, { k: 'US_INDEX', label: 'US Index' }]} />
       </ScrollView>
       {cat === 'MCX' && <Chips value={lot} onChange={onLot} items={[{ k: '', label: 'All lots' }, { k: 'MINI', label: 'Mini' }, { k: 'MEGA', label: 'Mega' }]} />}
     </View>
@@ -37,8 +38,34 @@ function MarketFilter({ cat, lot, onCat, onLot }: { cat: Cat; lot: Lot; onCat: (
 }
 
 /** "Mini · 100 g" for MCX instruments; "Lot · 1,000 USD" for others with a lot label. */
+/** "24 Nov · 19:04:27": contract expiry and when the price last changed (IST). */
+const expiryTime = (expiry?: string, ts?: string) =>
+  `${expiry ? `${new Date(expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · ` : ''}${ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }) : '—'}`;
+
+/** Bid (red) and ask (green) boxes; each blinks green when its price rises and red when it falls. Low / High below. */
+function BidAsk({ id, qq, onPick }: { id: string; qq?: Quote; onPick?: (side: 'BUY' | 'SELL') => void }) {
+  const t = useTheme();
+  return (
+    <>
+      {(['SELL', 'BUY'] as const).map((sd) => {
+        const v = sd === 'BUY' ? qq?.ask : qq?.bid;
+        return (
+          <Pressable key={sd} onPress={() => { tap(); if (onPick) onPick(sd); else router.push(`/instrument/${id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${v ?? ''}`} style={{ alignItems: 'center', gap: 2 }}>
+            <Flash value={v} style={{ borderRadius: R.md, overflow: 'hidden' }}>
+              <View style={{ minWidth: 72, paddingVertical: 6, paddingHorizontal: 6, backgroundColor: sd === 'BUY' ? t.posSoft : t.negSoft, alignItems: 'center' }}>
+                <T v="num" c={sd === 'BUY' ? 'pos' : 'neg'}>{inr(v)}</T>
+              </View>
+            </Flash>
+            <T v="xs">{sd === 'BUY' ? `H ${inr(qq?.high)}` : `L ${inr(qq?.low)}`}</T>
+          </Pressable>
+        );
+      })}
+    </>
+  );
+}
+
 const lotText = (i: Inst) => (i.category === 'MCX' ? `${i.lotClass === 'MEGA' ? 'Mega' : 'Mini'}${i.lotLabel ? ` · ${i.lotLabel}` : ''}` : i.lotLabel ? `Lot · ${i.lotLabel}` : '');
-const marketText = (i: Inst) => (i.category === 'FOREX' ? 'Forex' : i.category === 'INDICES' ? 'Index' : i.exchange) + (i.expiry ? ` · ${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : '');
+const marketText = (i: Inst) => (i.category === 'FOREX' ? 'Forex' : i.exchange) + (i.expiry ? ` · ${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : '');
 
 /**
  * Live quotes by instrument id. Streams only while the screen is in use; on return it re-reads a snapshot.
@@ -69,12 +96,18 @@ export function SearchButton() {
 }
 
 const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void }) {
+  const t = useTheme();
+  const sym = shortSymbol(i.symbol);
   return (
-    <ListRow onPress={() => router.push(`/instrument/${i.id}`)} label={`${shortSymbol(i.symbol)}, open chart`} left={<Mark text={shortSymbol(i.symbol)} />}
-      title={<Row gap={6}><T w="600" numberOfLines={1}>{shortSymbol(i.symbol)}</T><Badge text={marketText(i)} />{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}</Row>}
-      sub={i.name}
-      right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></View>}
-      action={<IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />} />
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
+      <Pressable onPress={() => router.push(`/instrument/${i.id}`)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}, open chart`} style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Row gap={6}><T w="700" numberOfLines={1} style={{ flexShrink: 1 }}>{sym}</T>{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}</Row>
+        <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
+        <T v="xs" numberOfLines={1}>{expiryTime(i.expiry, qq?.ts)}</T>
+      </Pressable>
+      <BidAsk id={i.id} qq={qq} />
+      <IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />
+    </View>
   );
 });
 
@@ -282,26 +315,20 @@ export function Movers() {
 interface WEntry { id: string; instrument: Inst }
 
 /** One watchlist row. Memoised: re-renders only when its own quote changes. */
-const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove }: { e: WEntry; qq?: Quote; detailed: boolean; onRemove: (e: WEntry) => void }) {
+const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove, onOpen }: { e: WEntry; qq?: Quote; detailed: boolean; onRemove: (e: WEntry) => void; onOpen: (id: string, side?: 'BUY' | 'SELL') => void }) {
   const t = useTheme();
   const sym = shortSymbol(e.instrument.symbol);
   const row = detailed ? (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
-      <Pressable onPress={() => router.push(`/instrument/${e.instrument.id}`)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens the chart. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 2 }}>
+      <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Row gap={6}><T w="700" numberOfLines={1}>{sym}</T><Badge text={e.instrument.segment} /></Row>
         <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
+        <T v="xs" numberOfLines={1}>{expiryTime(e.instrument.expiry, qq?.ts)}</T>
       </Pressable>
-      {(['SELL', 'BUY'] as const).map((sd) => (
-        <Pressable key={sd} onPress={() => { tap(); router.push(`/instrument/${e.instrument.id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${sd === 'BUY' ? qq?.ask : qq?.bid}`} style={{ alignItems: 'center', gap: 2 }}>
-          <View style={{ minWidth: 76, paddingVertical: 6, paddingHorizontal: 8, borderRadius: R.md, backgroundColor: sd === 'BUY' ? t.posSoft : t.negSoft, alignItems: 'center' }}>
-            <T v="num" c={sd === 'BUY' ? 'pos' : 'neg'}>{inr(sd === 'BUY' ? qq?.ask : qq?.bid)}</T>
-          </View>
-          <T v="xs">{sd === 'BUY' ? `H: ${inr(qq?.high)}` : `L: ${inr(qq?.low)}`}</T>
-        </Pressable>
-      ))}
+      <BidAsk id={e.instrument.id} qq={qq} onPick={(sd) => onOpen(e.instrument.id, sd)} />
     </View>
   ) : (
-    <ListRow onPress={() => router.push(`/instrument/${e.instrument.id}`)} label={`${sym}, ₹${qq?.ltp ?? ''}`} title={sym} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
+    <ListRow onPress={() => onOpen(e.instrument.id)} label={`${sym}, ₹${qq?.ltp ?? ''}`} title={sym} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
       right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} /></View>} />
   );
   return (
@@ -336,6 +363,8 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
     catch (e) { toast((e as Error).message, true); }
   }, [refetch]);
   const [removing, setRemoving] = useState<WEntry | null>(null);
+  const [quick, setQuick] = useState<{ id: string; side?: 'BUY' | 'SELL' } | null>(null);
+  const onOpen = useCallback((id: string, side?: 'BUY' | 'SELL') => setQuick({ id, side }), []);
   const onRemove = useCallback((e: WEntry) => setRemoving(e), []);
   const remove = async (e: WEntry) => {
     setRemoving(null);
@@ -345,14 +374,17 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   const top = (
     <>
       {header}
-      <SearchBox value={query} onChangeText={setQuery} placeholder="Search and add, e.g. GOLDM, NIFTY" />
+      <View>
+        <SearchBox value={query} onChangeText={setQuery} placeholder="Search & Add" />
+        <View pointerEvents="none" style={{ position: 'absolute', right: S[4], top: 0, bottom: 0, justifyContent: 'center' }}><T v="sm" c="text2">{(data?.watchlist ?? []).length}/50</T></View>
+      </View>
       {!limit && <View style={{ marginTop: S[2] }}><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
     </>
   );
   const state = searching
     ? (hits === null ? <Skeleton rows={4} /> : <Empty icon="search" title={query.trim() ? `Nothing matches “${query.trim()}”` : 'Nothing listed here yet'}>{query.trim() ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>)
     : loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>;
-  const hint = !searching && entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a sell or buy price to trade. Swipe a row left to remove it.' : 'Swipe a row left to remove it.'}</T> : null;
+  const hint = !searching && entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a row or a price to trade. Swipe a row left to remove it.' : 'Tap a row to trade. Swipe a row left to remove it.'}</T> : null;
   const sheet = (
     <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
       <Row>
@@ -373,8 +405,9 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   return (
     <>
       <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
-        render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} />} />
+        render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} onOpen={onOpen} />} />
       {sheet}
+      {quick && <QuickTradeSheet instrumentId={quick.id} initialSide={quick.side} onClose={() => setQuick(null)} />}
     </>
   );
 }
@@ -434,12 +467,13 @@ export function OrdersTabs({ virtual, header, initial = 'open' }: { virtual?: bo
 
 interface Pos { id: string; instrumentId: string; netQty: number; avgPrice: string; realizedPnl: string; unrealizedPnl?: string; ltp?: string; instrument?: { symbol: string } }
 export function PositionsList({ userId, canTrade }: { userId?: string; canTrade?: boolean }) {
+  const [quick, setQuick] = useState<{ id: string; side: 'BUY' | 'SELL'; qty: number } | null>(null);
   const { data, error, loading, refetch } = useQuery<{ positions: Pos[] }>(`query($u:ID){ positions(userId:$u){ id instrumentId netQty avgPrice realizedPnl unrealizedPnl ltp instrument{ symbol } } }`, { u: userId }, 3000);
   if (loading && !data) return <Skeleton />;
   if (error && !data) return <ErrorState error={error} retry={refetch} />;
   if (!data!.positions.length) return <Empty icon="briefcase" title="No positions" action={canTrade ? <Button size="sm" kind="primary" title="Find instruments" onPress={() => router.push('/search')} /> : undefined}>A position opens when a buy or sell order executes.</Empty>;
   const total = data!.positions.reduce((a, p) => a + Number(p.unrealizedPnl ?? 0), 0).toFixed(2);
-  const exit = (p: Pos) => router.push(`/instrument/${p.instrumentId}?side=${p.netQty > 0 ? 'SELL' : 'BUY'}&qty=${Math.abs(p.netQty)}`);
+  const exit = (p: Pos) => setQuick({ id: p.instrumentId, side: p.netQty > 0 ? 'SELL' : 'BUY', qty: Math.abs(p.netQty) });
   return (
     <View>
       <Spread style={{ paddingVertical: S[3] }}><T c="text2">Total open P&L</T><T v="numLg" c={toneOfValue(total) === 'flat' ? 'text2' : (toneOfValue(total) as 'pos')}>{inr(total, true)}</T></Spread>
@@ -455,6 +489,7 @@ export function PositionsList({ userId, canTrade }: { userId?: string; canTrade?
             : <View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num" c={toneOfValue(p.unrealizedPnl) === 'flat' ? 'text2' : (toneOfValue(p.unrealizedPnl) as 'pos')}>{inr(p.unrealizedPnl, true)}</T><T v="xs">Booked {inr(p.realizedPnl, true)}</T></View>}
           action={canTrade && p.netQty !== 0 ? <Button size="sm" kind={p.netQty > 0 ? 'sell' : 'buy'} title="Exit" onPress={() => exit(p)} /> : undefined} />
       ))}
+      {quick && <QuickTradeSheet instrumentId={quick.id} initialSide={quick.side} initialQty={quick.qty} onClose={() => { setQuick(null); void refetch(); }} />}
     </View>
   );
 }

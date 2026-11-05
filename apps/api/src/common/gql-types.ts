@@ -145,6 +145,10 @@ export class Order {
   @Field({ nullable: true }) rejectReason?: string;
   @Field() createdAt: Date;
   @Field({ nullable: true }) filledAt?: Date;
+  @Field({ nullable: true, description: 'Profit or loss this fill booked when it closed (part of) a position ("Deals"), rupees; empty for opening fills.' }) realizedPnl?: string;
+  @Field({ nullable: true, description: 'Brokerage charged on this fill, rupees.' }) brokerage?: string;
+  @Field(() => Int, { nullable: true, description: 'For a closing fill: seconds the position was held, from when it was opened.' }) heldSeconds?: number;
+  @Field({ nullable: true }) username?: string;
 }
 
 @ObjectType()

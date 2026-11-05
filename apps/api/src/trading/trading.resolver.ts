@@ -1,4 +1,5 @@
 import { IsEnum, IsInt, IsOptional, IsUUID, Matches, Max, Min } from 'class-validator';
+import { sql } from 'drizzle-orm';
 import { RX } from '../common/validation';
 import { Args, Context, Field, ID, InputType, Int, Mutation, Parent, Query, ResolveField, Resolver, Subscription } from '@nestjs/graphql';
 import type { Actor, GqlContext } from '../common/context';
@@ -134,7 +135,54 @@ export class TradingResolver {
     @Args('before', { nullable: true }) before?: Date,
   ) {
     const rows = await this.orderSvc.listOrders(a, userId ?? a.userId, { status: status as any, limit: clampLimit(limit), before }, c.ip);
-    return rows.map(toOrder);
+    return this.withDeals(rows.map(toOrder), userId ?? a.userId);
+  }
+
+  /**
+   * Adds, per filled order: the P&L it booked ("Deals"), the brokerage charged, how long the position it closed was
+   * held, and the account's username. One query per kind of data for the whole page.
+   */
+  private async withDeals(out: Order[], userId: string): Promise<Order[]> {
+    const filled = out.filter((o) => o.status === 'FILLED');
+    if (!filled.length) return out;
+    const ids = sql.join(filled.map((o) => sql`${o.id}::uuid`), sql`, `);
+    const money = await this.dbs.db.execute<{ ref_id: string; kind: string; amt: string }>(sql`
+      SELECT j.ref_id, j.kind, COALESCE(SUM(p.amount_minor), 0)::text AS amt
+        FROM journal_entries j
+        JOIN ledger_postings p ON p.journal_id = j.id
+        JOIN ledger_accounts a ON a.id = p.account_id AND a.type = 'TRADER_CASH'
+       WHERE j.ref_type = 'order' AND j.ref_id IN (${ids}) AND j.kind IN ('TRADE_PNL', 'FEE')
+       GROUP BY j.ref_id, j.kind`);
+    const pnl = new Map<string, bigint>(), fee = new Map<string, bigint>();
+    for (const r of money.rows) (r.kind === 'FEE' ? fee : pnl).set(r.ref_id, BigInt(r.amt));
+    // Holding time: replay this account's fills per instrument and remember when each position was opened.
+    const inst = [...new Set(filled.map((o) => o.instrumentId))];
+    const hist = await this.dbs.db.execute<{ id: string; instrument_id: string; side: string; quantity: number; filled_at: Date }>(sql`
+      SELECT id, instrument_id, side, quantity, filled_at FROM orders
+       WHERE user_id = ${userId} AND status = 'FILLED' AND instrument_id IN (${sql.join(inst.map((i) => sql`${i}::uuid`), sql`, `)})
+       ORDER BY filled_at ASC, created_at ASC LIMIT 20000`);
+    const held = new Map<string, number>();
+    const net = new Map<string, number>(), openAt = new Map<string, number>();
+    for (const h of hist.rows) {
+      const at = new Date(h.filled_at).getTime();
+      const before = net.get(h.instrument_id) ?? 0;
+      const after = before + (h.side === 'BUY' ? h.quantity : -h.quantity);
+      if (before !== 0 && Math.sign(after) !== Math.sign(before) || (before !== 0 && Math.abs(after) < Math.abs(before))) {
+        const since = openAt.get(h.instrument_id);
+        if (since !== undefined) held.set(h.id, Math.max(0, Math.round((at - since) / 1000)));
+      }
+      if (after === 0) openAt.delete(h.instrument_id);
+      else if (before === 0 || Math.sign(after) !== Math.sign(before)) openAt.set(h.instrument_id, at);
+      net.set(h.instrument_id, after);
+    }
+    const [u] = await this.dbs.db.execute<{ username: string }>(sql`SELECT username FROM users WHERE id = ${userId}`).then((r) => r.rows);
+    return out.map((o) => (o.status !== 'FILLED' ? { ...o, username: u?.username } : {
+      ...o,
+      username: u?.username,
+      realizedPnl: pnl.has(o.id) ? formatMoney(pnl.get(o.id)!) : undefined,
+      brokerage: fee.has(o.id) ? formatMoney(-fee.get(o.id)!) : undefined,
+      heldSeconds: held.get(o.id),
+    }));
   }
 
   @Query(() => [Position])

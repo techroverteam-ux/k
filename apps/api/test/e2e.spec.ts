@@ -373,7 +373,12 @@ describe('paper trading', () => {
     const after = (await gql(SUMMARY, {}, { token: t.accessToken })).data.accountSummary;
     expect(Number(after.realizedPnl)).toBeGreaterThan(Number(before.realizedPnl));
     const pos = await gql(`{ positions { netQty realizedPnl instrument { symbol } } }`, {}, { token: t.accessToken });
-    expect(pos.data.positions[0].netQty).toBe(0);
+    expect(pos.data.positions[0].netQty).toBe(0);    // The closing order shows its deal P&L, brokerage, holding time and the account.
+    const ord = (await gql(`{ orders(status:[FILLED], limit:50){ id realizedPnl brokerage heldSeconds username } }`, {}, { token: t.accessToken })).data.orders.find((x: { id: string }) => x.id === r.data.placeOrder.id);
+    expect(Number(ord.realizedPnl)).toBeGreaterThan(0);
+    expect(ord.brokerage).toBe('2500.00');
+    expect(ord.heldSeconds).toBeGreaterThanOrEqual(0);
+    expect(ord.username).toBe('trader.two');
   });
 
   it('fills a resting limit order when the price crosses it', async () => {

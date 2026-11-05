@@ -1,11 +1,12 @@
-import { BellButton, OrdersTabs } from '@/screens';
+import { TradeBook } from '@/quick-trade';
+import { BellButton } from '@/screens';
 import { Screen } from '@/ui';
 
-/** Kept for deep links; the Portfolio tab is the primary entry point. */
+/** Trade book (Success / Pending / Rejected). Kept for deep links; Portfolio → Trades is the main entry. */
 export default function Orders() {
   return (
-    <Screen title="Orders" scroll={false} right={<BellButton />}>
-      <OrdersTabs virtual />
+    <Screen title="Trade" scroll={false} right={<BellButton />}>
+      <TradeBook />
     </Screen>
   );
 }
