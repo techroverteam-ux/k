@@ -34,7 +34,18 @@ export const CONFIG_REGISTRY = {
   },
   'trading.marketHours': {
     schema: z.record(z.string(), z.object({ open: hhmm, close: hhmm })),
-    default: { NSE: { open: '09:17', close: '15:30' }, MCX: { open: '09:02', close: '23:30' }, CDS: { open: '09:00', close: '17:00' }, INTL: { open: '03:32', close: '02:30' } },
+    default: {
+      NSE: { open: '09:15', close: '15:30' },
+      BSE: { open: '09:15', close: '15:30' },
+      MCX: { open: '09:00', close: '23:30' },
+      CDS: { open: '09:00', close: '17:00' },
+      NASDAQ: { open: '20:00', close: '02:30' },
+      NYSE: { open: '20:00', close: '02:30' },
+      US_INDEX: { open: '20:00', close: '02:30' },
+      COMEX: { open: '03:30', close: '02:30' },
+      FOREX: { open: '09:00', close: '17:00' },
+      CRYPTO: { open: '00:00', close: '23:59' },
+    },
     description: 'Market sessions per exchange (IST, HH:MM). A close earlier than the open means the session runs past midnight.',
   },
   'payments.minDepositMinor': { schema: minor, default: '5000000', description: 'Minimum single add-funds (deposit) request (paise). Default ₹50,000.' },
@@ -72,7 +83,12 @@ export const CONFIG_REGISTRY = {
   'logs.quietOperations': { schema: z.array(z.string().regex(/^[A-Za-z]{1,60}$/)).max(30), default: [], description: 'Read-only operations NOT written to the activity log (e.g. high-frequency polling such as "quotes"). Mutations are always logged.' },
   'ui.tickerMessages': {
     schema: z.array(z.string().max(200)).max(20),
-    default: ['Training platform: all orders are simulated and never sent to an exchange.'],
+    default: [
+      'NSE (Indian Equities): 09:15 – 15:30 IST (Mon–Fri)',
+      'MCX (Commodities): 09:00 – 23:30 IST (Mon–Fri)',
+      'US Markets (NASDAQ / NYSE): 20:00 – 02:30 IST (09:30 – 16:00 EST)',
+      'Crypto: 24/7 Live Trading',
+    ],
     description: 'Scrolling announcements shown to traders.',
   },
   'ui.termsRules': {

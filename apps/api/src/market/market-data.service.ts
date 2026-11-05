@@ -7,6 +7,7 @@ import { pubsub, TOPIC } from '../notifications/notifications.service';
 import { env } from '../config/env';
 import { CandleRepo, type StoredBar } from './candle-repo';
 import { DhanFeedService, DHAN_SEGMENT_MAP } from './dhan-feed.service';
+import { DhanGlobalFeedService } from './dhan-global-feed.service';
 import { bucketStart, CandleStore, DAY, MEMORY_DAYS, SIZE, type Bar, type CandleInterval } from './candles';
 
 export interface Quote {
@@ -53,7 +54,11 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   private pruneTimer?: NodeJS.Timeout;
   private flushing?: Promise<void>;
 
-  constructor(private readonly dbs: DbService, private readonly dhanFeed: DhanFeedService) {
+  constructor(
+    private readonly dbs: DbService,
+    private readonly dhanFeed: DhanFeedService,
+    private readonly dhanGlobalFeed: DhanGlobalFeedService,
+  ) {
     if (process.env.NODE_ENV !== 'test') this.repo = new CandleRepo(dbs.pool);
   }
 
@@ -73,20 +78,26 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   }
 
   private startDhanFeed() {
-    this.log.log(`Starting Dhan Live Market Feed for ${this.quotes.size} instruments`);
+    this.log.log(`Starting Dhan Live Market Feeds (Domestic + Global) for ${this.quotes.size} instruments`);
     const secToId = new Map<string, string>();
-    const subs: Array<{ exchangeSegment: string; securityId: string }> = [];
+    const domesticSubs: Array<{ exchangeSegment: string; securityId: string }> = [];
+    const globalSubs: Array<{ exchangeSegment: string; securityId: string }> = [];
 
     for (const [id, r] of this.meta.entries()) {
       if (r.dhanSecurityId && r.dhanSegment) {
         secToId.set(`${r.dhanSegment}:${r.dhanSecurityId}`, id);
         secToId.set(r.dhanSecurityId, id);
-        subs.push({ exchangeSegment: r.dhanSegment, securityId: r.dhanSecurityId });
+
+        if (r.dhanSegment === 'INX_EQ') {
+          globalSubs.push({ exchangeSegment: 'INX_EQ', securityId: r.dhanSecurityId });
+        } else {
+          domesticSubs.push({ exchangeSegment: r.dhanSegment, securityId: r.dhanSecurityId });
+        }
       }
     }
 
-    this.dhanFeed.onTick((tick) => {
-      const segmentStr = DHAN_SEGMENT_MAP[tick.segmentCode] || '';
+    const onIncomingTick = (tick: import('./dhan-feed.service').DhanTick, segmentOverride?: string) => {
+      const segmentStr = segmentOverride || DHAN_SEGMENT_MAP[tick.segmentCode] || '';
       const instId = secToId.get(`${segmentStr}:${tick.securityId}`) || secToId.get(tick.securityId);
       if (!instId) return;
 
@@ -144,10 +155,19 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
       }
 
       this.emit([q]);
-    });
+    };
 
-    this.dhanFeed.setSubscriptions(subs);
-    this.dhanFeed.connect();
+    if (domesticSubs.length) {
+      this.dhanFeed.onTick((tick) => onIncomingTick(tick));
+      this.dhanFeed.setSubscriptions(domesticSubs);
+      this.dhanFeed.connect();
+    }
+
+    if (globalSubs.length) {
+      this.dhanGlobalFeed.onTick((tick) => onIncomingTick(tick, 'INX_EQ'));
+      this.dhanGlobalFeed.setSubscriptions(globalSubs);
+      this.dhanGlobalFeed.connect();
+    }
   }
 
   async onModuleDestroy() {
@@ -166,6 +186,7 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
     this.quotes.clear();
     this.meta.clear();
     this.dhanFeed.setSubscriptions([]);
+    this.dhanGlobalFeed.setSubscriptions([]);
   }
 
   /**

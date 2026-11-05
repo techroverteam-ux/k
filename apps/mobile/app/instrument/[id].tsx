@@ -1,7 +1,7 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { CandleChart } from '@/candle-chart';
-import { Pressable, View } from 'react-native';
+import { Alert, Pressable, View } from 'react-native';
 import { tradeFeedback, usePrefs, usePrivate } from '@/prefs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gql, newKey } from '@/api';
@@ -39,16 +39,25 @@ export default function StockScreen() {
   const closeVal = xq.close;
   const highVal = q?.high;
   const lowVal = q?.low;
-  const rules = useQuery<{ tradingRules: { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; sessions: { exchange: string; isOpen: boolean }[] } }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument sessions { exchange isOpen } } }`);
+  const rules = useQuery<{ tradingRules: { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] } }>(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument sessions { exchange open close isOpen message } } }`);
   const rl = rules.data?.tradingRules;
   const margin = useQuery<{ orderPreview: { intradayMargin: string } }>(`query($i:ID!){ orderPreview(instrumentId:$i, side:BUY, quantity:1){ intradayMargin } }`, { i: id }, 15000);
   const allowTrade = i && rl ? (rl.sessions.find((x) => x.exchange === i.exchange)?.isOpen ?? true) : undefined;
   const dash = (v?: string | number | null) => (v === undefined || v === null || v === '' ? '—' : String(v));
 
+  const onTradePress = (s: Side) => {
+    if (allowTrade === false) {
+      const sess = rl?.sessions.find((x: any) => x.exchange === i?.exchange);
+      Alert.alert('Market Closed', sess ? `${i?.exchange} market is currently closed. Trading hours are ${sess.open}–${sess.close} IST.` : 'Market is currently closed for trading.');
+      return;
+    }
+    setOrder(s);
+  };
+
   const footer = (
     <View style={{ flexDirection: 'row', gap: S[3], paddingHorizontal: S[4], paddingTop: S[3], paddingBottom: S[3] + insets.bottom, borderTopWidth: 1, borderTopColor: t.line, backgroundColor: t.bg }}>
-      <Button block size="lg" kind="sell" title="Sell" disabled={!q} onPress={() => setOrder('SELL')} />
-      <Button block size="lg" kind="buy" title="Buy" disabled={!q} onPress={() => setOrder('BUY')} />
+      <Button block size="lg" kind="sell" title="Sell" disabled={!q} onPress={() => onTradePress('SELL')} />
+      <Button block size="lg" kind="buy" title="Buy" disabled={!q} onPress={() => onTradePress('BUY')} />
     </View>
   );
 
@@ -152,7 +161,7 @@ export default function StockScreen() {
             ]} />
           </Section>
 
-          <Button block size="lg" kind="buy" title="Trade" onPress={() => setOrder('BUY')} />
+          <Button block size="lg" kind="buy" title="Trade" onPress={() => onTradePress('BUY')} />
         </View>
       )}
 
@@ -230,6 +239,18 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
   const avail = sum.data?.accountSummary.available;
   const short = preview && avail && Number(preview.intradayMargin) + Number(preview.brokerage) > Number(avail);
   const place = async () => {
+    if (session && !session.isOpen) {
+      Alert.alert('Market Closed', session.message || `Trading is closed for ${i.exchange}.`);
+      return;
+    }
+    if (side === 'SELL' && held <= 0) {
+      Alert.alert('Cannot Sell', 'You cannot sell without holding an open buy position. Please buy first.');
+      return;
+    }
+    if (side === 'SELL' && n > held) {
+      Alert.alert('Insufficient Holdings', `Cannot sell ${n} lots. You only hold ${held} lots in this instrument.`);
+      return;
+    }
     setBusy(true); setErr(null);
     try {
       const d = await gql(`mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ status fillPrice rejectReason } }`, { i: { instrumentId: i.id, side, type, quantity: n, limitPrice: type === 'LIMIT' ? price : undefined, triggerPrice: isTrig(type) ? price : undefined, idempotencyKey: key } });
@@ -291,7 +312,25 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
           {short && <Notice tone="warn">Not enough available balance for this order.</Notice>}
           {session && !session.isOpen && <Notice tone="warn">{session.message} Orders placed now will be rejected.</Notice>}
           {err && <Notice tone="err">{err}</Notice>}
-          <Button size="lg" kind={side === 'BUY' ? 'buy' : 'sell'} title={valid && preview ? `${side === 'BUY' ? 'Buy' : 'Sell'} ${n} @ ${type === 'MARKET' ? inr(side === 'BUY' ? q?.ask : q?.bid) : inr(price)}` : `Review ${side === 'BUY' ? 'buy' : 'sell'}`} disabled={!valid || !preview} onPress={() => { setErr(null); setReview(true); }} />
+          <Button size="lg" kind={side === 'BUY' ? 'buy' : 'sell'} title={valid && preview ? `${side === 'BUY' ? 'Buy' : 'Sell'} ${n} @ ${type === 'MARKET' ? inr(side === 'BUY' ? q?.ask : q?.bid) : inr(price)}` : `Review ${side === 'BUY' ? 'buy' : 'sell'}`} disabled={!valid || !preview} onPress={() => {
+            if (session && !session.isOpen) {
+              Alert.alert('Market Closed', session.message || `Trading is closed for ${i.exchange}. Market hours are ${session.open}–${session.close} IST.`, [{ text: 'OK' }]);
+              return;
+            }
+            if (side === 'SELL' && held <= 0) {
+              Alert.alert('Cannot Sell Without Holdings', 'You cannot sell without holding an open buy position. Please buy first.', [
+                { text: 'Switch to Buy', onPress: () => setSide('BUY') },
+                { text: 'Cancel', style: 'cancel' },
+              ]);
+              return;
+            }
+            if (side === 'SELL' && n > held) {
+              Alert.alert('Insufficient Holdings', `Cannot sell ${n} lots. You only hold ${held} lots in this instrument.`);
+              return;
+            }
+            setErr(null);
+            setReview(true);
+          }} />
           <T v="xs" style={{ textAlign: 'center' }}>Simulated order. Never sent to an exchange.</T>
         </>
       ) : preview && (

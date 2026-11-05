@@ -17,6 +17,7 @@ import { requestContext } from '../common/request-context';
 import { env } from '../config/env';
 import { ConsentService } from '../consent/consent.service';
 import { sessionStatus, type Sessions } from './market-hours';
+import { DhanGlobalFeedService } from '../market/dhan-global-feed.service';
 import { afterWipeFor } from '../wipe/visibility';
 
 export interface PlaceOrderInput {
@@ -184,6 +185,10 @@ export class OrdersService implements OnModuleInit {
       else if (input.quantity > cfgMax) reject = `Maximum ${cfgMax} per order.`;
       else if (abs(after) > cfgMaxPos) reject = `Position limit is ${cfgMaxPos} for this instrument.`;
       else if (closed) reject = closed;
+      else if (input.side === 'SELL' && net <= 0)
+        reject = 'Cannot sell without holding an open buy position. Please buy first.';
+      else if (input.side === 'SELL' && input.quantity > net)
+        reject = `Cannot sell ${input.quantity} lots. You only hold ${net} lots in this instrument.`;
       else if (isTrigger(input.type) && triggerHit(input.type, input.side, input.triggerPriceMinor!, q.ltpMinor))
         reject = `Trigger ${(Number(input.triggerPriceMinor) / 100).toFixed(2)} is already reached (LTP ${(Number(q.ltpMinor) / 100).toFixed(2)}). Use a market order or move the trigger.`;
       if (!reject && exposureIncrease > 0 && u.riskState === 'CUT')

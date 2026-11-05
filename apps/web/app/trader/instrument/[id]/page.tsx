@@ -5,7 +5,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { CandleChart } from '@/components/CandleChart';
 import { Icon } from '@/components/icons';
 import { QUOTE_FIELDS, useLiveQuotes, useSummary, type Instrument } from '@/components/trading';
-import { Change, Chips, Confirm, ErrorState, Mark, Metrics, SkeletonRows, useToast } from '@/components/ui';
+import { Change, Chips, Confirm, Dialog, ErrorState, Mark, Metrics, SkeletonRows, useToast } from '@/components/ui';
 import { gql, newKey, pollingPaused } from '@/lib/api';
 import { fullName, inr, ohlcTone, shortSymbol, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
@@ -71,7 +71,6 @@ function StockPage() {
                   <button className="btn btn-sm btn-buy" onClick={() => openOrder('BUY')}>Buy</button>
                 </>
               )}
-              <Link className="btn btn-sm" href={`/trader/algo/new?instrument=${i.id}`} title="Build an automated strategy for this instrument"><Icon name="activity" size={16} />Automate</Link>
               <button className="btn btn-sm" aria-pressed={focus} onClick={() => setFocus(!focus)} title={focus ? 'Show the order panel' : 'Hide the order panel and widen the chart'}>
                 {focus ? 'Show order panel' : 'Focus chart'}
               </button>
@@ -238,6 +237,8 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
   const [price, setPrice] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [closedModal, setClosedModal] = useState(false);
+  const [sellModal, setSellModal] = useState<string | null>(null);
   const [idem, setIdem] = useState(newKey);
   const place = useMutation(`mutation($i:PlaceOrderInput!){ placeOrder(input:$i){ id status fillPrice rejectReason } }`);
 
@@ -276,6 +277,23 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
 
   const available = sum.data?.accountSummary.available;
   const short = preview && available && Number(preview.intradayMargin) + Number(preview.brokerage) > Number(available);
+
+  const handleTradeClick = () => {
+    if (closed) {
+      setClosedModal(true);
+      return;
+    }
+    if (side === 'SELL' && held <= 0) {
+      setSellModal('Cannot sell without holding an open buy position. Please buy first.');
+      return;
+    }
+    if (side === 'SELL' && n > held) {
+      setSellModal(`Cannot sell ${n} lots. You only hold ${held} lots in this instrument.`);
+      return;
+    }
+    place.setError(null);
+    setConfirm(true);
+  };
 
   const submit = async () => {
     const res = await place.run({ i: { instrumentId: i.id, side, type, quantity: n, limitPrice: type === 'LIMIT' ? price : undefined, triggerPrice: isTrig(type) ? price : undefined, idempotencyKey: idem } });
@@ -376,7 +394,7 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         <div className="kv"><span className="k">Available</span><span className="num"><Private>{available ? `₹${inr(available)}` : '—'}</Private></span></div>
         {short && <div className="notice warn"><Icon name="info" size={16} />Not enough available balance for this order.</div>}
         {closed && <div className="notice warn"><Icon name="info" size={16} />{session!.message} Orders placed now will be rejected.</div>}
-        <button className={`btn btn-lg btn-block ${side === 'BUY' ? 'btn-buy' : 'btn-sell'}`} disabled={!valid || !preview} onClick={() => { place.setError(null); setConfirm(true); }}>
+        <button className={`btn btn-lg btn-block ${side === 'BUY' ? 'btn-buy' : 'btn-sell'}`} disabled={!valid || !preview} onClick={handleTradeClick}>
           {side === 'BUY' ? 'Buy' : 'Sell'}{valid && preview ? ` ${n} @ ${type === 'MARKET' ? inr(side === 'BUY' ? q?.ask : q?.bid) : inr(price)}` : ''}
         </button>
         <p className="t3" style={{ textAlign: 'center' }}>Simulated order. Never sent to an exchange.</p>
@@ -402,6 +420,35 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
           onClose={() => setConfirm(false)}
           onConfirm={() => void submit()}
         />
+      )}
+      {closedModal && (
+        <Dialog title="Market Closed" sub={session?.exchange ? `${session.exchange} Market Status` : 'Trading Unavailable'} onClose={() => setClosedModal(false)}>
+          <div className="stack" style={{ gap: 16 }}>
+            <div className="notice warn" style={{ margin: 0 }}>
+              <Icon name="info" size={18} />
+              <span>{session?.message || 'The market is currently closed for trading. Orders cannot be placed outside market hours.'}</span>
+            </div>
+            {session && (
+              <div className="card" style={{ padding: 12, background: 'var(--bg-subtle, rgba(255,255,255,0.03))', borderRadius: 8 }}>
+                <div className="t2 sm" style={{ marginBottom: 4 }}>Standard Market Timings (IST)</div>
+                <div className="num" style={{ fontSize: 15, fontWeight: 600 }}>{session.open} – {session.close} IST</div>
+              </div>
+            )}
+            <button className="btn btn-primary btn-block" onClick={() => setClosedModal(false)}>Understood</button>
+          </div>
+        </Dialog>
+      )}
+      {sellModal && (
+        <Dialog title="Cannot Sell Without Holdings" sub="Short selling is disabled" onClose={() => setSellModal(null)}>
+          <div className="stack" style={{ gap: 16 }}>
+            <div className="notice warn" style={{ margin: 0 }}>
+              <Icon name="alert" size={18} />
+              <span>{sellModal}</span>
+            </div>
+            <p className="t2 sm">Traders cannot sell an instrument without holding an open buy position. Please buy this instrument first before placing a sell order.</p>
+            <button className="btn btn-buy btn-block" onClick={() => { setSellModal(null); setSide('BUY'); }}>Switch to Buy</button>
+          </div>
+        </Dialog>
       )}
     </section>
   );

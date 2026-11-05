@@ -22,7 +22,6 @@ const NAV: Record<Role, Item[]> = {
     { href: '/trader/positions', label: 'Positions', icon: 'briefcase' },
     { href: '/trader/orders', label: 'Orders', icon: 'list' },
     { href: '/trader/funds', label: 'Funds', icon: 'wallet' },
-    { href: '/trader/algo', label: 'Algo trading', icon: 'activity' },
   ],
   BROKER: [
     { href: '/broker', label: 'Dashboard', icon: 'grid', exact: true },
@@ -175,12 +174,22 @@ function Ticker({ messages }: { messages: string[] }) {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-  const text = messages.filter(Boolean);
+
+  const defaultMarketMessages = [
+    'NSE (Indian Equities): 09:15 – 15:30 IST (Mon–Fri)',
+    'MCX (Commodities): 09:00 – 23:30 IST (Mon–Fri)',
+    'US Markets (NASDAQ / NYSE): 20:00 – 02:30 IST (09:30 – 16:00 EST)',
+    'Crypto: 24/7 Live Trading',
+  ];
+
+  const clean = messages.filter((m) => m && !m.includes('simulated and never sent'));
+  const text = clean.length > 0 ? clean : defaultMarketMessages;
+
   return (
-    <div className="ticker" role="region" aria-label="Announcements">
+    <div className="ticker" role="region" aria-label="Market Timings & Announcements">
       <div className="tape">
         {text.length > 0 && (
-          <span style={{ ['--tape-s' as string]: `${Math.max(20, text.join(' ').length / 6)}s` }}>
+          <span style={{ ['--tape-s' as string]: `${Math.max(24, text.join(' ').length / 5)}s` }}>
             {text.map((m, i) => <span key={i}>{i > 0 && <i aria-hidden>•</i>}{m}</span>)}
           </span>
         )}

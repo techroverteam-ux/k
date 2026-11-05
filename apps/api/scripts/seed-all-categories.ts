@@ -55,13 +55,13 @@ const ITEMS: SeedItem[] = [
   { symbol: 'DOGEUSD', name: 'Dogecoin / US Dollar', exchange: 'CRYPTO', segment: 'CRYPTO', lotSize: 100, tickMinor: 1, refPriceMinor: 16n, lotClass: 'MINI', lotLabel: '100 DOGE' },
 
   // US STOCK
-  { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 100, tickMinor: 1, refPriceMinor: 349_42n, lotClass: 'MINI', lotLabel: '100 shares' },
-  { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 412_00n, lotClass: 'MINI', lotLabel: '1 share' },
-  { symbol: 'NVDA', name: 'Nvidia Corporation', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 139_20n, lotClass: 'MINI', lotLabel: '1 share' },
-  { symbol: 'TSLA', name: 'Tesla Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 220_80n, lotClass: 'MINI', lotLabel: '1 share' },
-  { symbol: 'AMZN', name: 'Amazon.com Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 187_50n, lotClass: 'MINI', lotLabel: '1 share' },
-  { symbol: 'GOOGL', name: 'Alphabet Inc. Class A', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 168_40n, lotClass: 'MINI', lotLabel: '1 share' },
-  { symbol: 'META', name: 'Meta Platforms Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 574_10n, lotClass: 'MINI', lotLabel: '1 share' },
+  { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 100, tickMinor: 1, refPriceMinor: 349_42n, lotClass: 'MINI', lotLabel: '100 shares', dhanSecurityId: '10000025', dhanSegment: 'INX_EQ' },
+  { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 542_00n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10006754', dhanSegment: 'INX_EQ' },
+  { symbol: 'NVDA', name: 'Nvidia Corporation', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 186_30n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10007290', dhanSegment: 'INX_EQ' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 349_10n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10010311', dhanSegment: 'INX_EQ' },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 247_50n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10000496', dhanSegment: 'INX_EQ' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc. Class A', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 280_40n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10004393', dhanSegment: 'INX_EQ' },
+  { symbol: 'META', name: 'Meta Platforms Inc.', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 1, refPriceMinor: 674_10n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10006471', dhanSegment: 'INX_EQ' },
 
   // COMEX
   { symbol: 'GC-COMEX', name: 'Gold COMEX Futures', exchange: 'COMEX', segment: 'FUT', expiry: nearMonthExpiry, lotSize: 100, tickMinor: 10, refPriceMinor: 4_072_20n, lotClass: 'MEGA', lotLabel: '100 oz' },
@@ -71,10 +71,10 @@ const ITEMS: SeedItem[] = [
   { symbol: 'NG-COMEX', name: 'Natural Gas COMEX Futures', exchange: 'COMEX', segment: 'FUT', expiry: nearMonthExpiry, lotSize: 10000, tickMinor: 1, refPriceMinor: 2_82n, lotClass: 'MEGA', lotLabel: '10,000 mmBtu' },
 
   // US INDEX
-  { symbol: 'SPX', name: 'S&P 500 Index', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 5_835_00n, lotClass: 'MINI', lotLabel: '1 unit' },
-  { symbol: 'NDX', name: 'Nasdaq 100 Index', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 20_210_00n, lotClass: 'MINI', lotLabel: '1 unit' },
-  { symbol: 'DJI', name: 'Dow Jones Industrial Average', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 42_350_00n, lotClass: 'MINI', lotLabel: '1 unit' },
-  { symbol: 'RUT', name: 'Russell 2000 Index', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 2_225_00n, lotClass: 'MINI', lotLabel: '1 unit' },
+  { symbol: 'SPX', name: 'S&P 500 Index (SPY ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 585_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10009619', dhanSegment: 'INX_EQ' },
+  { symbol: 'NDX', name: 'Nasdaq 100 Index (QQQ ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 502_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10008402', dhanSegment: 'INX_EQ' },
+  { symbol: 'DJI', name: 'Dow Jones Index (DIA ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 435_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10002663', dhanSegment: 'INX_EQ' },
+  { symbol: 'RUT', name: 'Russell 2000 Index (IWM ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 225_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10005457', dhanSegment: 'INX_EQ' },
 ];
 
 async function main() {
@@ -122,6 +122,8 @@ async function main() {
             tickMinor: item.tickMinor,
             refPriceMinor: item.refPriceMinor,
             active: true,
+            dhanSecurityId: item.dhanSecurityId,
+            dhanSegment: item.dhanSegment,
           })
           .where(sql`${instruments.symbol} = ${item.symbol}`);
         updated++;
