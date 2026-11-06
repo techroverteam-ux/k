@@ -13,6 +13,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
   private readonly log = new Logger('DhanGlobalFeed');
   private ws?: WebSocket;
   private reconnectTimer?: NodeJS.Timeout;
+  private reconnectDelayMs = 5000;
   private isDestroyed = false;
   private tickListener?: (tick: DhanTick) => void;
   private subscribedInstruments: GlobalStockSubscription[] = [];
@@ -91,7 +92,9 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     try {
       this.ws = new WebSocket(wsUrl);
 
+      let is429 = false;
       this.ws.on('open', () => {
+        this.reconnectDelayMs = 5000;
         this.log.log('Connected to Dhan Global Stocks Feed WebSocket.');
         this.sendSubscriptionRequest();
       });
@@ -101,13 +104,14 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
       });
 
       this.ws.on('error', (err) => {
+        if (err.message && err.message.includes('429')) is429 = true;
         this.log.error(`Dhan Global Stocks WebSocket error: ${err.message}`);
       });
 
       this.ws.on('close', (code, reason) => {
         const reasonStr = reason?.toString() || '';
-        this.log.warn(`Dhan Global Stocks WebSocket closed (code ${code}: ${reasonStr}). Reconnecting in 5s...`);
-        this.scheduleReconnect();
+        this.log.warn(`Dhan Global Stocks WebSocket closed (code ${code}: ${reasonStr}).`);
+        this.scheduleReconnect(is429);
       });
     } catch (err) {
       this.log.error(`Failed to initiate Dhan Global Stocks WebSocket: ${(err as Error).message}`);
@@ -220,12 +224,19 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     }
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(is429 = false) {
     if (this.isDestroyed || this.reconnectTimer) return;
+    if (is429) {
+      // Exponential backoff up to 60s when rate limited or concurrent connection limit reached
+      this.reconnectDelayMs = Math.min(60000, Math.max(15000, this.reconnectDelayMs * 2));
+    } else {
+      this.reconnectDelayMs = 5000;
+    }
+    this.log.log(`Scheduling Dhan Global Stocks reconnect in ${this.reconnectDelayMs / 1000}s...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       this.connect();
-    }, 5000);
+    }, this.reconnectDelayMs);
   }
 
   onModuleDestroy() {

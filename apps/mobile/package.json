@@ -28,6 +28,7 @@
     "expo-splash-screen": "56.0.16",
     "expo-status-bar": "56.0.4",
     "expo-system-ui": "56.0.5",
+    "graphql": "16.14.2",
     "graphql-ws": "6.4.1",
     "qrcode": "1.5.4",
     "react": "19.2.3",

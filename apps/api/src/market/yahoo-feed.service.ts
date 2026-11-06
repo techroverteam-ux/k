@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import * as https from 'https';
+import { env } from '../config/env';
 
 export interface YahooQuote {
   symbol: string;       // DB symbol key e.g. AAPL, BTCUSD
@@ -65,9 +66,13 @@ export class YahooFeedService implements OnModuleInit, OnModuleDestroy {
   private readonly reverseMap: Map<string, string> = new Map();
 
   onModuleInit() {
+    if (env().MARKET_FEED === 'dhan') {
+      this.log.log('Dhan market feed active; Yahoo polling disabled.');
+      return;
+    }
     for (const [db, yahoo] of this.symbolMap) this.reverseMap.set(yahoo, db);
-    // Poll every 15 seconds
-    this.pollTimer = setInterval(() => void this.poll(), 15_000);
+    // Poll every 30 seconds
+    this.pollTimer = setInterval(() => void this.poll(), 30_000);
     // Initial poll
     void this.poll();
   }
