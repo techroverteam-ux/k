@@ -2,7 +2,7 @@
 import { useSoleAdmin } from '@/lib/sole-admin';
 import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
 import { gql, newKey, subscribe } from '@/lib/api';
 import { fullName, inr, shortSymbol, tone, when, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
@@ -83,20 +83,43 @@ export function useLiveQuotes(ids: string[]) {
       chunks.push(list.slice(i, i + chunkSize));
     }
 
+    const merge = (rows: Quote[]) => {
+      if (!rows || !rows.length) return;
+      setQuotes((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const x of rows) {
+          const cur = prev[x.instrumentId];
+          if (
+            !cur ||
+            cur.ltp !== x.ltp ||
+            cur.bid !== x.bid ||
+            cur.ask !== x.ask ||
+            cur.high !== x.high ||
+            cur.low !== x.low ||
+            cur.change !== x.change ||
+            cur.changePct !== x.changePct
+          ) {
+            next[x.instrumentId] = x;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+
     const fetchAll = () => {
       for (const chunk of chunks) {
         gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: chunk })
           .then((d) => {
-            if (d?.quotes) {
-              setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotes.map((x) => [x.instrumentId, x])) }));
-            }
+            if (d?.quotes) merge(d.quotes);
           })
           .catch(() => undefined);
       }
     };
 
     fetchAll();
-    const interval = setInterval(fetchAll, 1500);
+    const interval = setInterval(fetchAll, 30000);
 
     const unsubs = chunks.map((chunk) =>
       subscribe<{ quotesUpdated: Quote[] }>(
@@ -104,7 +127,7 @@ export function useLiveQuotes(ids: string[]) {
         { i: chunk },
         (d) => {
           if (d?.quotesUpdated?.length) {
-            setQuotes((q) => ({ ...q, ...Object.fromEntries(d.quotesUpdated.map((x) => [x.instrumentId, x])) }));
+            merge(d.quotesUpdated);
           }
         }
       )
@@ -126,7 +149,7 @@ const quoteTime = (ts?: string) => (ts ? new Date(ts).toLocaleTimeString('en-IN'
 const expiryText = (d?: string) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
 
 /** Bid (red) and ask (green) boxes that blink green when the price rises and red when it falls; day low and high below. */
-function BidAskBoxes({ href, q, label }: { href: string; q?: Quote; label: string }) {
+const BidAskBoxes = memo(function BidAskBoxes({ href, q, label }: { href: string; q?: Quote; label: string }) {
   const tb = useTick(q?.bid);
   const ta = useTick(q?.ask);
   return (
@@ -135,7 +158,7 @@ function BidAskBoxes({ href, q, label }: { href: string; q?: Quote; label: strin
       <span className="ba-box a"><Link className={ta} href={`${href}?side=BUY`} aria-label={`Buy ${label} at ${q?.ask ?? ''}`}>{inr(q?.ask)}</Link><small>H {inr(q?.high)}</small></span>
     </div>
   );
-}
+});
 
 /** Change % only, coloured up/down. */
 function ChgPct({ q }: { q?: Quote }) {
@@ -149,9 +172,12 @@ function useTick(v?: string) {
   const [cls, setCls] = useState('');
   useEffect(() => {
     if (v && prev.current && v !== prev.current) {
-      setCls(Number(v) > Number(prev.current) ? 'tick-up' : 'tick-down');
-      const h = setTimeout(() => setCls(''), 700);
+      const nextCls = Number(v) > Number(prev.current) ? 'tick-up' : 'tick-down';
       prev.current = v;
+      setCls(nextCls);
+      const h = setTimeout(() => {
+        setCls((c) => (c ? '' : c));
+      }, 700);
       return () => clearTimeout(h);
     }
     prev.current = v;
@@ -321,7 +347,10 @@ function groupByCategory<T extends { instrument: Instrument }>(items: T[]) {
   const groups: { category: string; label: string; items: T[] }[] = [];
   const map = new Map<string, T[]>();
   for (const item of items) {
-    const cat = item.instrument.category || 'FUTURES';
+    let cat = item.instrument.category || 'FUTURES';
+    if (cat === 'OPTIONS' && (item.instrument.segment === 'EQ' || !/\d+(CE|PE)$/i.test(item.instrument.symbol))) {
+      cat = 'FUTURES';
+    }
     if (!map.has(cat)) map.set(cat, []);
     map.get(cat)!.push(item);
   }
@@ -347,7 +376,8 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
   const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: 0 });
   const { data: countsData } = useQuery<{ instrumentCategoryCounts: { category: string; count: number }[] }>(CAT_COUNTS_Q);
   const entries = data?.watchlist ?? [];
-  const live = useLiveQuotes(entries.map((e) => e.instrument.id));
+  const entryIds = useMemo(() => entries.map((e) => e.instrument.id), [entries]);
+  const live = useLiveQuotes(entryIds);
   const toast = useToast();
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<CategoryV>('');
@@ -370,17 +400,17 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
 
   useEffect(() => {
     if (!searching) { setHits(null); return; }
-    setHits(null);
     const t = setTimeout(() => gql<{ searchInstruments: Instrument[] }>(
       `query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:500){ id symbol name exchange segment expiry lotClass lotLabel category lotSize tickSize quote{ ${QUOTE_FIELDS} } } }`,
       { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }
     )
-      .then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
+      .then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 150);
     return () => clearTimeout(t);
   }, [q, cat, lot, searching]);
 
-  const hitQuotes = useLiveQuotes(hits?.map((h) => h.id) ?? []);
-  const inList = new Set(entries.map((e) => e.instrument.id));
+  const hitIds = useMemo(() => hits?.map((h) => h.id) ?? [], [hits]);
+  const hitQuotes = useLiveQuotes(hitIds);
+  const inList = useMemo(() => new Set(entries.map((e) => e.instrument.id)), [entries]);
 
   const add = async (i: Instrument) => {
     setBusy(i.id);
@@ -634,7 +664,7 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
   );
 }
 
-function CompactRow({
+const CompactRow = memo(function CompactRow({
   e,
   q,
   withBidAsk,
@@ -686,9 +716,9 @@ function CompactRow({
       )}
     </div>
   );
-}
+});
 
-function FullRow({
+const FullRow = memo(function FullRow({
   e,
   q,
   inList = true,
@@ -743,13 +773,14 @@ function FullRow({
       </td>
     </tr>
   );
-}
+});
 
 /* ======================================================================= market movers (explore) */
 export function Movers() {
   const { data, loading, error, refetch } = useQuery<{ searchInstruments: Instrument[] }>(`{ searchInstruments(query:"", limit:50){ id symbol name exchange segment quote{ ${QUOTE_FIELDS} } } }`);
   const list = data?.searchInstruments ?? [];
-  const liveQuotes = useLiveQuotes(list.map((i) => i.id));
+  const listIds = useMemo(() => list.map((i) => i.id), [list]);
+  const liveQuotes = useLiveQuotes(listIds);
   const [tab, setTab] = useState<'gainers' | 'losers'>('gainers');
   const getQ = (i: Instrument) => liveQuotes[i.id] ?? i.quote;
   const sorted = list
