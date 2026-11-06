@@ -151,7 +151,9 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
         <Icon name="alert" size={18} />
         <span>
           <b>Wipe all data</b> permanently deletes everything except the Super Admin accounts: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
-          One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both re-verify with their authenticator.
+          {sole
+            ? <>You are the only Super Admin, so <b>the wipe runs as soon as you confirm</b>: there is no second approval. You re-verify with your authenticator.</>
+            : <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both re-verify with their authenticator.</>}
         </span>
       </div>
       {loading && !data ? <SkeletonRows rows={2} pad={false} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : pending ? (
@@ -168,7 +170,7 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
           )}
         </div>
       ) : (
-        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />Request a full wipe</button></div>
+        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />{sole ? 'Wipe all data now' : 'Request a full wipe'}</button></div>
       )}
       <section className="section">
         <SectionHead title="History" />
@@ -189,12 +191,12 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
           </div></div>
         )}
       </section>
-      {dlg && <PlatformWipeDialog mode={dlg} onClose={() => setDlg(null)} onDone={() => { setDlg(null); void refetch(); }} />}
+      {dlg && <PlatformWipeDialog mode={dlg} sole={sole} onClose={() => setDlg(null)} onDone={() => { setDlg(null); void refetch(); }} />}
     </div>
   );
 }
 
-function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request' } | { kind: 'approve'; w: PlatformWipe }; onClose: () => void; onDone: () => void }) {
+function PlatformWipeDialog({ mode, sole, onClose, onDone }: { mode: { kind: 'request' } | { kind: 'approve'; w: PlatformWipe }; sole: boolean; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -216,7 +218,10 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
   return (
-    <Dialog title={mode.kind === 'request' ? 'Request a full wipe' : 'Approve the full wipe?'} sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : 'Another Super Admin will have to approve it.'} onClose={onClose}>
+    <Dialog
+      title={mode.kind === 'approve' ? 'Approve the full wipe?' : sole ? 'Wipe all data now' : 'Request a full wipe'}
+      sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : sole ? "You're the only Super Admin, so this runs immediately. There's no second approval." : 'Another Super Admin will have to approve it.'}
+      onClose={onClose}>
       <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void go(); }}>
         {mode.kind === 'request' && (
           <div className="field"><label htmlFor="pw-reason">Reason (kept in the audit log)</label><input id="pw-reason" className="input" maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. End of the October training batch" /></div>
@@ -226,7 +231,7 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
         {err && <div className="notice err">{err}</div>}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? 'Send request' : 'Approve and wipe'}</button>
+          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? (sole ? 'Wipe now' : 'Send request') : 'Approve and wipe'}</button>
         </div>
       </form>
     </Dialog>

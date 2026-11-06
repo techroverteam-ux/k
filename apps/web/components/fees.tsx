@@ -157,7 +157,7 @@ export function FeesAdmin({ meId }: { meId: string }) {
     <div className="stack" style={{ gap: 32 }}>
       <section className="section">
         <SectionHead title="Bank accounts & UPI"><button className="btn btn-sm btn-primary" onClick={() => setAdding(true)}><Icon name="plus" size={16} />Add</button></SectionHead>
-        <p className="t3 sm" style={{ margin: 0 }}>Traders see only <b>Live</b> details. New details go live after a different Super Admin checks and approves them. To change details, disable the old ones and add new ones.</p>
+        <p className="t3 sm" style={{ margin: 0 }}>Traders see only <b>Live</b> details. {sole ? 'You are the only Super Admin, so new details go live as soon as you add them.' : 'New details go live after a different Super Admin checks and approves them.'} To change details, disable the old ones and add new ones.</p>
         {payees.loading && !payees.data ? <SkeletonRows rows={2} pad={false} /> : payees.error && !payees.data ? <ErrorState error={payees.error} retry={payees.refetch} /> : !payees.data!.payeeAccounts.length ? <Empty icon="wallet" title="No payment details yet">Add your company bank account or UPI ID.</Empty> : (
           <div className="panel"><div className="list list-pad">
             {payees.data!.payeeAccounts.map((p) => {
@@ -209,6 +209,7 @@ export function FeesAdmin({ meId }: { meId: string }) {
 }
 
 function AddPayee({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const sole = useSoleAdmin();
   const [kind, setKind] = useState<'BANK' | 'UPI'>('BANK');
   const [f, setF] = useState({ label: '', accountName: '', bankName: '', accountNumber: '', ifsc: '', branch: '', upiId: '' });
   const [busy, setBusy] = useState(false);
@@ -216,7 +217,7 @@ function AddPayee({ onClose, onDone }: { onClose: () => void; onDone: () => void
   const toast = useToast();
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   return (
-    <Dialog title="Add payment details" sub="A different Super Admin must approve them before traders see them." onClose={onClose}>
+    <Dialog title="Add payment details" sub={sole ? 'Traders see them as soon as you add them.' : 'A different Super Admin must approve them before traders see them.'} onClose={onClose}>
       <form className="stack" style={{ gap: 12 }} onSubmit={async (e) => {
         e.preventDefault(); setBusy(true); setErr(null);
         try {

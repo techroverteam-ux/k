@@ -39,7 +39,7 @@ export default function AdminFees() {
         </>
       ) : (
         <>
-          <Notice>Traders see only Live details. New details go live after a different Super Admin approves them. To change details, disable them and add new ones.</Notice>
+          <Notice>{`Traders see only Live details. ${sole ? 'You are the only Super Admin, so new details go live as soon as you add them.' : 'New details go live after a different Super Admin approves them.'} To change details, disable them and add new ones.`}</Notice>
           <Button kind="primary" icon="plus" title="Add bank account or UPI" onPress={() => setAdding(true)} />
           {payees.error && !payees.data ? <ErrorState error={payees.error} retry={payees.refetch} /> : !payees.data ? <Skeleton /> : !payees.data.payeeAccounts.length ? <Empty icon="wallet" title="No payment details yet" /> : (
             <Section title="Payment details">
@@ -75,12 +75,13 @@ export default function AdminFees() {
 }
 
 function AddSheet({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const sole = useSoleAdmin();
   const [kind, setKind] = useState<'BANK' | 'UPI'>('BANK');
   const [f, setF] = useState({ label: '', accountName: '', bankName: '', accountNumber: '', ifsc: '', branch: '', upiId: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   return (
-    <Sheet visible title="Add payment details" sub="A different Super Admin must approve them before traders see them." onClose={onClose}>
+    <Sheet visible title="Add payment details" sub={sole ? 'Traders see them as soon as you add them.' : 'A different Super Admin must approve them before traders see them.'} onClose={onClose}>
       <Chips value={kind} onChange={setKind} items={[{ k: 'BANK', label: 'Bank account' }, { k: 'UPI', label: 'UPI ID' }]} />
       <Field label="Name for this (shown to traders)" maxLength={80} value={f.label} onChangeText={(v) => setF({ ...f, label: v })} placeholder={kind === 'BANK' ? 'e.g. HDFC current account' : 'e.g. Company UPI'} />
       <Field label="Account holder name" maxLength={120} value={f.accountName} onChangeText={(v) => setF({ ...f, accountName: v })} />

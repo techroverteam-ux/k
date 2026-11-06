@@ -1,3 +1,4 @@
+import { useSoleAdmin } from '@/sole-admin';
 import { router } from 'expo-router';
 import { View } from 'react-native';
 import { useAuth } from '@/auth';
@@ -10,6 +11,7 @@ import { ErrorState, IconMark, ListRow, Metrics, Notice, Screen, Section, Skelet
 interface O { brokers: number; traders: number; activeTraders: number; pendingAccounts: number; pendingPayments: number; pendingPaymentsAmount: string; openOrders: number; securityEvents24h: number; lastReconciliation?: { ok: boolean } }
 export default function Overview() {
   const t = useTheme();
+  const sole = useSoleAdmin();
   const { me } = useAuth();
   const { data, error, refetch } = useQuery<{ adminOverview: O }>(`{ adminOverview { brokers traders activeTraders pendingAccounts pendingPayments pendingPaymentsAmount openOrders securityEvents24h lastReconciliation { ok } } }`, undefined, 15000, !me?.mfaEnabled);
   const o = data?.adminOverview;
@@ -28,7 +30,7 @@ export default function Overview() {
           </Section>
           <Section title="Tools">
             <ListRow onPress={() => router.push('/admin-fees')} left={<IconMark icon="wallet" tone="brand" />} title="Fees · bank & UPI" sub="Payment details traders pay fees to, and payments to check" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
-            <ListRow onPress={() => router.push('/admin-reset')} left={<IconMark icon="alert" tone="neg" />} title="Data reset" sub="Wipe all trader and broker data (needs a second Super Admin)" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
+            <ListRow onPress={() => router.push('/admin-reset')} left={<IconMark icon="alert" tone="neg" />} title="Data reset" sub={sole ? 'Wipe all trader and broker data (runs immediately)' : 'Wipe all trader and broker data (needs a second Super Admin)'} right={<Icon name="chevronRight" size={18} color={t.text3} />} />
           </Section>
           <View><T v="xs" style={{ textAlign: 'center' }}>Configuration changes and log archives are on the web portal.</T></View>
         </>

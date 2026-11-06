@@ -133,6 +133,7 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
 /* ============================================================== one account */
 type Action = 'approve' | 'suspend' | 'reactivate' | 'broker' | 'password' | 'signout' | 'delete' | 'commission';
 export function AdminUserScreen({ id }: { id: string }) {
+  const sole = useSoleAdmin();
   const t = useTheme();
   const { me } = useAuth();
   const u = useQuery<{ user: UserRow }>(`query($id:ID!){ user(id:$id){ ${USER_FIELDS} } }`, { id });
@@ -168,7 +169,7 @@ export function AdminUserScreen({ id }: { id: string }) {
           {!x.isDemo && <ActionRow icon="key" label="Reset password" sub="Set a temporary password and sign them out" onPress={() => setAct('password')} />}
           <ActionRow icon="device" label="Sign out everywhere" sub="Ends all their sessions" onPress={() => setAct('signout')} />
           {x.role === 'TRADER' && <ActionRow icon="briefcase" label="View trading account" sub="Positions, orders, ledger and fund requests" onPress={() => router.push(`/trader-detail/${x.id}`)} />}
-          {x.role !== 'SUPER_ADMIN' && <ActionRow icon="alert" tone="neg" label="Delete permanently" sub="Erases the account and all its data; a second Super Admin approves" onPress={() => setAct('delete')} />}
+          {x.role !== 'SUPER_ADMIN' && <ActionRow icon="alert" tone="neg" label="Delete permanently" sub={sole ? 'Erases the account and all its data right away' : 'Erases the account and all its data; a second Super Admin approves'} onPress={() => setAct('delete')} />}
         </Section>
       )}
       <UserWipes userId={x.id} />
