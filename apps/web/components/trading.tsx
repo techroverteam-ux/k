@@ -171,6 +171,7 @@ export function useSummary(userId?: string) {
 export function PortfolioSummary({ userId, actions, title = 'Available to trade', compact, detail }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean }) {
   const { data, loading, error, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
+  const showFees = useAuth().me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
   if (compact) {
     if (loading && !data) return <div className="panel bal-card"><div className="skeleton" style={{ width: 120, height: 12 }} /><div className="skeleton" style={{ width: 180, height: 26, marginTop: 8 }} /></div>;
     if (error && !data) return <ErrorState error={error} retry={refetch} />;
@@ -188,7 +189,7 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
           {detail && (
             <div className="bal-meta t3 sm">
               <span>Ledger balance <span className="num w6"><Private>₹{inr(c.balance)}</Private></span></span>
-              <span>Brokerage paid <span className="num">₹{inr(c.fees)}</span></span>
+              {showFees && <span>Brokerage paid <span className="num">₹{inr(c.fees)}</span></span>}
               <span>Positions <span className="num w6">{c.openPositions}</span></span>
               <span>Open orders <span className="num w6">{c.openOrders}</span></span>
             </div>
@@ -232,7 +233,7 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
           { k: 'Ledger balance', v: <Private>₹{inr(s.balance)}</Private> },
           { k: 'Booked P&L', v: inr(s.realizedPnl, { sign: true }), tone: tone(s.realizedPnl) },
           { k: 'Positions · open orders', v: `${s.openPositions} · ${s.openOrders}` },
-          { k: 'Brokerage paid', v: `₹${inr(s.fees)}` },
+          ...(showFees ? [{ k: 'Brokerage paid', v: `₹${inr(s.fees)}` }] : []),
         ]}
       />
       {pay && <PaymentDialog type={pay} userId={userId} onClose={() => setPay(null)} onDone={refetch} available={s.available} />}
@@ -337,7 +338,11 @@ function groupByCategory<T extends { instrument: Instrument }>(items: T[]) {
 }
 
 /** The watchlist: one list, with a search bar on top that finds instruments and adds them in place. */
-export function Watchlist({ compact }: { compact?: boolean }) {
+/**
+ * mode "list" (dashboard / Watchlist page): the trader's scripts with an "Add script" button.
+ * mode "add" (/trader/add-script): full-page search with market filters; add or remove scripts.
+ */
+export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?: 'list' | 'add' }) {
   const { prefs } = usePrefs();
   const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: 0 });
   const { data: countsData } = useQuery<{ instrumentCategoryCounts: { category: string; count: number }[] }>(CAT_COUNTS_Q);
@@ -349,7 +354,8 @@ export function Watchlist({ compact }: { compact?: boolean }) {
   const [lot, setLot] = useState<'' | 'MINI' | 'MEGA'>('');
   const [hits, setHits] = useState<Instrument[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const searching = q.trim().length > 0 || !!cat;
+  const adding = mode === 'add';
+  const searching = adding || q.trim().length > 0 || !!cat;
 
   const categoryCounts = useMemo(() => {
     const map: Record<string, number> = {};
@@ -413,7 +419,14 @@ export function Watchlist({ compact }: { compact?: boolean }) {
   const totalDisplayed = searching ? (hits?.length ?? 0) : entries.length;
 
   return (
-    <section className="panel wl" aria-label="Watchlist">
+    <section className="panel wl" aria-label={adding ? 'Add script' : 'Watchlist'}>
+      {!adding && (
+        <div className="wl-head">
+          <span className="w6">Watchlist <span className="t3 sm num">{entries.length}/50</span></span>
+          <Link className={`btn btn-sm btn-primary${entries.length >= 50 ? ' disabled' : ''}`} aria-disabled={entries.length >= 50} href="/trader/add-script"><Icon name="plus" size={16} />Add script</Link>
+        </div>
+      )}
+      {adding && <>
       <div className="wl-search">
         <div className="input-icon grow">
           <Icon name="search" size={18} />
@@ -422,12 +435,14 @@ export function Watchlist({ compact }: { compact?: boolean }) {
             type="search"
             placeholder="Search and add, e.g. NIFTY, RELIANCE, BTCUSD"
             aria-label="Search instruments to add to your watchlist"
+            autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
           />
         </div>
-        {searching && <button className="btn btn-sm btn-ghost" onClick={() => { setQ(''); setCat(''); setLot(''); }}>Cancel</button>}
+        {(q || cat) && <button className="btn btn-sm btn-ghost" onClick={() => { setQ(''); setCat(''); setLot(''); }}>Clear</button>}
+        <span className="t3 sm num" style={{ whiteSpace: 'nowrap' }}>{entries.length}/50 added</span>
       </div>
       {!compact && (
         <div className="wl-cats">
@@ -456,6 +471,7 @@ export function Watchlist({ compact }: { compact?: boolean }) {
           )}
         </div>
       )}
+      </>}
       {searching ? (
         hits === null ? <SkeletonRows rows={4} pad /> : !hits.length ? (
           <Empty icon="search" title={q.trim() ? `Nothing matches “${q.trim()}”` : 'Nothing listed here yet'}>
@@ -539,7 +555,7 @@ export function Watchlist({ compact }: { compact?: boolean }) {
           </>
         )
       ) : loading && !data ? <SkeletonRows rows={6} pad /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
-        <Empty icon="eye" title="Your watchlist is empty">Search above or click any category to add the instruments you follow.</Empty>
+        <Empty icon="eye" title="Your watchlist is empty" action={<Link className="btn btn-sm btn-primary" href="/trader/add-script"><Icon name="plus" size={16} />Add script</Link>}>Add the scripts you follow and they show up here.</Empty>
       ) : compact ? (
         <div className="list list-pad">
           {entries.map((e) => (
@@ -902,12 +918,14 @@ interface LedgerLine { postingId: string; kind: string; memo: string; amount: st
 const KIND: Record<string, string> = { OPENING_BALANCE: 'Opening balance', DEPOSIT: 'Funds added', WITHDRAWAL: 'Withdrawal', TRADE_PNL: 'Trade P&L', FEE: 'Brokerage', ADJUSTMENT: 'Adjustment', REVERSAL: 'Reversal' };
 export function LedgerTable({ userId }: { userId?: string }) {
   const { data, loading, error, refetch } = useQuery<{ ledgerHistory: LedgerLine[] }>(`query($u:ID){ ledgerHistory(userId:$u, limit:100){ postingId kind memo amount createdAt } }`, { u: userId });
+  const hideFees = useAuth().me?.role === 'TRADER'; // brokerage lines are not shown to traders
   if (loading && !data) return <SkeletonRows />;
   if (error && !data) return <ErrorState error={error} retry={refetch} />;
-  if (!data!.ledgerHistory.length) return <Empty icon="file" title="No transactions yet">Trades, charges and fund movements appear here.</Empty>;
+  const lines = hideFees ? data!.ledgerHistory.filter((l) => l.kind !== 'FEE') : data!.ledgerHistory;
+  if (!lines.length) return <Empty icon="file" title="No transactions yet">Trades, charges and fund movements appear here.</Empty>;
   return (
     <div className="list list-pad">
-      {data!.ledgerHistory.map((l) => (
+      {lines.map((l) => (
         <div key={l.postingId} className="list-row">
           <span className="mark" aria-hidden style={{ background: tone(l.amount) === 'pos' ? 'var(--pos-soft)' : 'var(--bg-3)', color: tone(l.amount) === 'pos' ? 'var(--pos)' : 'var(--text-2)' }}>
             <Icon name={tone(l.amount) === 'pos' ? 'down' : 'up'} size={16} />

@@ -697,6 +697,8 @@ tr.clickable { cursor: pointer; }
 .bal-v { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; }
 .bal-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 2px; }
 .wl { overflow: hidden; }
+.wl-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
+.btn.disabled { opacity: .5; pointer-events: none; }
 .wl-search { display: flex; align-items: center; gap: var(--s2); padding: var(--s3); border-bottom: 1px solid var(--line); }
 .wl-search .input::-webkit-search-cancel-button { display: none; }
 .wl .table-wrap { border: 0; border-radius: 0; }

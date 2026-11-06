@@ -283,7 +283,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
               <T v="sm" c="text2" w="500">Quantity (lots)</T>
               <LotStepper value={qty} onChange={setQty} />
               {qtyErr ? <T v="sm" c="neg">{qtyErr}</T> : null}
-              {r ? <T v="xs" c="text3">{`${i.lotLabel ? `1 lot = ${i.lotLabel}. ` : ''}${i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega' : 'Mini') + ' lot: ' : ''}brokerage ₹${inr((i.lotClass === 'MEGA' ? r.brokeragePerMegaLot : r.brokeragePerLot) ?? '0')} per lot to open and again to cut.`}</T> : null}
+              {i.lotLabel ? <T v="xs" c="text3">{`1 lot = ${i.lotLabel}`}</T> : null}
             </View>
             <View style={{ flex: 1 }}>
               {type === 'MARKET' ? <Field label="Price" editable={false} value="At market" /> : <Field label={type === 'LIMIT' ? 'Limit price' : 'Trigger (LTP)'} prefix="₹" keyboardType="decimal-pad" value={price} onChangeText={(v) => setPrice(v.replace(/[^\d.]/g, ''))} placeholder={q?.ltp} error={priceErr} />}
@@ -336,7 +336,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
       ) : preview && (
         <>
           <Row gap={S[2]}><Badge text={side === 'BUY' ? 'Buy' : 'Sell'} tone={side === 'BUY' ? 'ok' : 'bad'} /><T w="600">{shortSymbol(i.symbol)}</T></Row>
-          <Lines lines={[['Order type', TYPE_LABEL[type]], ['Quantity', n], [type === 'MARKET' ? 'Estimated price' : type === 'LIMIT' ? 'Limit price' : 'Trigger (LTP)', `₹${inr(preview.price)}`], ['Order value', `₹${inr(preview.value)}`], ['Margin required', `₹${inr(preview.intradayMargin)}`], ['Carry-forward margin', `₹${inr(preview.carryForwardMargin)}`], ['Brokerage', `₹${inr(preview.brokerage)}`]]} />
+          <Lines lines={[['Order type', TYPE_LABEL[type]], ['Quantity', n], [type === 'MARKET' ? 'Estimated price' : type === 'LIMIT' ? 'Limit price' : 'Trigger (LTP)', `₹${inr(preview.price)}`], ['Order value', `₹${inr(preview.value)}`], ['Margin required', `₹${inr(preview.intradayMargin)}`], ['Carry-forward margin', `₹${inr(preview.carryForwardMargin)}`]]} />
           {type === 'MARKET' && <Notice>Market orders execute at the best simulated price, which can differ slightly from the estimate.</Notice>}
           {isTrig(type) && <Notice>When triggered, this order is filled at the last traded price, which can be worse than your trigger in a fast market.</Notice>}
           {err && <Notice tone="err">{err}</Notice>}

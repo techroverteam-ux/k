@@ -75,9 +75,6 @@ function StockPage() {
                 {focus ? 'Show order panel' : 'Focus chart'}
               </button>
             </div>
-            <a className="btn btn-sm" href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${i.exchange}:${shortSymbol(i.symbol)}1!`)}`} target="_blank" rel="noopener noreferrer" title="Opens TradingView in a new tab. Its prices are real market data and will differ from this simulated feed.">
-              <Icon name="external" size={16} />TradingView
-            </a>
           </div>
           <div>
             <div className="num" style={{ fontSize: 32, fontWeight: 600, letterSpacing: '-0.02em' }} aria-live="polite">{curSign(i)}{inr(q?.ltp)}</div>
@@ -346,12 +343,7 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
             <button type="button" aria-label="Increase quantity" onClick={() => setQty(String((n || 0) + 1))}>+</button>
           </div>
           {qtyErr && <span className="err">{qtyErr}</span>}
-          {r && (
-            <span className="t3 xs">
-              {i.lotLabel ? `1 lot = ${i.lotLabel}${n > 1 ? ` · ${n} lots` : ''}. ` : ''}
-              {i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega lot' : 'Mini lot') + ': ' : ''}brokerage ₹{inr((i.lotClass === 'MEGA' ? r.brokeragePerMegaLot : r.brokeragePerLot) ?? '0')} per lot to open and again to cut.
-            </span>
-          )}
+          {i.lotLabel && <span className="t3 xs">1 lot = {i.lotLabel}{n > 1 ? ` · ${n} lots` : ''}</span>}
           {r && (
             <div className="qty-chips" id="qty-limits">
               <button type="button" className="badge" title="Maximum quantity in one order" onClick={() => setQty(String(r.maxQtyPerOrder))}>Punch qty: {r.maxQtyPerOrder}</button>
@@ -390,7 +382,6 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
         <div className="kv"><span className="k">Order value</span><span className="num">{preview ? `₹${inr(preview.value)}` : '—'}</span></div>
         <div className="kv"><span className="k">Intraday margin</span><span className="num w6">{preview ? `₹${inr(preview.intradayMargin)}` : '—'}</span></div>
         <div className="kv"><span className="k">C/F margin</span><span className="num">{preview ? `₹${inr(preview.carryForwardMargin)}` : '—'}</span></div>
-        <div className="kv"><span className="k">Est. brokerage</span><span className="num">{preview ? `₹${inr(preview.brokerage)}` : '—'}</span></div>
         <div className="kv"><span className="k">Available</span><span className="num"><Private>{available ? `₹${inr(available)}` : '—'}</Private></span></div>
         {short && <div className="notice warn"><Icon name="info" size={16} />Not enough available balance for this order.</div>}
         {closed && <div className="notice warn"><Icon name="info" size={16} />{session!.message} Orders placed now will be rejected.</div>}
@@ -410,7 +401,6 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
             ['Order value', `₹${inr(preview.value)}`],
             ['Margin required', `₹${inr(preview.intradayMargin)}`],
             ['Carry-forward margin', `₹${inr(preview.carryForwardMargin)}`],
-            ['Brokerage', `₹${inr(preview.brokerage)}`],
           ]}
           warning={type === 'MARKET' ? 'Market orders execute at the best available simulated price, which can differ slightly from the estimate.' : isTrig(type) ? 'When triggered, this order is filled at the last traded price, which can be worse than your trigger in a fast market.' : undefined}
           confirmLabel={`Confirm ${side === 'BUY' ? 'buy' : 'sell'}`}

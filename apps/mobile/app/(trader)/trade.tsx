@@ -42,7 +42,6 @@ export default function Funds() {
         {s.error && !d ? <ErrorState error={s.error} retry={s.refetch} /> : (
           <Metrics items={[
             { k: 'Realised P&L', v: d ? inr(d.realizedPnl, true) : '…', tone: toneOfValue(d?.realizedPnl) },
-            { k: 'Brokerage', v: d ? `₹${inr(d.brokerage)}` : '…' },
             { k: 'Trades', v: d?.trades ?? '…' },
             { k: 'Turnover', v: d ? `₹${inr(d.volume)}` : '…' },
           ]} />

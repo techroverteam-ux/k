@@ -1,7 +1,7 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
 import { useSoleAdmin } from './sole-admin';
 import { DemoDepositDetails } from './demo-deposit';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
@@ -102,9 +102,9 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; q
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
       <Pressable onPress={() => router.push(`/instrument/${i.id}`)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}, open chart`} style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Row gap={6}><T w="700" numberOfLines={1} style={{ flexShrink: 1 }}>{sym}</T>{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}</Row>
-        <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
-        <T v="xs" numberOfLines={1}>{expiryTime(i.expiry, qq?.ts)}</T>
+        <T w="700" numberOfLines={1}>{sym}</T>
+        <Row gap={6} style={{ flexWrap: 'wrap' }}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
+        <Row gap={6}>{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}<T v="xs" numberOfLines={1} style={{ flexShrink: 1 }}>{expiryTime(i.expiry, qq?.ts)}</T></Row>
       </Pressable>
       <BidAsk id={i.id} qq={qq} />
       <IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />
@@ -113,7 +113,7 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; q
 });
 
 /** Search every instrument; tap to open its chart, + to add it to Watchlist 1. */
-export function SearchView() {
+export function SearchView({ addMode }: { addMode?: boolean } = {}) {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<Cat>('');
   const [lot, setLot] = useState<Lot>('');
@@ -134,7 +134,8 @@ export function SearchView() {
     catch (e) { toast((e as Error).message, true); }
   }, []);
   return (
-    <Screen back title="Search" scroll={false}>
+    <Screen back title={addMode ? 'Add script' : 'Search'} scroll={false}
+      right={addMode ? <Button size="sm" kind="primary" title="Done" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} /> : undefined}>
       <VList data={res ?? []} keyOf={(i) => i.id}
         header={<View style={{ gap: S[3] }}><SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. GOLDM, RELIANCE" autoFocus /><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
         empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={q ? `No instruments match “${q}”` : 'Nothing listed here yet'}>{q ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>}
@@ -187,6 +188,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
   const { data, error, loading, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const priv = usePrivate();
+  const showFees = useAuth().me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
   const s = data?.accountSummary;
   if (loading && !s) return <Skeleton rows={2} />;
   if (error && !s) return <ErrorState error={error} retry={refetch} />;
@@ -205,7 +207,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
           {detail && (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: S[3], rowGap: 2 }}>
               <T v="xs" c="text2">Ledger <T v="xs" w="600">{priv(`₹${inr(s?.balance)}`)}</T></T>
-              <T v="xs" c="text2">Brokerage paid <T v="xs" w="600">₹{inr(s?.fees)}</T></T>
+              {showFees && <T v="xs" c="text2">Brokerage paid <T v="xs" w="600">₹{inr(s?.fees)}</T></T>}
               <T v="xs" c="text2">Positions <T v="xs" w="600">{s?.openPositions ?? 0}</T></T>
               <T v="xs" c="text2">Open orders <T v="xs" w="600">{s?.openOrders ?? 0}</T></T>
             </View>
@@ -239,7 +241,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
         { k: 'Ledger balance', v: priv(`₹${inr(s?.balance)}`) },
         { k: 'Booked P&L', v: inr(s?.realizedPnl, true), tone: toneOfValue(s?.realizedPnl) },
         { k: 'Positions · orders', v: `${s?.openPositions ?? 0} · ${s?.openOrders ?? 0}` },
-        { k: 'Brokerage paid', v: `₹${inr(s?.fees)}` },
+        ...(showFees ? [{ k: 'Brokerage paid', v: `₹${inr(s?.fees)}` }] : []),
       ]} />
       {pay && <PaymentSheet type={pay} userId={userId} available={s?.available} onClose={() => { setPay(null); void refetch(); }} />}
     </View>
@@ -346,24 +348,12 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   const { prefs } = usePrefs();
   const detailed = !limit && prefs.watchlistView === 'detailed';
   const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: 0 });
+  // Coming back from "Add script": reload so the scripts just added show up.
+  const seen = useRef(false);
+  useFocusEffect(useCallback(() => { if (seen.current) void refetch(); seen.current = true; }, [refetch]));
   const entries = useMemo(() => (data?.watchlist ?? []).slice(0, limit ?? 100), [data, limit]);
-  const [query, setQuery] = useState('');
-  const [cat, setCat] = useState<Cat>('');
-  const [lot, setLot] = useState<Lot>('');
-  const [hits, setHits] = useState<Inst[] | null>(null);
-  const searching = query.trim().length > 0 || !!cat;
-  useEffect(() => {
-    if (!searching) { setHits(null); return; }
-    setHits(null);
-    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ ${INST_FIELDS} } }`, { q: query.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }).then((d) => setHits(d.searchInstruments)).catch(() => setHits([])), 200);
-    return () => clearTimeout(h);
-  }, [query, cat, lot, searching]);
-  const q = useLiveQuotes(searching ? (hits ?? []).map((i) => i.id) : entries.map((e) => e.instrument.id));
-  const inList = useMemo(() => new Set((data?.watchlist ?? []).map((e) => e.instrument.id)), [data]);
-  const onAdd = useCallback(async (i: Inst) => {
-    try { await gql(`mutation($l:Int!,$i:ID!){ addToWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: i.id }); tap(); toast(`${shortSymbol(i.symbol)} added`); void refetch(); }
-    catch (e) { toast((e as Error).message, true); }
-  }, [refetch]);
+  const count = (data?.watchlist ?? []).length;
+  const q = useLiveQuotes(entries.map((e) => e.instrument.id));
   const [removing, setRemoving] = useState<WEntry | null>(null);
   const [quick, setQuick] = useState<{ id: string; side?: 'BUY' | 'SELL' } | null>(null);
   const onOpen = useCallback((id: string, side?: 'BUY' | 'SELL') => setQuick({ id, side }), []);
@@ -373,20 +363,19 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
     try { await gql(`mutation($l:Int!,$i:ID!){ removeFromWatchlist(listIndex:$l, instrumentId:$i) }`, { l: 0, i: e.instrument.id }); toast(`${shortSymbol(e.instrument.symbol)} removed`); } catch (err) { toast((err as Error).message, true); }
     void refetch();
   };
+  const addScript = () => router.push('/search?mode=add' as never);
   const top = (
     <>
       {header}
-      <View>
-        <SearchBox value={query} onChangeText={setQuery} placeholder="Search & Add" />
-        <View pointerEvents="none" style={{ position: 'absolute', right: S[4], top: 0, bottom: 0, justifyContent: 'center' }}><T v="sm" c="text2">{(data?.watchlist ?? []).length}/50</T></View>
-      </View>
-      {!limit && <View style={{ marginTop: S[2] }}><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
+      <Spread style={{ alignItems: 'center', marginBottom: S[1] }}>
+        <T w="600">Watchlist <T v="sm" c="text2">{count}/50</T></T>
+        <Button size="sm" kind="primary" icon="plus" title="Add script" disabled={count >= 50} onPress={addScript} />
+      </Spread>
     </>
   );
-  const state = searching
-    ? (hits === null ? <Skeleton rows={4} /> : <Empty icon="search" title={query.trim() ? `Nothing matches “${query.trim()}”` : 'Nothing listed here yet'}>{query.trim() ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>)
-    : loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="eye" title="Your watchlist is empty">Search above to add the instruments you follow.</Empty>;
-  const hint = !searching && entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a row or a price to trade. Swipe a row left to remove it.' : 'Tap a row to trade. Swipe a row left to remove it.'}</T> : null;
+  const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} />
+    : <Empty icon="eye" title="Your watchlist is empty" action={<Button size="sm" kind="primary" icon="plus" title="Add script" onPress={addScript} />}>Tap Add script to pick the instruments you follow.</Empty>;
+  const hint = entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a row or a price to trade. Swipe a row left to remove it.' : 'Tap a row to trade. Swipe a row left to remove it.'}</T> : null;
   const sheet = (
     <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
       <Row>
@@ -395,15 +384,6 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
       </Row>
     </Sheet>
   );
-  if (searching) {
-    return (
-      <>
-        <VList data={hits ?? []} keyOf={(i) => i.id} header={top} empty={state}
-          render={(i) => <SearchRow i={i} qq={q[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
-        {sheet}
-      </>
-    );
-  }
   return (
     <>
       <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
@@ -505,7 +485,8 @@ const LedgerRow = memo(function LedgerRow({ x }: { x: Led }) {
 });
 export function LedgerList({ userId, virtual }: { userId?: string; virtual?: boolean }) {
   const { data, error, loading, refetch } = useQuery<{ ledgerHistory: Led[] }>(`query($u:ID){ ledgerHistory(userId:$u, limit:200){ postingId kind memo amount createdAt } }`, { u: userId });
-  const list = data?.ledgerHistory ?? [];
+  const hideFees = useAuth().me?.role === 'TRADER'; // brokerage lines are not shown to traders
+  const list = (data?.ledgerHistory ?? []).filter((x) => !hideFees || x.kind !== 'FEE');
   const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} /> : <Empty icon="file" title="No transactions yet">Trades, charges and fund movements appear here.</Empty>;
   if (virtual) return <VList data={list} keyOf={(x) => x.postingId} empty={state} render={(x) => <LedgerRow x={x} />} />;
   if (!list.length) return state;
@@ -568,7 +549,6 @@ export function ProfileView() {
         <Item icon="lock" label="Login history" sub="Sign-ins and failed attempts, and the rules you accepted" onPress={() => router.push('/logins')} />
         <Item icon="activity" label="Account activity" sub="Every action with time, IP and device" onPress={() => router.push('/activity')} />
         {me?.role === 'TRADER' && <>
-          <Item icon="activity" label="Algo trading" sub="Strategies, backtests and automated paper trades" onPress={() => router.push('/algo')} />
           <Item icon="file" label="Ledger history" sub="Every credit and debit on your account" onPress={() => router.push('/ledger')} />
           <Item icon="alert" label="Rejection logs" sub="Rejected and cancelled orders, with the reason" onPress={() => router.push('/rejections')} />
           <Item icon="download" label="Bill download" sub="Statement PDF by week or custom dates" onPress={() => router.push('/statement')} />
@@ -818,13 +798,21 @@ function Preferences() {
 }
 
 /* ====================================================================== announcement ticker */
+/** Same fallback as the web ticker (apps/web/components/Shell.tsx). */
+const DEFAULT_MARKET_MESSAGES = [
+  'NSE (Indian Equities): 09:15 – 15:30 IST (Mon–Fri)',
+  'MCX (Commodities): 09:00 – 23:30 IST (Mon–Fri)',
+  'US Markets (NASDAQ / NYSE): 20:00 – 02:30 IST (09:30 – 16:00 EST)',
+  'Crypto: 24/7 Live Trading',
+];
 export function Ticker() {
   const t = useTheme();
   const { settings } = useAuth();
   const [now, setNow] = useState(new Date());
   const active = useActive();
   useEffect(() => { if (!active) return; setNow(new Date()); const h = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(h); }, [active]);
-  const msgs = (settings?.tickerMessages ?? []).filter(Boolean);
+  const clean = (settings?.tickerMessages ?? []).filter((m) => m && !m.includes('simulated and never sent'));
+  const msgs = clean.length > 0 ? clean : DEFAULT_MARKET_MESSAGES;
   const text = msgs.join('   •   ');
   return (
     <Row gap={S[2]} style={{ backgroundColor: t.bg2, borderRadius: R.md, paddingHorizontal: S[3], height: 34, overflow: 'hidden' }}>

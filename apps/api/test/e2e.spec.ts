@@ -609,8 +609,12 @@ describe('stop-loss / take-profit orders', () => {
     expect(code(noTrig)).toBe('BAD_USER_INPUT');
     const limitWithTrig = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'LIMIT', quantity: 1, limitPrice: '2400.00', triggerPrice: '2400.00', idempotencyKey: randomUUID() } }, { token: t.accessToken });
     expect(code(limitWithTrig)).toBe('BAD_USER_INPUT');
-    // a SELL stop-loss above the current LTP would fire immediately → rejected with a reason
-    const hit = await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'STOP_LOSS', quantity: 1, triggerPrice: '2600.00', idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    // selling with no open buy position is blocked
+    const naked = await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'STOP_LOSS', quantity: 1, triggerPrice: '2400.00', idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    expect(naked.data.placeOrder.status).toBe('REJECTED');
+    expect(naked.data.placeOrder.rejectReason).toMatch(/Cannot sell without holding/);
+    // a BUY stop-loss below the current LTP would fire immediately → rejected with a reason
+    const hit = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'STOP_LOSS', quantity: 1, triggerPrice: '2400.00', idempotencyKey: randomUUID() } }, { token: t.accessToken });
     expect(hit.data.placeOrder.status).toBe('REJECTED');
     expect(hit.data.placeOrder.rejectReason).toMatch(/already reached/);
   });
@@ -641,7 +645,7 @@ describe('stop-loss / take-profit orders', () => {
     const r = await gql(`{ tradingRules { minQty maxQtyPerOrder maxQtyPerInstrument sessions { exchange open close } } }`, {}, { token: t.accessToken });
     expect(r.data.tradingRules).toMatchObject({ minQty: 1, maxQtyPerInstrument: 150 });
     expect(r.data.tradingRules.maxQtyPerOrder).toBeGreaterThan(0); // changed earlier by the config maker-checker test
-    expect(r.data.tradingRules.sessions).toEqual(expect.arrayContaining([{ exchange: 'NSE', open: '09:17', close: '15:30' }, { exchange: 'MCX', open: '09:02', close: '23:30' }]));
+    expect(r.data.tradingRules.sessions).toEqual(expect.arrayContaining([{ exchange: 'NSE', open: '09:15', close: '15:30' }, { exchange: 'MCX', open: '09:00', close: '23:30' }]));
   });
 });
 

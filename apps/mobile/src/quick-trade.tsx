@@ -111,7 +111,7 @@ export function QuickTradeSheet({ instrumentId, initialSide, initialQty, onClose
         <View style={{ flex: 1 }}><Button block size="lg" kind="sell" title="SELL" busy={busy === 'SELL'} disabled={!i || !q || !!qtyErr || !!priceErr || !!busy} onPress={() => void place('SELL')} /></View>
         <View style={{ flex: 1 }}><Button block size="lg" kind="buy" title="BUY" busy={busy === 'BUY'} disabled={!i || !q || !!qtyErr || !!priceErr || !!busy} onPress={() => void place('BUY')} /></View>
       </Row>
-      <T v="xs" c="text3">Simulated order. Brokerage ₹{inr((i?.lotClass === 'MEGA' ? r?.brokeragePerMegaLot : r?.brokeragePerLot) ?? '0')} per lot to open and again to cut.</T>
+      <T v="xs" c="text3">Simulated order. Never sent to an exchange.</T>
 
       <Row gap={S[2]}>
         <View style={{ flex: 1 }}><Button block size="sm" icon="trend" title="Chart" onPress={() => go(`/instrument/${instrumentId}?view=chart`)} /></View>
@@ -238,7 +238,6 @@ function TradeDetail({ o, onClose, onRepeat, onCancelled }: { o: Trade; onClose:
     ['Deals (P&L)', o.realizedPnl ? `₹${inr(o.realizedPnl, true)}` : '—'],
     ['Quantity', `${o.quantity} lot${o.quantity > 1 ? 's' : ''}`],
     ['Price', o.fillPrice ? `₹${inr(o.fillPrice)}` : '—'],
-    ['Brokerage', o.brokerage ? `₹${inr(o.brokerage)}` : '—'],
     ['Ref price', `₹${inr(o.limitPrice ?? o.triggerPrice ?? o.fillPrice)}`],
     ...(o.heldSeconds !== undefined ? [['Held for', heldText(o.heldSeconds)] as [string, string]] : []),
     ['Status', o.status === 'FILLED' ? 'Executed' : o.status.charAt(0) + o.status.slice(1).toLowerCase()],

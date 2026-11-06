@@ -191,12 +191,14 @@ export class StatementService {
       kv('Trades', String(d.fills.length), 360, y);
       y += 40;
 
+      // Brokerage is not shown to traders (the balance still includes it); staff downloads show it.
+      const hideFees = c.role === 'TRADER';
       // summary
       const sumRows: [string, bigint][] = [
         ['Funds added', d.totals.deposits],
         ['Funds withdrawn', -d.totals.withdrawals],
         ['Booked P&L', d.totals.pnl],
-        ['Brokerage', -d.totals.fees],
+        ...(hideFees ? [] : [['Brokerage', -d.totals.fees] as [string, bigint]]),
         ['Adjustments', d.totals.other],
       ];
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#111').text('Summary', 40, y);
@@ -249,10 +251,12 @@ export class StatementService {
       };
 
       let bal = d.opening;
-      const ledgerRows = d.lines.map((l) => {
+      const ledgerRows: string[][] = [];
+      for (const l of d.lines) {
         bal += l.amount;
-        return [fmtIst(l.at), l.memo, l.amount < 0n ? amt(-l.amount) : '', l.amount > 0n ? amt(l.amount) : '', amt(bal)];
-      });
+        if (hideFees && l.kind === 'FEE') continue;
+        ledgerRows.push([fmtIst(l.at), l.memo, l.amount < 0n ? amt(-l.amount) : '', l.amount > 0n ? amt(l.amount) : '', amt(bal)]);
+      }
       table(
         'Ledger',
         [{ h: 'Date & time', w: 80 }, { h: 'Description', w: 195 }, { h: 'Debit', w: 80, r: true }, { h: 'Credit', w: 80, r: true }, { h: 'Balance', w: W - 435, r: true }],

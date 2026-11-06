@@ -125,7 +125,6 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
                 <div className="divider" />
                 <Link role="menuitem" href="/account"><Icon name="shield" size={18} />Profile & security</Link>
                 <Link role="menuitem" href="/notifications"><Icon name="bell" size={18} />Notifications</Link>
-                {me.role === 'TRADER' && <Link role="menuitem" href="/trader/algo"><Icon name="activity" size={18} />Algo trading</Link>}
                 {settings?.helplineUrl && <a role="menuitem" href={settings.helplineUrl} target="_blank" rel="noopener noreferrer"><Icon name="info" size={18} />Contact support</a>}
                 <div className="divider" style={{ margin: '4px 0' }} />
                 <button role="menuitem" className="neg" onClick={() => void signOut()}><Icon name="logout" size={18} />Sign out</button>
