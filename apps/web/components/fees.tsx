@@ -56,7 +56,7 @@ export function PayFees() {
   return (
     <section className="section">
       <SectionHead title="Pay fees" />
-      <p className="t2 sm" style={{ margin: 0 }}>Course and subscription fees are paid in real money to the account below. Pay, then tap <b>I’ve paid</b> and attach the payment screenshot. Fees don’t change your virtual trading balance.</p>
+      <p className="t2 sm" style={{ margin: 0 }}>Course and subscription fees are paid to the account below. Pay, then tap <b>I’ve paid</b> and attach the payment screenshot.</p>
       {payees.error && !payees.data ? <ErrorState error={payees.error} retry={payees.refetch} /> : (
         <div className="fee-grid">
           {list.map((p) => (

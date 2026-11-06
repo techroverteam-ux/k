@@ -334,7 +334,7 @@ export function CommissionsScreen() {
   const shift = (n: number) => setM((c) => { const d = new Date(c.y, c.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   return (
     <Screen back title="Commissions">
-      <T v="sm" c="text2">You earn a fixed amount for every lot your traders open or cut. These figures are simulated.</T>
+      <T v="sm" c="text2">You earn a fixed amount for every lot your traders open or cut.</T>
       <Spread>
         <Pressable onPress={() => shift(-1)} accessibilityRole="button" accessibilityLabel="Previous month" hitSlop={8} style={{ padding: S[2] }}><Icon name="chevronLeft" size={20} color={t.text} /></Pressable>
         <T v="h3">{label}</T>

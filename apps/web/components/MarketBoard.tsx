@@ -225,8 +225,6 @@ export function MarketBoard({ variant = 'full' }: { variant?: 'full' | 'strip' |
           })}
         </tbody>
       </table>
-
-      <p className="mb-foot">Prices from the platform’s simulated feed, for practice.</p>
     </div>
   );
 }

@@ -50,7 +50,7 @@ export function AlgoListScreen() {
   const running = list.filter((s) => s.status === 'RUNNING');
   const header = (
     <>
-      <T v="sm" c="text2">Rules that trade the simulated feed for you, with the same checks as your own orders. Paper trading only.</T>
+      <T v="sm" c="text2">Rules that trade for you, with the same checks as your own orders.</T>
       <Row>
         <Button block kind="primary" icon="plus" title="New strategy" onPress={() => router.push('/algo/new')} />
         {running.length > 0 && <Button block kind="sell" icon="alert" title={`Stop all (${running.length})`} onPress={() => setAsk(true)} />}
@@ -283,12 +283,12 @@ function Controls({ s, onChange }: { s: Strategy; onChange: () => void }) {
       {s.status === 'RUNNING'
         ? <Button kind="sell" size="lg" title="Stop strategy" onPress={() => { setErr(null); setAsk('stop'); }} />
         : <Row><Button block kind="buy" size="lg" icon="activity" title="Start" onPress={() => { setErr(null); setAsk('start'); }} /><Button title="Delete" kind="danger" size="lg" onPress={() => { setErr(null); setAsk('delete'); }} /></Row>}
-      <Sheet visible={ask === 'start'} title={`Start “${s.name}”?`} sub="Paper trading on the simulated feed" onClose={() => setAsk(null)}>
+      <Sheet visible={ask === 'start'} title={`Start “${s.name}”?`} sub="Automated trading rule" onClose={() => setAsk(null)}>
         <Lines lines={[
           ['Each trade', `${rules.side === 'LONG' ? 'Buy' : 'Sell'} ${s.quantity} at market`], ['Stop-loss / take-profit', `${rules.stopLossPct ?? '—'}% / ${rules.takeProfitPct ?? '—'}%`],
           ['Stops for the day after losing', `₹${inr(s.maxDailyLoss)}`], ['Max orders per day', s.maxOrdersPerDay],
         ]} />
-        <Notice tone="warn">Orders are simulated and use your virtual balance, with the same checks as your own orders.</Notice>
+        <Notice tone="warn">Orders will be executed automatically with the same checks as your own orders.</Notice>
         {err && <Notice tone="err">{err}</Notice>}
         <Row><Button block title="Cancel" onPress={() => setAsk(null)} /><Button block kind="buy" title="Start strategy" busy={busy} onPress={act} /></Row>
       </Sheet>
@@ -346,7 +346,7 @@ function Backtest({ s }: { s: Strategy }) {
                 right={<T v="num" c={t.pnl > 0 ? 'pos' : 'neg'}>{rupees(t.pnl, true)}</T>} />
             ))}
           </Section>
-          <T v="xs">Simulated history; past performance doesn’t guarantee future results.</T>
+          <T v="xs">Past performance doesn’t guarantee future results.</T>
         </>
       )}
     </View>

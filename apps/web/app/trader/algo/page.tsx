@@ -35,7 +35,7 @@ export default function AlgoHome() {
 
   return (
     <>
-      <PageHead title="Automated trading" sub="Build rules, test them on past candles, then let them trade the simulated feed for you.">
+      <PageHead title="Automated trading" sub="Build rules, test them on past candles, then let them trade for you.">
         {running.length > 0 && <button className="btn btn-sell" onClick={() => setConfirmAll(true)}><Icon name="alert" size={16} />Stop all ({running.length})</button>}
         <Link className="btn btn-primary" href="/trader/algo/new"><Icon name="plus" size={16} />New strategy</Link>
       </PageHead>
@@ -80,8 +80,6 @@ export default function AlgoHome() {
               ))}
             </div>
           </section>
-
-          <p className="t3 sm">Paper trading only: strategies place simulated orders on your virtual balance, with the same limits, margin and market-hours checks as your manual orders. Past results don’t predict future ones.</p>
         </div>
       )}
 

@@ -23,7 +23,7 @@ export function DemoDepositDetails() {
   const [err, setErr] = useState<string | null>(null);
   return (
     <div className="demo-pay">
-      <div className="notice warn"><Icon name="info" size={16} />Demo preview: sample details, not a real account. Don’t send money. Practice funds are added when a Super Admin approves.</div>
+      <div className="notice warn"><Icon name="info" size={16} />Demo preview: sample details, not a real account. Don’t send money. Funds are added when an administrator approves.</div>
       <div className="demo-pay-row">
         <div className="demo-qr" role="img" aria-label="Demo QR placeholder, not scannable"><b>DEMO QR</b><small>not scannable</small></div>
         <dl className="demo-bank">

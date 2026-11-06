@@ -177,7 +177,7 @@ export default function Login() {
     conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
     signin: 'Sign in with the username from your broker or administrator.',
     mfa: 'Enter the 6-digit code from your authenticator app.',
-    phone: 'Enter your mobile number. We’ll text a one-time code and open a demo account with a virtual balance.',
+    phone: 'Enter your mobile number. We’ll text a one-time code to get started.',
     otp: `Enter the code sent to ${sentTo}.`,
     forgot: 'We’ll text a code to the mobile number on your account.',
     reset: info ?? '',
@@ -303,7 +303,6 @@ export default function Login() {
               </div>
               {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
               <button className="btn btn-primary btn-lg btn-block" disabled={busy || phone.length !== 10}>{busy ? <><span className="spin" aria-hidden />Sending…</> : 'Send code'}</button>
-              <p className="t3" style={{ textAlign: 'center' }}>Demo accounts use virtual money for practice only.</p>
             </form>
           )}
 

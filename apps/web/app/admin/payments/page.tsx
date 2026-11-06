@@ -42,7 +42,7 @@ export default function Transactions() {
               <tbody>{rows.map((p) => (
                 <tr key={p.id}>
                   <td className="lead w6">{p.username}</td>
-                  <td data-label="Type">{p.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}{p.mode === 'SIMULATED' && <span className="sub" style={{ display: 'block' }}>Virtual funds</span>}</td>
+                  <td data-label="Type">{p.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}</td>
                   <td className="r num w6" data-label="Amount">₹{inr(p.amount)}</td>
                   <td data-label="Status"><Status value={p.status} />{p.reviewNote && <span className="sub" style={{ display: 'block' }}>{p.reviewNote}</span>}</td>
                   <td className="t2 sm num hide-sm">{when(p.createdAt)}</td>
@@ -63,7 +63,7 @@ export default function Transactions() {
       {approve && (
         <Confirm title={`Approve ${approve.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'}?`} sub="You’ll be asked to confirm with your authenticator code."
           lines={[['Account', approve.username ?? ''], ['Type', approve.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'], ['Amount', `₹${inr(approve.amount)}`], ['Requested', when(approve.createdAt)]]}
-          warning={approve.mode === 'SIMULATED' ? 'This changes a virtual balance only. No money moves.' : undefined}
+          warning={undefined}
           confirmLabel="Approve and post" pending={busy} error={err} onClose={() => setApprove(null)}
           onConfirm={() => act(`mutation($id:ID!){ approvePayment(id:$id){ id status } }`, { id: approve.id }, 'Approved and posted to the ledger')} />
       )}

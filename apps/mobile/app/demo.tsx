@@ -60,7 +60,6 @@ export default function Demo() {
               <Button kind="ghost" title={wait ? `Resend code in ${wait}s` : 'Resend code'} disabled={!!wait || busy} onPress={send} />
             </>
           )}
-          <T v="xs" style={{ textAlign: 'center' }}>Demo accounts use virtual money for practice only.</T>
           </>}
         </ScrollView>
       </KeyboardAvoidingView>

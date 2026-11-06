@@ -111,7 +111,6 @@ export function QuickTradeSheet({ instrumentId, initialSide, initialQty, onClose
         <View style={{ flex: 1 }}><Button block size="lg" kind="sell" title="SELL" busy={busy === 'SELL'} disabled={!i || !q || !!qtyErr || !!priceErr || !!busy} onPress={() => void place('SELL')} /></View>
         <View style={{ flex: 1 }}><Button block size="lg" kind="buy" title="BUY" busy={busy === 'BUY'} disabled={!i || !q || !!qtyErr || !!priceErr || !!busy} onPress={() => void place('BUY')} /></View>
       </Row>
-      <T v="xs" c="text3">Simulated order. Never sent to an exchange.</T>
 
       <Row gap={S[2]}>
         <View style={{ flex: 1 }}><Button block size="sm" icon="trend" title="Chart" onPress={() => go(`/instrument/${instrumentId}?view=chart`)} /></View>

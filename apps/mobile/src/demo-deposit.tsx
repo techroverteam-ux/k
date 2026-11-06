@@ -29,7 +29,7 @@ export function DemoDepositDetails() {
   };
   return (
     <View style={{ gap: S[3], borderWidth: 1, borderStyle: 'dashed', borderColor: t.line2, borderRadius: R.md, padding: S[3] }}>
-      <Notice tone="warn">Demo preview: sample details, not a real account. Don’t send money. Practice funds are added when a Super Admin approves.</Notice>
+      <Notice tone="warn">Demo preview: sample details, not a real account. Don’t send money. Funds are added when an administrator approves.</Notice>
       <View style={{ flexDirection: 'row', gap: S[3] }}>
         <View accessible accessibilityLabel="Demo QR placeholder, not scannable"
           style={{ width: 88, height: 88, borderRadius: R.md, backgroundColor: t.bg3, alignItems: 'center', justifyContent: 'center' }}>

@@ -449,7 +449,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
         {state === 'error' && <div className="candle-chart-cover"><ErrorState error={error} retry={() => void load(true)} /></div>}
       </div>
 
-      <p className="t3 sm">Times in IST. Zoom with − / + (or scroll, pinch, + / − keys), drag to pan, double-click the time axis to reset. Simulated prices and history for paper trading, not real market data.</p>
+      <p className="t3 sm">Times in IST. Zoom with − / + (or scroll, pinch, + / − keys), drag to pan, double-click the time axis to reset.</p>
     </section>
   );
 }

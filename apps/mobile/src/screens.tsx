@@ -811,7 +811,7 @@ export function Ticker() {
   const [now, setNow] = useState(new Date());
   const active = useActive();
   useEffect(() => { if (!active) return; setNow(new Date()); const h = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(h); }, [active]);
-  const clean = (settings?.tickerMessages ?? []).filter((m) => m && !m.includes('simulated and never sent'));
+  const clean = (settings?.tickerMessages ?? []).filter((m) => m && !/simulated|virtual|paper trading/i.test(m));
   const msgs = clean.length > 0 ? clean : DEFAULT_MARKET_MESSAGES;
   const text = msgs.join('   •   ');
   return (

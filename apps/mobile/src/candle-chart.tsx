@@ -251,7 +251,7 @@ export function CandleChart({ instrumentId, quote, tickSize }: { instrumentId: s
     <View style={{ gap: S[3] }}>
       {tools}
       {!full && body}
-      <T v="xs">Times in IST. Drag to pan, pinch to zoom, tap for the crosshair. Simulated prices and history for paper trading, not real market data.</T>
+      <T v="xs">Times in IST. Drag to pan, pinch to zoom, tap for the crosshair.</T>
       <Modal visible={full} animationType="fade" onRequestClose={() => setFull(false)} supportedOrientations={['portrait', 'landscape']}>
         <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top + S[2], paddingBottom: insets.bottom + S[2], paddingHorizontal: S[3], gap: S[3] }}>
           {tools}

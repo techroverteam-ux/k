@@ -21,7 +21,7 @@ export default function Fees() {
   const Line = ({ k, v }: { k: string; v?: string }) => (v ? <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: S[3], paddingVertical: 6 }}><T c="text2">{k}</T><T w="600" selectable style={{ flexShrink: 1, textAlign: 'right' }}>{v}</T></View> : null);
   return (
     <Screen back title="Pay fees">
-      <T c="text2">Course and subscription fees are paid in real money to the account below. Pay, then tap “I’ve paid” and attach the payment screenshot. Fees don’t change your virtual trading balance. Long-press a detail to copy it.</T>
+      <T c="text2">Course and subscription fees are paid to the account below. Pay, then tap “I’ve paid” and attach the payment screenshot. Long-press a detail to copy it.</T>
       {payees.error && !payees.data ? <ErrorState error={payees.error} retry={payees.refetch} /> : !payees.data ? <Skeleton /> : !list.length ? <Empty icon="wallet" title="No payment details yet">Your administrator hasn’t added them yet.</Empty> : list.map((p) => (
         <View key={p.id} style={{ borderWidth: 1, borderColor: t.line, borderRadius: 16, padding: S[4], gap: S[2] }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><T w="700">{p.label}</T><Badge text={p.kind === 'UPI' ? 'UPI' : 'Bank transfer'} /></View>

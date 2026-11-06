@@ -820,7 +820,6 @@ export function Movers() {
           })}
         </div>
       )}
-      <p className="t3">Simulated prices for practice. Change is measured against the previous simulated close.</p>
     </section>
   );
 }
@@ -872,7 +871,6 @@ export function OrdersTable({ userId, statuses, canCancel, emptyTitle = 'No orde
               <td className="r num">₹{inr(o.fillPrice ?? o.limitPrice ?? o.triggerPrice)}</td>
               <td>
                 <Status value={o.status} />
-                {o.status === 'FILLED' && o.venue === 'SIMULATED' && <span className="sub" style={{ display: 'block' }}>Simulated fill</span>}
                 {o.rejectReason && <span className="sub neg" style={{ display: 'block' }}>{o.rejectReason}</span>}
               </td>
               <td className="num t2 sm hide-sm">{when(o.createdAt)}</td>

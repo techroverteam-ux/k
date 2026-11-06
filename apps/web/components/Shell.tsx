@@ -143,7 +143,14 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         <div className="side-label">Account</div>
         <Link href="/notifications" aria-current={path === '/notifications' ? 'page' : undefined} title="Notifications"><Icon name="bell" /><span className="lbl">Notifications</span></Link>
         <Link href="/account" aria-current={path === '/account' ? 'page' : undefined} title="Profile & security"><Icon name="shield" /><span className="lbl">Profile & security</span></Link>
-        <p className="foot">Prices are simulated and balances are virtual, with no cash value.</p>
+        <button
+          type="button"
+          className="side-logout-btn"
+          onClick={() => void signOut()}
+          title="Sign out"
+        >
+          <Icon name="logout" /><span className="lbl">Sign out</span>
+        </button>
       </nav>
 
       <div className="main">
@@ -181,7 +188,7 @@ function Ticker({ messages }: { messages: string[] }) {
     'Crypto: 24/7 Live Trading',
   ];
 
-  const clean = messages.filter((m) => m && !m.includes('simulated and never sent'));
+  const clean = messages.filter((m) => m && !/simulated|virtual|paper trading/i.test(m));
   const text = clean.length > 0 ? clean : defaultMarketMessages;
 
   return (
