@@ -2,7 +2,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { gql, setStepUpHandler } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
 import { inr, tone } from '@/lib/format';
 import { Icon, type IconName } from './icons';
 
@@ -108,7 +107,6 @@ export function Confirm(p: { title: string; sub?: string; lines: [string, ReactN
 
 /* ======================================================================= step-up */
 export function StepUpProvider({ children }: { children: ReactNode }) {
-  const { me } = useAuth();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -119,7 +117,6 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     return () => setStepUpHandler(null);
   }, []);
   const finish = (t: string | null) => { resolver.current?.(t); resolver.current = null; setOpen(false); };
-  const mfa = !!me?.mfaEnabled;
   return (
     <>
       {children}
@@ -128,18 +125,18 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
           <form className="stack" onSubmit={async (e) => {
             e.preventDefault(); setBusy(true); setErr(null);
             try {
-              const d = await gql<{ stepUp: { token: string } }>(`mutation($password:String,$totp:String){ stepUp(password:$password, totp:$totp){ token } }`, mfa ? { totp: value } : { password: value });
+              const d = await gql<{ stepUp: { token: string } }>(`mutation($password:String!){ stepUp(password:$password){ token } }`, { password: value });
               finish(d.stepUp.token);
             } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
           }}>
             <div className="field">
-              <label htmlFor="stepup">{mfa ? '6-digit code from your authenticator app' : 'Your password'}</label>
-              <input id="stepup" className="input" type={mfa ? 'text' : 'password'} inputMode={mfa ? 'numeric' : undefined} autoComplete={mfa ? 'one-time-code' : 'current-password'} maxLength={mfa ? 6 : 128} value={value} aria-invalid={!!err} onChange={(e) => setValue(mfa ? e.target.value.replace(/\D/g, '') : e.target.value)} />
+              <label htmlFor="stepup">Your password</label>
+              <input id="stepup" className="input" type="password" autoComplete="current-password" maxLength={128} value={value} aria-invalid={!!err} onChange={(e) => setValue(e.target.value)} />
               {err && <span className="err" role="alert">{err}</span>}
             </div>
             <div className="actions" style={{ marginTop: 0 }}>
               <button type="button" className="btn" onClick={() => finish(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={!value || busy || (mfa && value.length !== 6)}>{busy ? 'Verifying…' : 'Verify'}</button>
+              <button className="btn btn-primary" disabled={!value || busy}>{busy ? 'Verifying…' : 'Verify'}</button>
             </div>
           </form>
         </Dialog>

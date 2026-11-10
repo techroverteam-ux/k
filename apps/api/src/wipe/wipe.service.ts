@@ -32,7 +32,7 @@ const jsonSafe = (rows: unknown) => JSON.parse(JSON.stringify(rows, (_k, v) => (
  *  - the balance goes back to the opening balance with a balanced ADJUSTMENT journal (the ledger stays append-only);
  *  - positions and the watchlist, which can't be hidden by date, are copied into account_wipes.snapshot, then cleared;
  *  - open orders are cancelled, running strategies stopped, pending fund requests cancelled.
- * It needs the authenticator code (2FA on), else an SMS code, else the password, plus typing WIPE.
+ * It needs a signed-in session and typing WIPE.
  * Open positions must be closed first.
  *
  * A Super Admin "wipe all trading data" permanently deletes every trader and broker account and all their trading data.
@@ -147,7 +147,7 @@ export class WipeService {
       this.dbs.db.select({ n: sql<number>`count(*)::int` }).from(strategies).where(and(eq(strategies.userId, u.id), eq(strategies.status, 'RUNNING'))),
       this.dbs.db.select({ n: sql<number>`count(*)::int` }).from(paymentRequests).where(and(eq(paymentRequests.userId, u.id), eq(paymentRequests.status, 'REQUESTED'))),
     ]);
-    const method = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : u.phoneEnc ? 'SMS' : 'PASSWORD';
+    const method = 'SESSION';
     return { balance: formatMoney(balance), resetTo: formatMoney(opening), openPositions: pos.filter((p) => p.netQty !== 0).length, openOrders, runningStrategies: running, pendingRequests: pending, method };
   }
 

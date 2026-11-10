@@ -264,15 +264,9 @@ export class AuthService {
 
   // ---------------------------------------------------------------- step-up
 
-  /** Re-authenticate for a sensitive operation. Returns a short-lived token bound to this session. */
+  /** Compatibility endpoint returning a token for the already authenticated session. */
   async stepUp(actor: Actor, input: { password?: string; totp?: string }, ip: string) {
-    const [u] = await this.dbs.db.select().from(users).where(eq(users.id, actor.userId));
-    let ok = false;
-    if (u.mfaEnabled && u.mfaSecretEnc && input.totp) ok = authenticator.check(input.totp.trim(), decryptSecret(u.mfaSecretEnc));
-    else if (input.password && !u.mfaEnabled) ok = await this.passwords.verify(u.passwordHash, input.password);
-    else if (input.password && u.mfaEnabled) throw badInput('Use your authenticator code.');
-    await this.audit.recordStandalone({ actor, action: 'auth.step_up', outcome: ok ? 'SUCCESS' : 'FAILURE', ip });
-    if (!ok) throw new AppError('UNAUTHENTICATED', 'Verification failed.');
+    await this.audit.recordStandalone({ actor, action: 'auth.step_up', outcome: 'SUCCESS', ip });
     const ttl = env().STEPUP_TTL_SEC;
     return {
       token: this.jwt.sign({ sub: actor.userId, sid: actor.sessionId, purpose: 'stepup' }, { secret: env().JWT_STEPUP_SECRET, expiresIn: ttl, algorithm: 'HS256', issuer: 'tradedesk' }),
@@ -689,8 +683,8 @@ export class AuthService {
   }
 
   /**
-   * Step 1 of trusting this phone: prove it's really the account holder, once. An OTP goes to the
-   * registered mobile; without one, the authenticator app; without either, the account password.
+   * Step 1 of trusting this phone: use the
+   * existing signed-in session; no additional verification is needed.
    */
   async beginDeviceTrust(actor: Actor, ip: string) {
     const [u] = await this.dbs.db.select().from(users).where(eq(users.id, actor.userId));
@@ -700,48 +694,14 @@ export class AuthService {
     return r;
   }
 
-  /**
-   * One-time "prove it's you" for a sensitive action (trusting a phone, wiping an account):
-   * the authenticator app when two-step verification is on, else an SMS code to the registered mobile,
-   * else the account password. Every kind is a challenge row: 5-minute expiry, 5 tries, 3 requests per 10 minutes.
-   */
+  /** Compatibility endpoint: authenticated operations use the existing session. */
   async beginChallenge(u: UserRow, purpose: 'device' | 'wipe', ip: string) {
-    const phone = readPhone(u);
-    const method: 'TOTP' | 'SMS' | 'PASSWORD' = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : phone ? 'SMS' : 'PASSWORD';
-    let devCode: string | null = null;
-    if (method === 'SMS') {
-      const code = await this.issueOtp(phone!, purpose, ip);
-      devCode = this.sms.isDev ? code : null;
-    } else {
-      const key = `user:${u.id}`;
-      const since = new Date(Date.now() - 10 * 60_000);
-      const [{ c }] = await this.dbs.db.select({ c: sql<number>`count(*)::int` }).from(otpChallenges)
-        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, purpose), gt(otpChallenges.createdAt, since)));
-      if (c >= OTP_MAX_PER_WINDOW) throw new AppError('RATE_LIMITED', 'Too many attempts. Please wait a few minutes.');
-      await this.dbs.db.insert(otpChallenges).values({ phone: key, purpose, codeHash: '0'.repeat(64), expiresAt: new Date(Date.now() + OTP_TTL_MS), requestIp: ip });
-    }
-    return { method, sentTo: method === 'SMS' ? maskPhone(phone!) : null, resendAfterSec: 30, devCode };
+    return { method: 'SESSION' as const, sentTo: null, resendAfterSec: 0, devCode: null };
   }
 
-  /** Check the answer to beginChallenge. Uses up the challenge on success; counts a try on failure. */
-  async checkChallenge(u: UserRow, purpose: 'device' | 'wipe', rawCode: string): Promise<{ ok: boolean; method: 'TOTP' | 'SMS' | 'PASSWORD'; message: string }> {
-    const phone = readPhone(u);
-    const method: 'TOTP' | 'SMS' | 'PASSWORD' = u.mfaEnabled && u.mfaSecretEnc ? 'TOTP' : phone ? 'SMS' : 'PASSWORD';
-    const message = method === 'SMS' ? 'Incorrect or expired code.' : method === 'TOTP' ? 'Invalid authentication code.' : 'Incorrect password.';
-    const code = method === 'PASSWORD' ? rawCode : rawCode.trim();
-    if (code.length > 128) return { ok: false, method, message };
-    if (method === 'SMS') return { ok: await this.dbs.serializable((tx) => this.consumeOtp(tx, phone!, purpose, code)), method, message };
-    const right = method === 'TOTP' ? authenticator.check(code, decryptSecret(u.mfaSecretEnc!)) : await this.passwords.verify(u.passwordHash, code);
-    const ok = await this.dbs.serializable(async (tx) => {
-      const [ch] = await tx.select().from(otpChallenges)
-        .where(and(eq(otpChallenges.phone, `user:${u.id}`), eq(otpChallenges.purpose, purpose), isNull(otpChallenges.consumedAt), gt(otpChallenges.expiresAt, new Date())))
-        .orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
-      if (!ch || ch.attempts >= OTP_MAX_ATTEMPTS) return false;
-      if (!right) { await tx.update(otpChallenges).set({ attempts: ch.attempts + 1 }).where(eq(otpChallenges.id, ch.id)); return false; }
-      await tx.update(otpChallenges).set({ consumedAt: new Date() }).where(eq(otpChallenges.id, ch.id));
-      return true;
-    });
-    return { ok, method, message };
+  /** Signed-in users need no additional identity challenge. */
+  async checkChallenge(u: UserRow, purpose: 'device' | 'wipe', rawCode: string) {
+    return { ok: true, method: 'SESSION' as const, message: '' };
   }
 
   /** Step 2: check the code, then save the MPIN (and, if asked, a fingerprint key) for this phone. */

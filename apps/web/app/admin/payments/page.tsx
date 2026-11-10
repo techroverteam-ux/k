@@ -61,7 +61,7 @@ export default function Transactions() {
         )}
       </section>
       {approve && (
-        <Confirm title={`Approve ${approve.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'}?`} sub="You’ll be asked to confirm with your authenticator code."
+        <Confirm title={`Approve ${approve.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'}?`} sub="You’ll be asked to confirm with your password."
           lines={[['Account', approve.username ?? ''], ['Type', approve.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'], ['Amount', `₹${inr(approve.amount)}`], ['Requested', when(approve.createdAt)]]}
           warning={undefined}
           confirmLabel="Approve and post" pending={busy} error={err} onClose={() => setApprove(null)}

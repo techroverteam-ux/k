@@ -275,7 +275,7 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
         setBusy(true); setErr(null);
         try {
           const d = await gql<{ requestPayment: { id: string } }>(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } });
-          // Only one Super Admin: post it now (asks for the authenticator code), no separate approval step.
+          // Only one Super Admin: post it now (asks for the password), no separate approval step.
           if (sole) {
             try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: d.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
             catch { toast('Request saved. Approve it under Approvals.'); }
@@ -596,7 +596,7 @@ export function MfaSetupSheet({ onClose }: { onClose: () => void }) {
   }, []);
   const key = setup?.secret.replace(/(.{4})/g, '$1 ').trim();
   return (
-    <Sheet visible title="Two-step verification" sub="Sign-ins and sensitive actions will ask for a code from an authenticator app." onClose={onClose}>
+    <Sheet visible title="Two-step verification" sub="Sign-ins will ask for a code from an authenticator app." onClose={onClose}>
       <T w="600">1. Add this account to your authenticator app</T>
       <Button kind="primary" icon="external" title="Open authenticator app" disabled={!setup} onPress={() => setup && void Linking.openURL(setup.otpauthUrl).catch(() => toast('No authenticator app found. Enter the key by hand.', true))} />
       <View style={{ gap: 4, padding: S[3], borderRadius: R.md, backgroundColor: t.bg2 }}>

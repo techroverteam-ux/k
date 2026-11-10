@@ -293,7 +293,7 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
         if (!fmtOk || over || under) return;
         const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } }) as { requestPayment: { id: string } } | null;
         if (!r) return;
-        // Only one Super Admin: post it now (asks for the authenticator code), no separate approval step.
+        // Only one Super Admin: post it now (asks for the password), no separate approval step.
         if (sole) {
           try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: r.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
           catch { toast('Request saved. Approve it on Transactions.'); }

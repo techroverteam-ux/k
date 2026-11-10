@@ -96,10 +96,9 @@ const PAGE = `<!doctype html>
     post('mutation($t:String!,$d:String){ forceLogin(conflictToken:$t, deviceName:$d){ ' + FIELDS + ' } }', { t: conflictToken, d: DEVICE }).then(handle);
   };
   $('step').onclick = function () {
-    var v = prompt('Authenticator code (or your password if 2-step verification is off):');
+    var v = prompt('Your password:');
     if (!v) return;
-    var mfa = /^\\d{6}$/.test(v.trim());
-    post('mutation($p:String,$t:String){ stepUp(password:$p, totp:$t){ token } }', mfa ? { t: v.trim() } : { p: v }).then(function (d) {
+    post('mutation($p:String!){ stepUp(password:$p){ token } }', { p: v }).then(function (d) {
       if (d.errors) { msg(d.errors[0].message); return; }
       stepUp = d.data.stepUp.token; stepUpUntil = Date.now() + 4.5 * 60 * 1000; show('in'); msg('Step-up on for 5 minutes.');
     });

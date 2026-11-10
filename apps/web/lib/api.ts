@@ -88,7 +88,7 @@ export async function refreshSession(): Promise<boolean> {
 
 /**
  * GraphQL request with: silent token refresh on UNAUTHENTICATED, and an interactive
- * step-up prompt (re-enter password / authenticator code) on STEP_UP_REQUIRED.
+ * step-up prompt (re-enter password) on STEP_UP_REQUIRED.
  */
 export async function gql<T = any>(query: string, variables?: Record<string, unknown>, opts: { stepUp?: string; _retried?: boolean } = {}): Promise<T> {
   let r;

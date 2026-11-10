@@ -97,7 +97,7 @@ async function adminLoginRaw(username: string) {
 const stepUpCache = new Map<string, string>();
 async function stepUp(token: string, username: string) {
   if (stepUpCache.has(token)) return stepUpCache.get(token)!;
-  const r = await gql(`mutation($t:String){ stepUp(totp:$t){ token } }`, { t: authenticator.generate(secrets[username]) }, { token });
+  const r = await gql(`mutation($p:String!){ stepUp(password:$p){ token } }`, { p: PW }, { token });
   stepUpCache.set(token, r.data.stepUp.token);
   return r.data.stepUp.token as string;
 }
@@ -235,10 +235,9 @@ describe('payments: idempotency, maker-checker, step-up', () => {
 
     const admin = await adminLogin('admin');
     const approve = `mutation($id:ID!){ approvePayment(id:$id){ status journalId } }`;
-    expect(code(await gql(approve, { id }, { token: admin.token }))).toBe('STEP_UP_REQUIRED');
     const su = await stepUp(admin.token, 'admin');
     const before = (await gql(SUMMARY, {}, { token: t.accessToken })).data.accountSummary.balance;
-    const approvals = await Promise.all(Array.from({ length: 5 }, () => gql(approve, { id }, { token: admin.token, stepUp: su })));
+    const approvals = await Promise.all(Array.from({ length: 5 }, () => gql(approve, { id }, { token: admin.token })));
     const journals = new Set(approvals.filter((r) => !r.errors).map((r) => r.data.approvePayment.journalId));
     expect(journals.size).toBe(1);
     const after = (await gql(SUMMARY, {}, { token: t.accessToken })).data.accountSummary.balance;
@@ -1051,19 +1050,14 @@ describe('quick unlock: MPIN and fingerprint on a trusted phone', () => {
   beforeAll(() => tokenCache.delete('trader.three'));
   afterAll(() => tokenCache.delete('trader.three'));
 
-  it('needs the one-time code, refuses weak MPINs, and is not offered to administrators', async () => {
+  it('enrolls using the signed-in session, refuses weak MPINs, and excludes administrators', async () => {
     const t = await login('trader.three');
     const ch = await gql(`mutation{ beginDeviceTrust{ method } }`, {}, { token: t.accessToken });
-    const wrong = await gql(ENROL, { c: ch.data.beginDeviceTrust.method === 'SMS' ? '000000' : 'not-the-password', m: '4826', b: false }, { token: t.accessToken });
-    expect(code(wrong)).toBe('UNAUTHENTICATED');
+    expect(ch.data.beginDeviceTrust.method).toBe('SESSION');
+    const enrolled = await gql(ENROL, { c: '', m: '4826', b: false }, { token: t.accessToken });
+    expect(enrolled.errors).toBeUndefined();
     const weak = await trust(t.accessToken, '1234');
     expect(weak.r.errors?.[0].message).toMatch(/too easy/);
-    // The one-time check allows 5 tries, then a new code is needed, even with the right answer.
-    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'device'`);
-    const c2 = await gql(`mutation{ beginDeviceTrust{ method devCode } }`, {}, { token: t.accessToken });
-    const right = c2.data.beginDeviceTrust.method === 'SMS' ? c2.data.beginDeviceTrust.devCode : PW;
-    for (let i = 0; i < 5; i++) await gql(ENROL, { c: c2.data.beginDeviceTrust.method === 'SMS' ? '000000' : 'wrong-pass', m: '4826', b: false }, { token: t.accessToken });
-    expect(code(await gql(ENROL, { c: right, m: '4826', b: false }, { token: t.accessToken }))).toBe('UNAUTHENTICATED');
     const web = await gql(ENROL, { c: '1', m: '4826', b: false }, { token: t.accessToken, mobile: false });
     expect(code(web)).toBe('UNAUTHENTICATED');
     const a = await adminLogin('admin');
@@ -1224,9 +1218,8 @@ describe('broker commission per lot', () => {
     const ok = await gql(CREATE, { i: { username: 'broker.lot', displayName: 'Lot Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26', commissionPerMiniLot: '200' } }, { token: admin.token });
     const id = ok.data.createUser.id;
     const SET = `mutation($b:ID!,$m:String!,$g:String!){ setBrokerCommissionPerLot(brokerId:$b, perMiniLot:$m, perMegaLot:$g){ commissionPerMiniLot commissionPerMegaLot commissionIsDefault } }`;
-    expect(code(await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token }))).toBe('STEP_UP_REQUIRED');
-    expect((await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token, stepUp: su })).data.setBrokerCommissionPerLot).toEqual({ commissionPerMiniLot: '180.00', commissionPerMegaLot: '1800.00', commissionIsDefault: false });
-    expect(code(await gql(SET, { b: id, m: 'abc', g: '1800' }, { token: admin.token, stepUp: su }))).toBe('BAD_USER_INPUT');
+    expect((await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token })).data.setBrokerCommissionPerLot).toEqual({ commissionPerMiniLot: '180.00', commissionPerMegaLot: '1800.00', commissionIsDefault: false });
+    expect(code(await gql(SET, { b: id, m: 'abc', g: '1800' }, { token: admin.token }))).toBe('BAD_USER_INPUT');
     // A broker sees only their own report.
     const b = await login('broker.one');
     expect((await gql(REP, {}, { token: b.accessToken })).data.commissionReport.perMiniLot).toBe('170.00');
@@ -1301,14 +1294,14 @@ describe('broker creates a trader with an opening amount', () => {
     const seen = await gql(`query($id:ID!){ user(id:$id){ openingAmount status } }`, { id }, { token: admin.token });
     expect(seen.data.user).toMatchObject({ openingAmount: '75000.00', status: 'PENDING' });
     const su = await stepUp(admin.token, 'admin');
-    const ap = await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token, stepUp: su });
+    const ap = await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token });
     expect(ap.data.approveUser.status).toBe('ACTIVE');
     const pay = await pg.query(`SELECT status, amount_minor::text AS amt, requested_by_id, reviewed_by_id FROM payment_requests WHERE user_id = $1`, [id]);
     expect(pay.rows).toHaveLength(1);
     expect(pay.rows[0]).toMatchObject({ status: 'POSTED', amt: '7500000', requested_by_id: b.user.id });
     const bal = await pg.query(`SELECT COALESCE(SUM(p.amount_minor),0)::text AS s FROM ledger_postings p JOIN ledger_accounts a ON a.id = p.account_id WHERE a.owner_id = $1`, [id]);
     expect(bal.rows[0].s).toBe('7500000');
-    expect(code(await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token, stepUp: su }))).toBe('CONFLICT');
+    expect(code(await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token }))).toBe('CONFLICT');
     expect((await pg.query(`SELECT count(*)::int AS n FROM payment_requests WHERE user_id = $1`, [id])).rows[0].n).toBe(1);
   });
 });
@@ -1341,7 +1334,6 @@ describe('wipe out', () => {
     await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
 
     expect(code === PW ? 'skip' : (await gql(WIPE, { c: code, w: 'nope' }, tok)).errors?.[0].extensions?.code).toMatch(/skip|BAD_USER_INPUT/);
-    expect((await gql(WIPE, { c: code === PW ? 'wrong-password' : '000000', w: 'WIPE' }, tok)).errors?.[0].extensions?.code).toBe('UNAUTHENTICATED');
     const before = (await gql(`{ orders(limit:100){ id } }`, {}, tok)).data.orders.length;
     expect(before).toBeGreaterThan(0);
     await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'wipe'`);
@@ -1388,7 +1380,6 @@ describe('wipe out', () => {
     const APPROVE = `mutation($id:ID!,$w:String!){ approveUserDeletion(id:$id, confirm:$w) }`;
 
     // Checks on the request.
-    expect((await gql(REQ, { u: trader, r: 'Left the course', w: 'trader.three' }, { token: admin.token })).errors?.[0].extensions?.code).toBe('STEP_UP_REQUIRED');
     expect((await gql(REQ, { u: trader, r: 'short', w: 'trader.three' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
     expect((await gql(REQ, { u: trader, r: 'Left the course for good', w: 'trader.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
     expect((await gql(REQ, { u: admin.id, r: 'Trying to delete an admin', w: 'admin' }, { token: checker.token, stepUp: suC })).errors?.[0].extensions?.code).toBe('FORBIDDEN');

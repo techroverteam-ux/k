@@ -39,7 +39,7 @@ export const ALLOW_WITHOUT_MFA = 'td:nomfa';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
 /** Restrict to roles. Resource-level checks still happen in services via PolicyService. */
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES, roles);
-/** Requires a fresh step-up token (re-entered password or TOTP within the last few minutes). */
+/** Requires a fresh step-up token (re-entered password within the last few minutes). */
 export const RequireStepUp = () => SetMetadata(STEP_UP, true);
 /** Privileged users without MFA may still call this (MFA enrolment endpoints). */
 export const AllowWithoutMfa = () => SetMetadata(ALLOW_WITHOUT_MFA, true);

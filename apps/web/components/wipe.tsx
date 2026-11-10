@@ -10,7 +10,6 @@ import { Dialog, Empty, ErrorState, SectionHead, SkeletonRows, useToast } from '
 
 /* ================================================================== trader / broker: wipe out my account */
 interface Preview { balance: string; resetTo: string; openPositions: number; openOrders: number; runningStrategies: number; pendingRequests: number; method: string }
-const CODE_LABEL: Record<string, string> = { TOTP: '6-digit code from your authenticator app', SMS: '6-digit code sent to your mobile', PASSWORD: 'Your password' };
 
 export function WipeOutSection() {
   const [open, setOpen] = useState(false);
@@ -73,11 +72,6 @@ function WipeDialog({ onClose }: { onClose: () => void }) {
         </div>
       ) : ch ? (
         <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void wipe(); }}>
-          <p className="t2 sm" style={{ margin: 0 }}>{ch.method === 'SMS' ? `We sent a code to ${ch.sentTo}.` : ch.method === 'TOTP' ? 'Open your authenticator app.' : 'There’s no authenticator or mobile on this account, so confirm with your password.'}</p>
-          <div className="field">
-            <label htmlFor="wipe-code">{CODE_LABEL[ch.method]}</label>
-            <input id="wipe-code" className="input" autoFocus autoComplete={ch.method === 'PASSWORD' ? 'current-password' : 'one-time-code'} type={ch.method === 'PASSWORD' ? 'password' : 'text'} inputMode={ch.method === 'PASSWORD' ? undefined : 'numeric'} maxLength={ch.method === 'PASSWORD' ? 128 : 6} value={code} onChange={(e) => setCode(ch.method === 'PASSWORD' ? e.target.value : e.target.value.replace(/\D/g, ''))} />
-          </div>
           <div className="field">
             <label htmlFor="wipe-typed">Type <b>WIPE</b> to confirm</label>
             <input id="wipe-typed" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
@@ -87,7 +81,7 @@ function WipeDialog({ onClose }: { onClose: () => void }) {
             {ch.method === 'SMS' ? <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void begin()}>Send a new code</button> : <span />}
             <div className="row">
               <button type="button" className="btn" onClick={onClose}>Cancel</button>
-              <button type="submit" className="btn btn-sell" disabled={busy || !code || typed.trim().toUpperCase() !== 'WIPE'}>Wipe out</button>
+              <button type="submit" className="btn btn-sell" disabled={busy || typed.trim().toUpperCase() !== 'WIPE'}>Wipe out</button>
             </div>
           </div>
         </form>
@@ -98,7 +92,7 @@ function WipeDialog({ onClose }: { onClose: () => void }) {
 
 /* ================================================================== Super Admin: an account's wipes */
 interface AccountWipe { id: string; verifiedWith: string; balanceBefore: string; balanceAfter: string; snapshot: string; ip?: string; createdAt: string }
-const VIA: Record<string, string> = { TOTP: 'authenticator', SMS: 'SMS code', PASSWORD: 'password' };
+const VIA: Record<string, string> = { SESSION: 'signed-in session', SMS: 'SMS code', PASSWORD: 'password' };
 
 export function AccountWipes({ userId }: { userId: string }) {
   const { data, loading, error, refetch } = useQuery<{ accountWipes: AccountWipe[] }>(`query($u:ID!){ accountWipes(userId:$u){ id verifiedWith balanceBefore balanceAfter snapshot ip createdAt } }`, { u: userId });
@@ -152,8 +146,8 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
         <span>
           <b>Wipe all data</b> permanently deletes everything except the Super Admin accounts: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
           {sole
-            ? <>You are the only Super Admin, so <b>the wipe runs as soon as you confirm</b>: there is no second approval. You re-verify with your authenticator.</>
-            : <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both re-verify with their authenticator.</>}
+            ? <>You are the only Super Admin, so <b>the wipe runs as soon as you confirm</b>: there is no second approval. Confirm below to continue.</>
+            : <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both confirm their decision.</>}
         </span>
       </div>
       {loading && !data ? <SkeletonRows rows={2} pad={false} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : pending ? (

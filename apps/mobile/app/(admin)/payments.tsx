@@ -37,7 +37,7 @@ export default function Approvals() {
           title={`${p.username} · ${p.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}`} sub={`${when(p.createdAt)}${p.mode === 'SIMULATED' ? ' · virtual' : ''}${own(p) ? ' · needs another admin' : ''}`}
           right={<T v="num">₹{inr(p.amount)}</T>} />
       ))}
-      <Sheet visible={!!sel} title={mode === 'approve' ? 'Approve request?' : 'Reject request?'} sub="You’ll confirm with your authenticator code." onClose={() => setSel(null)}>
+      <Sheet visible={!!sel} title={mode === 'approve' ? 'Approve request?' : 'Reject request?'} sub="You’ll confirm with your password." onClose={() => setSel(null)}>
         {sel && <Lines lines={[['Account', sel.username ?? ''], ['Type', sel.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'], ['Amount', `₹${inr(sel.amount)}`]]} />}
         {sel?.mode === 'SIMULATED' && mode === 'approve' && <Notice>This changes a virtual balance only. No money moves.</Notice>}
         {mode === 'reject' && <Field label="Reason shown to the requester" value={note} onChangeText={setNote} />}

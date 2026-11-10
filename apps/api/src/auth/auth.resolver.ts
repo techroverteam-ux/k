@@ -105,7 +105,7 @@ class SessionType {
 
 @ObjectType()
 class DeviceTrustChallenge {
-  @Field({ description: 'SMS (code sent to the registered mobile), TOTP (authenticator app) or PASSWORD (no mobile on file).' }) method: string;
+  @Field({ description: 'SESSION: the signed-in session confirms identity.' }) method: string;
   @Field({ nullable: true }) sentTo?: string;
   @Field(() => Int) resendAfterSec: number;
   @Field({ nullable: true, description: 'Development only. Always null in production.' }) devCode?: string;

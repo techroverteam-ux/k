@@ -1,5 +1,5 @@
 /**
- * Turn on MPIN (and fingerprint) unlock for this phone: verify a one-time code once, choose an MPIN,
+ * Turn on MPIN (and fingerprint) unlock for this phone: choose an MPIN,
  * optionally add the fingerprint. Offered after signing in with a password; also from Profile.
  */
 import { router } from 'expo-router';
@@ -14,7 +14,7 @@ import { S, useTheme } from '@/theme';
 import { Button, Field, IconMark, ListRow, Notice, Screen, T, tap, toast } from '@/ui';
 
 type Step = 'intro' | 'code' | 'pin' | 'confirm' | 'bio';
-interface Challenge { method: 'SMS' | 'TOTP' | 'PASSWORD'; sentTo?: string | null; devCode?: string | null }
+interface Challenge { method: 'SMS' | 'PASSWORD'; sentTo?: string | null; devCode?: string | null }
 const WEAK = new Set(['1234', '4321', '0000', '1111', '1212']);
 
 export default function QuickSetup() {
@@ -36,7 +36,7 @@ export default function QuickSetup() {
     setBusy(true); setErr(null);
     try {
       const d = await gql<{ beginDeviceTrust: Challenge }>(`mutation { beginDeviceTrust { method sentTo resendAfterSec devCode } }`);
-      setCh(d.beginDeviceTrust); setCode(''); setStep('code');
+      setCh(d.beginDeviceTrust); setCode(''); setStep('pin');
       if (d.beginDeviceTrust.devCode) toast(`Development code: ${d.beginDeviceTrust.devCode}`);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -56,11 +56,11 @@ export default function QuickSetup() {
       const m = (e as Error).message;
       setErr(m);
       // A wrong or expired code: go back and get a new one. A rejected MPIN: choose again.
-      if (/code|password/i.test(m)) setStep('code'); else { setPin(''); setPin2(''); setStep('pin'); }
+      if (/code|password/i.test(m)) setStep('pin'); else { setPin(''); setPin2(''); setStep('pin'); }
     } finally { setBusy(false); }
   };
 
-  const codeLabel = ch?.method === 'SMS' ? '6-digit code' : ch?.method === 'TOTP' ? 'Authenticator code' : 'Your password';
+  const codeLabel = ch?.method === 'SMS' ? '6-digit code' : 'Your password';
   return (
     <Screen back title="MPIN & fingerprint">
       {step === 'intro' && (
@@ -76,18 +76,6 @@ export default function QuickSetup() {
           {err && <Notice tone="err">{err}</Notice>}
           <Button kind="primary" size="lg" title="Continue" busy={busy} onPress={send} />
           <Button kind="ghost" title="Not now" onPress={async () => { await skipQuickSetup(me.id); router.back(); }} />
-        </>
-      )}
-      {step === 'code' && ch && (
-        <>
-          <T v="h3">Confirm it’s you</T>
-          <T c="text2">{ch.method === 'SMS' ? `We sent a 6-digit code to ${ch.sentTo}.` : ch.method === 'TOTP' ? 'Enter the 6-digit code from your authenticator app.' : 'There’s no mobile number on your account, so confirm with your password.'}</T>
-          <Field label={codeLabel} value={code} autoFocus secureTextEntry={ch.method === 'PASSWORD'}
-            keyboardType={ch.method === 'PASSWORD' ? 'default' : 'number-pad'} textContentType={ch.method === 'PASSWORD' ? 'password' : 'oneTimeCode'} maxLength={ch.method === 'PASSWORD' ? 128 : 6}
-            onChangeText={(v) => setCode(ch.method === 'PASSWORD' ? v : v.replace(/\D/g, ''))} />
-          {err && <Notice tone="err">{err}</Notice>}
-          <Button kind="primary" size="lg" title="Next" disabled={ch.method === 'PASSWORD' ? !code : code.length !== 6} onPress={() => { setErr(null); setPin(''); setPin2(''); setStep('pin'); }} />
-          {ch.method === 'SMS' && <Button kind="ghost" title="Send a new code" busy={busy} onPress={send} />}
         </>
       )}
       {(step === 'pin' || step === 'confirm') && (

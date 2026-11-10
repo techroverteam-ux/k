@@ -15,7 +15,7 @@ class WipePreview {
   @Field(() => Int) openOrders: number;
   @Field(() => Int) runningStrategies: number;
   @Field(() => Int) pendingRequests: number;
-  @Field({ description: 'How the wipe is confirmed: TOTP (authenticator app), SMS or PASSWORD.' }) method: string;
+  @Field({ description: 'SESSION: the signed-in session confirms identity.' }) method: string;
 }
 
 @ObjectType()
@@ -79,7 +79,7 @@ export class WipeResolver {
 
   @Roles('TRADER', 'BROKER')
   @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
-  @Mutation(() => WipeChallenge, { description: 'Step 1: sends an SMS code, or asks for the authenticator code / password.' })
+  @Mutation(() => WipeChallenge, { description: 'Prepare the wipe confirmation for the signed-in user.' })
   async beginAccountWipe(@CurrentActor() a: Actor, @Ctx() c: GqlContext) {
     const r = await this.wipe.begin(a, c.ip);
     return { ...r, sentTo: r.sentTo ?? undefined, devCode: r.devCode ?? undefined };
@@ -87,7 +87,7 @@ export class WipeResolver {
 
   @Roles('TRADER', 'BROKER')
   @Throttle({ default: { limit: lim(10), ttl: 60_000 } })
-  @Mutation(() => WipeResult, { description: 'Step 2: the code from step 1 and confirm = "WIPE". Fresh start; Super Admin keeps the history.' })
+  @Mutation(() => WipeResult, { description: 'Confirm = "WIPE"; code is retained for compatibility. Fresh start; Super Admin keeps the history.' })
   wipeMyAccount(@CurrentActor() a: Actor, @Args('code') code: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     return this.wipe.wipeSelf(a, code, confirm, c.ip);
   }

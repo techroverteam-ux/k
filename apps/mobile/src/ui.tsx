@@ -635,7 +635,7 @@ export function useQuery<T>(query: string, variables?: Record<string, unknown>, 
 }
 
 /* ============================================================== step-up */
-export function StepUpHost({ mfa }: { mfa: boolean }) {
+export function StepUpHost(_props: { mfa: boolean }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -648,10 +648,10 @@ export function StepUpHost({ mfa }: { mfa: boolean }) {
   const done = (v: string | null) => { res.current?.(v); res.current = null; setOpen(false); };
   return (
     <Sheet visible={open} title="Confirm it's you" sub="This action changes money or access, so we re-check your identity." onClose={() => done(null)}>
-      <Field label={mfa ? '6-digit authenticator code' : 'Your password'} value={value} onChangeText={(v) => setValue(mfa ? v.replace(/\D/g, '') : v)} secureTextEntry={!mfa} keyboardType={mfa ? 'number-pad' : 'default'} maxLength={mfa ? 6 : 128} autoFocus textContentType={mfa ? 'oneTimeCode' : 'password'} error={err} />
-      <Button title="Verify" kind="primary" size="lg" busy={busy} disabled={!value || (mfa && value.length !== 6)} onPress={async () => {
+      <Field label="Your password" value={value} onChangeText={(v) => setValue(v)} secureTextEntry maxLength={128} autoFocus textContentType="password" error={err} />
+      <Button title="Verify" kind="primary" size="lg" busy={busy} disabled={!value} onPress={async () => {
         setBusy(true); setErr(null);
-        try { const d = await gql(`mutation($p:String,$t:String){ stepUp(password:$p, totp:$t){ token } }`, mfa ? { t: value } : { p: value }); done(d.stepUp.token); }
+        try { const d = await gql(`mutation($p:String!){ stepUp(password:$p){ token } }`, { p: value }); done(d.stepUp.token); }
         catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); }
       }} />
     </Sheet>
