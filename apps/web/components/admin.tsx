@@ -19,6 +19,7 @@ export function useUserActions(onDone: () => void) {
   const [err, setErr] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [pw, setPw] = useState('');
+  const [showResetPw, setShowResetPw] = useState(false);
   const [broker, setBroker] = useState('');
   const [typed, setTyped] = useState('');
   const sole = useSoleAdmin();
@@ -73,7 +74,31 @@ export function useUserActions(onDone: () => void) {
   );
   if (act?.kind === 'reset') node = (
     <Dialog title="Reset password" sub={`${act.u.displayName} will be signed out everywhere and must use the new temporary password.`} onClose={close}>
-      <div className="field"><label htmlFor="np">Temporary password</label><input id="np" className="input" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /><span className="hint">At least 10 characters with three of: lowercase, uppercase, digits, symbols</span></div>
+      <div className="field">
+        <label htmlFor="np">Temporary password</label>
+        <div style={{ position: 'relative' }}>
+          <input
+            id="np"
+            className="input"
+            type={showResetPw ? 'text' : 'password'}
+            autoComplete="new-password"
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            style={{ paddingRight: 40 }}
+          />
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setShowResetPw(!showResetPw)}
+            title={showResetPw ? 'Hide password' : 'View password'}
+            aria-label={showResetPw ? 'Hide password' : 'View password'}
+            style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)', width: 34, height: 34, color: showResetPw ? 'var(--brand)' : 'var(--text-3)' }}
+          >
+            <Icon name={showResetPw ? 'eyeOff' : 'eye'} size={18} />
+          </button>
+        </div>
+        <span className="hint">At least 10 characters with three of: lowercase, uppercase, digits, symbols</span>
+      </div>
       <ErrBox />
       <div className="actions"><button className="btn" onClick={close}>Cancel</button><button className="btn btn-primary" disabled={busy || pw.length < 10} onClick={() => run(`mutation($id:ID!,$p:String!){ resetUserPassword(userId:$id, tempPassword:$p) }`, { id: act.u.id, p: pw }, 'Password reset')}>{busy ? 'Resetting…' : 'Reset password'}</button></div>
     </Dialog>

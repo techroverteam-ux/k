@@ -23,8 +23,8 @@ export default function BrokerTraders() {
       <PageHead title="Traders" sub="Only traders assigned to you are listed.">
         <button className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={18} />Add trader</button>
       </PageHead>
-      <div className="spread" style={{ marginBottom: 12 }}>
-        <div className="input-icon" style={{ width: 'min(320px, 100%)' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search traders" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} /></div>
+      <div className="spread" style={{ marginBottom: 12, gap: 12 }}>
+        <div className="input-icon" style={{ flex: '1 1 220px', maxWidth: 320, width: '100%' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search traders" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} /></div>
         <Chips label="Status" value={status} onChange={(v) => { setStatus(v); setPage(0); }} items={[{ v: '', label: 'All' }, { v: 'ACTIVE', label: 'Active' }, { v: 'PENDING', label: 'Pending' }, { v: 'SUSPENDED', label: 'Suspended' }]} />
       </div>
       <section className="panel">

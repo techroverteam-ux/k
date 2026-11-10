@@ -33,8 +33,8 @@ function Users() {
       </PageHead>
       <PendingDeletions onDone={refetch} />
       <Tabs label="Account type" value={role} onChange={(v) => { setRole(v); reset(); }} items={[{ v: '', label: 'All' }, { v: 'BROKER', label: 'Brokers' }, { v: 'TRADER', label: 'Traders' }, { v: 'SUPER_ADMIN', label: 'Admins' }]} />
-      <div className="spread" style={{ margin: '16px 0 12px' }}>
-        <div className="input-icon" style={{ width: 'min(320px, 100%)' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search accounts" value={search} onChange={(e) => { setSearch(e.target.value); reset(); }} /></div>
+      <div className="spread" style={{ margin: '16px 0 12px', gap: 12 }}>
+        <div className="input-icon" style={{ flex: '1 1 220px', maxWidth: 320, width: '100%' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search accounts" value={search} onChange={(e) => { setSearch(e.target.value); reset(); }} /></div>
         <Chips label="Status" value={status} onChange={(v) => { setStatus(v); reset(); }} items={[{ v: '', label: 'Any status' }, { v: 'PENDING', label: 'Pending' }, { v: 'ACTIVE', label: 'Active' }, { v: 'SUSPENDED', label: 'Suspended' }]} />
       </div>
       <section className="panel">

@@ -290,13 +290,19 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 
 /* overlays */
 .overlay { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); z-index: 50; background: rgba(15, 18, 24, 0.45); display: grid; place-items: center; padding: var(--s4); animation: fade 0.14s ease-out; }
-.dialog { width: min(440px, 100%); max-height: calc(var(--vv-h, 100dvh) * 0.92); overflow: auto; background: var(--bg); border-radius: var(--r-lg); box-shadow: var(--e2); padding: var(--s6); animation: pop 0.16s ease-out; }
+.dialog { width: min(440px, 100%); max-height: calc(var(--vv-h, 100dvh) * 0.92); overflow: auto; background: var(--bg); border-radius: var(--r-lg); box-shadow: var(--e2); padding: var(--s5) var(--s6); animation: pop 0.16s ease-out; }
+.dialog.dialog-sm { width: min(380px, 100%); }
+.dialog.dialog-lg { width: min(620px, 100%); }
+.dialog.dialog-xl { width: min(800px, 100%); }
 .dialog h2 { margin-bottom: var(--s1); }
-.dialog .actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s5); }
+.dialog .actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s4); }
+.form-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+.form-grid-2 .col-span-2 { grid-column: 1 / -1; }
 @media (max-width: 720px) {
   .overlay { place-items: end center; padding: 0; }
-  .dialog { width: 100%; border-radius: 16px 16px 0 0; padding-bottom: calc(var(--s6) + env(safe-area-inset-bottom)); animation: up 0.18s ease-out; }
+  .dialog, .dialog.dialog-sm, .dialog.dialog-lg, .dialog.dialog-xl { width: 100%; max-height: calc(var(--vv-h, 100dvh) * 0.94); border-radius: 16px 16px 0 0; padding: var(--s4) var(--s4) calc(var(--s6) + env(safe-area-inset-bottom)); animation: up 0.18s ease-out; }
   .dialog .actions .btn { flex: 1; }
+  .form-grid-2 { grid-template-columns: 1fr; gap: 10px; }
 }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 220px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e2); padding: var(--s2); z-index: 40; animation: pop 0.12s ease-out; }
 .menu a, .menu button { display: flex; width: 100%; align-items: center; gap: var(--s3); height: 40px; padding: 0 var(--s3); border: 0; background: none; border-radius: var(--r-md); cursor: pointer; text-align: left; font-size: var(--fs-md); }
