@@ -90,6 +90,12 @@ export async function refreshSession(): Promise<boolean> {
  * GraphQL request with: silent token refresh on UNAUTHENTICATED, and an interactive
  * step-up prompt (re-enter password) on STEP_UP_REQUIRED.
  */
+const dataChangeListeners = new Set<() => void>();
+export function onDataChanged(listener: () => void) {
+  dataChangeListeners.add(listener);
+  return () => { dataChangeListeners.delete(listener); };
+}
+
 export async function gql<T = any>(query: string, variables?: Record<string, unknown>, opts: { stepUp?: string; _retried?: boolean } = {}): Promise<T> {
   let r;
   try {
@@ -99,7 +105,10 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     throw new ApiError('Network error. Check your connection.', 'NETWORK');
   }
   const err = r.errors?.[0];
-  if (!err) return r.data as T;
+  if (!err) {
+    if (/^\s*mutation\b/.test(query)) dataChangeListeners.forEach((listener) => listener());
+    return r.data as T;
+  }
   const code = err.extensions?.code ?? 'ERROR';
   if (code === 'UNAUTHENTICATED' && !opts._retried && accessToken) {
     const reason = (err.extensions as { reason?: string } | undefined)?.reason;

@@ -6,7 +6,7 @@ import { Icon } from '@/components/icons';
 /** Full-page "Add script": search every market, add or remove scripts, then Done returns to the dashboard. */
 export default function AddScript() {
   const router = useRouter();
-  const done = () => (window.history.length > 1 ? router.back() : router.push('/trader'));
+  const done = () => (window.history.length > 1 ? router.back() : router.push('/trader/watchlist'));
   return (
     <div className="stack home" style={{ gap: 16 }}>
       <div className="spread" style={{ alignItems: 'center' }}>

@@ -1,14 +1,20 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { gql } from '@/lib/api';
-import { homeFor, useAuth } from '@/lib/auth';
+import { useToast } from '@/components/ui';
+import { homeFor, useAuth, type Role } from '@/lib/auth';
+
+const destinationFor = (role: Role) => role !== 'SUPER_ADMIN' || new URLSearchParams(window.location.search).get('from') === 'account' ? '/account' : homeFor(role);
 
 /** Mandatory TOTP enrolment for Super Admins (optional for others via Security settings). */
 export default function MfaSetup() {
   const { me, loading, reload, signOut } = useAuth();
   const router = useRouter();
+  const toast = useToast();
+  const enrollment = useRef<Promise<{ beginMfaEnrollment: { secret: string; otpauthUrl: string } }> | null>(null);
+  const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState('');
   const [qr, setQr] = useState('');
   const [code, setCode] = useState('');
@@ -17,8 +23,8 @@ export default function MfaSetup() {
   useEffect(() => {
     if (loading) return;
     if (!me) return router.replace('/login');
-    if (me.mfaEnabled) return router.replace(homeFor(me.role));
-    gql(`mutation { beginMfaEnrollment { secret otpauthUrl } }`)
+    if (me.mfaEnabled) return router.replace(destinationFor(me.role));
+    (enrollment.current ??= gql(`mutation { beginMfaEnrollment { secret otpauthUrl } }`))
       .then(async (d) => {
         setSecret(d.beginMfaEnrollment.secret);
         setQr(await QRCode.toDataURL(d.beginMfaEnrollment.otpauthUrl, { margin: 1, width: 220 }));
@@ -27,14 +33,15 @@ export default function MfaSetup() {
   }, [me, loading, router]);
 
   const confirm = async () => {
-    setErr(null);
+    setErr(null); setBusy(true);
     try {
       await gql(`mutation($c:String!){ confirmMfaEnrollment(code:$c) }`, { c: code });
+      toast('Authenticator enabled. You can use it to recover your password.');
       const u = await reload();
-      if (u) router.replace(homeFor(u.role));
+      if (u) router.replace(destinationFor(u.role));
     } catch (e) {
       setErr((e as Error).message);
-    }
+    } finally { setBusy(false); }
   };
 
   return (
@@ -42,7 +49,7 @@ export default function MfaSetup() {
       <div className="auth-card">
         <div>
           <h1>Set up two-step verification</h1>
-          <p className="t2" style={{ marginTop: 6 }}>Administrator accounts must use an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…).</p>
+          <p className="t2" style={{ marginTop: 6 }}>Use an authenticator app for sign-in and forgotten-password recovery. Keep access to this app: password recovery requires its current code.</p>
         </div>
         <ol className="stack" style={{ paddingLeft: 20, gap: 12, margin: 0 }}>
           <li>
@@ -56,8 +63,8 @@ export default function MfaSetup() {
             Enter the 6-digit code it shows.
             <div className="row" style={{ marginTop: 8, flexWrap: 'nowrap' }}>
               <input className="input" aria-label="Authenticator code" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
-              <button className="btn btn-primary" disabled={code.length !== 6} onClick={() => void confirm()}>
-                Turn on
+              <button className="btn btn-primary" disabled={busy || code.length !== 6} onClick={() => void confirm()}>
+                {busy ? 'Enabling...' : 'Turn on'}
               </button>
             </div>
           </li>

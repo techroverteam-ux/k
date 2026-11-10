@@ -172,14 +172,14 @@ export default function Login() {
     });
   };
 
-  const title = { conflict: 'Already signed in', signin: `Welcome to ${settings?.appName ?? 'The K'}`, mfa: 'Two-step verification', phone: 'Try a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Enter the code', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
+  const title = { conflict: 'Already signed in', signin: `Welcome to ${settings?.appName ?? 'The K'}`, mfa: 'Two-step verification', phone: 'Try a demo account', otp: 'Verify your number', forgot: 'Reset your password', reset: 'Authenticator verification', signup: 'Create an account', signupDetails: 'Your details', signupDone: 'Request received' }[step];
   const sub = {
     conflict: conflict && conflict.limit > 1 ? `Your account can be signed in on ${conflict.limit} devices at once, and it already is.` : 'Your account is signed in on another device. You can sign that device out and continue here.',
     signin: 'Sign in with the username from your broker or administrator.',
     mfa: 'Enter the 6-digit code from your authenticator app.',
     phone: 'Enter your mobile number. We’ll text a one-time code to get started.',
     otp: `Enter the code sent to ${sentTo}.`,
-    forgot: 'We’ll text a code to the mobile number on your account.',
+    forgot: 'Use the authenticator enrolled on your account. No SMS or email is sent.',
     reset: info ?? '',
     signup: 'Start with your mobile number. We’ll text a code to verify it.',
     signupDetails: `Enter the code sent to ${sentTo} and choose your sign-in details.`,
@@ -326,23 +326,21 @@ export default function Login() {
                 <input id="fu" className="input" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={40} autoFocus />
               </div>
               {errNote}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username}>{busy ? <><span className="spin" aria-hidden />Sending…</> : 'Send code'}</button>
-              <p className="t3" style={{ textAlign: 'center' }}>No mobile number on your account, or an administrator account? Ask your broker or administrator to reset it.</p>
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username}>{busy ? <><span className="spin" aria-hidden />Preparing...</> : 'Continue'}</button>
+              <p className="t3" style={{ textAlign: 'center' }}>No enrolled authenticator or lost access? Contact your administrator for an account reset.</p>
             </form>
           )}
 
           {step === 'reset' && (
             <form className="stack" onSubmit={doReset}>
-              {otpInput('rc')}
+              <div className="field"><label htmlFor="rc">Authenticator code</label><input id="rc" className="input num" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} required autoFocus /></div>
               <div className="field">
                 <label htmlFor="np">New password</label>
                 <input id="np" className="input" type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} required maxLength={128} />
                 <span className="hint">{STRONG}</span>
               </div>
-              {devNote}
               {errNote}
               <button className="btn btn-primary btn-lg btn-block" disabled={busy || code.length !== 6 || newPw.length < 10}>{busy ? 'Saving…' : 'Set new password'}</button>
-              <button type="button" className="btn btn-ghost btn-block" disabled={resendIn > 0 || busy} onClick={() => sendReset()}>{resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}</button>
               <p className="t3" style={{ textAlign: 'center' }}>Changing your password signs you out on every device.</p>
             </form>
           )}

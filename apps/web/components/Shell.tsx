@@ -3,7 +3,7 @@ import { RiskBanner } from './RiskBanner';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { gql, onLiveState, subscribe } from '@/lib/api';
+import { gql, onDataChanged, onLiveState, subscribe } from '@/lib/api';
 import { playTone, usePrefs } from '@/lib/prefs';
 import { useToast } from './ui';
 import { Splash } from './Splash';
@@ -12,12 +12,11 @@ import { homeFor, useAuth, type Role } from '@/lib/auth';
 import { fullName, inr, initials, shortSymbol } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 import { Icon, Logo, type IconName } from './icons';
-import { SkeletonRows } from './ui';
+import { SkeletonRows, Dialog } from './ui';
 
 type Item = { href: string; label: string; icon: IconName; exact?: boolean };
 const NAV: Record<Role, Item[]> = {
   TRADER: [
-    { href: '/trader', label: 'Home', icon: 'home', exact: true },
     { href: '/trader/watchlist', label: 'Watchlist', icon: 'eye' },
     { href: '/trader/positions', label: 'Positions', icon: 'briefcase' },
     { href: '/trader/orders', label: 'Orders', icon: 'list' },
@@ -49,7 +48,9 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
   const { me, loading, signOut, settings } = useAuth();
   const router = useRouter();
   const path = usePathname();
-  const unread = useQuery<{ unreadNotificationCount: number }>(`{ unreadNotificationCount }`, undefined, { skip: !me, pollMs: 30_000 });
+  const counters = useQuery<{ navigationBadges: { href: string; count: number }[] }>(
+    `{ navigationBadges { href count } }`, { }, { skip: !me, pollMs: 10_000 });
+  const [navOpen, setNavOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [live, setLive] = useState<'idle' | 'live' | 'reconnecting'>('idle');
   const [online, setOnline] = useState(true);
@@ -67,7 +68,20 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
     window.addEventListener('online', on); window.addEventListener('offline', off);
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
   }, []);
-  useEffect(() => setMenu(false), [path]);
+  useEffect(() => {
+    setMenu(false); setNavOpen(false);
+    if (!me) return;
+    void gql(`mutation($href:String!){ markNavigationRead(href:$href) }`, { href: path }).then(() => counters.refetch()).catch(() => undefined);
+  }, [path, me?.id]);
+  useEffect(() => {
+    if (!me) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(() => void counters.refetch(), 150); };
+    const off = onDataChanged(refresh);
+    const stopNotifications = subscribe(`subscription { notificationAdded { id } }`, {}, refresh);
+    const stopOrders = me.role === 'TRADER' ? subscribe(`subscription { orderUpdated { id } }`, {}, refresh) : () => undefined;
+    return () => { off(); stopNotifications(); stopOrders(); clearTimeout(timer); };
+  }, [me?.id, me?.role, counters.refetch]);
   const { prefs } = usePrefs();
   const toast = useToast();
   const sounds = useRef(prefs.sounds);
@@ -90,8 +104,9 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
   if (loading || !me || !roles.includes(me.role)) return <div style={{ padding: 24 }}><SkeletonRows rows={6} /></div>;
   const nav = NAV[me.role];
   const active = (i: Item) => (i.exact ? path === i.href : path === i.href || path.startsWith(i.href + '/'));
-  const count = unread.data?.unreadNotificationCount ?? 0;
-
+  const badges = Object.fromEntries((counters.data?.navigationBadges ?? []).map((b) => [b.href, b.count]));
+  const count = badges['/notifications'] ?? 0;
+  const badge = (href: string) => badges[href] ? <span className="nav-count" aria-label={`${badges[href]} ${href === '/notifications' ? 'unread' : 'pending or unread'}`}>{badges[href]}</span> : null;
   return (
     <div className="app">
       <Splash name={settings?.appName ?? 'The K'} />
@@ -102,6 +117,7 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         </Link>
         {me.role === 'TRADER' && <GlobalSearch />}
         <div className="top-actions">
+          <button className="icon-btn mobile-menu-toggle" aria-label="Open navigation" aria-expanded={navOpen} onClick={() => setNavOpen(true)}><Icon name="list" /></button>
           <ThemeMenu />
           {settings?.helplineUrl && (
             <a href={settings.helplineUrl} target="_blank" rel="noopener noreferrer" className="icon-btn" aria-label="Helpline (opens in a new tab)" title="Helpline">
@@ -123,8 +139,8 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
                   <div className="t3">{me.username} · {ROLE[me.role]}</div>
                 </div>
                 <div className="divider" />
-                <Link role="menuitem" href="/account"><Icon name="shield" size={18} />Profile & security</Link>
-                <Link role="menuitem" href="/notifications"><Icon name="bell" size={18} />Notifications</Link>
+                <Link role="menuitem" href="/account"><Icon name="shield" size={18} />Profile & security{badge('/account')}</Link>
+                <Link role="menuitem" href="/notifications"><Icon name="bell" size={18} />Notifications{badge('/notifications')}</Link>
                 {settings?.helplineUrl && <a role="menuitem" href={settings.helplineUrl} target="_blank" rel="noopener noreferrer"><Icon name="info" size={18} />Contact support</a>}
                 <div className="divider" style={{ margin: '4px 0' }} />
                 <button role="menuitem" className="neg" onClick={() => void signOut()}><Icon name="logout" size={18} />Sign out</button>
@@ -137,12 +153,12 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
       <nav className="side" aria-label="Main">
         {nav.map((n) => (
           <Link key={n.href} href={n.href} aria-current={active(n) ? 'page' : undefined} title={n.label}>
-            <Icon name={n.icon} /><span className="lbl">{n.label}</span>
+            <Icon name={n.icon} /><span className="lbl">{n.label}</span>{badge(n.href)}
           </Link>
         ))}
         <div className="side-label">Account</div>
-        <Link href="/notifications" aria-current={path === '/notifications' ? 'page' : undefined} title="Notifications"><Icon name="bell" /><span className="lbl">Notifications</span></Link>
-        <Link href="/account" aria-current={path === '/account' ? 'page' : undefined} title="Profile & security"><Icon name="shield" /><span className="lbl">Profile & security</span></Link>
+        <Link href="/notifications" aria-current={path === '/notifications' ? 'page' : undefined} title="Notifications"><Icon name="bell" /><span className="lbl">Notifications</span>{badge('/notifications')}</Link>
+        <Link href="/account" aria-current={path === '/account' ? 'page' : undefined} title="Profile & security"><Icon name="shield" /><span className="lbl">Profile & security</span>{badge('/account')}</Link>
         <button
           type="button"
           className="side-logout-btn"
@@ -161,10 +177,15 @@ export function Shell({ roles, children }: { roles: Role[]; children: ReactNode 
         <main className="content" id="main">{me?.role === 'TRADER' && <RiskBanner />}{children}</main>
       </div>
 
+      {navOpen && <Dialog title="Navigation" onClose={() => setNavOpen(false)} size="lg">
+        <nav className="mobile-menu" aria-label="All pages">
+          {[...nav, { href: '/notifications', label: 'Notifications', icon: 'bell' as const }, { href: '/account', label: 'Profile & security', icon: 'shield' as const }].map((n) => <Link key={n.href} href={n.href} aria-current={active(n) ? 'page' : undefined} onClick={() => setNavOpen(false)}><Icon name={n.icon} /><span>{n.label}</span>{badge(n.href)}</Link>)}
+        </nav>
+      </Dialog>}
       <nav className="bottom-nav" aria-label="Main">
         {nav.slice(0, 5).map((n) => (
           <Link key={n.href} href={n.href} aria-current={active(n) ? 'page' : undefined}>
-            <Icon name={n.icon} size={22} />{n.label}
+            <Icon name={n.icon} size={22} /><span>{n.label}</span>{badge(n.href)}
           </Link>
         ))}
       </nav>

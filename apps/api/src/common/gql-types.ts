@@ -210,6 +210,10 @@ export class LedgerLine {
 
 @ObjectType()
 export class PaymentRequest {
+  @Field({ nullable: true }) requestedByName?: string;
+  @Field({ nullable: true }) reviewedByName?: string;
+  @Field({ nullable: true }) externalRef?: string;
+  @Field({ nullable: true }) reviewedAt?: Date;
   @Field(() => ID) id: string;
   @Field(() => ID) userId: string;
   @Field({ nullable: true }) username?: string;
@@ -311,7 +315,7 @@ export class AdminOverview {
 export class CommissionLine {
   @Field(() => ID) userId: string;
   @Field() username: string;
-  @Field() brokerage: string;
+  @Field({ nullable: true, description: "Available to administrators only." }) brokerage?: string;
   @Field(() => Int, { description: 'Mini lots traded (opening and cutting each count).' }) miniLots: number;
   @Field(() => Int, { description: 'Mega lots traded (opening and cutting each count).' }) megaLots: number;
   @Field() commission: string;

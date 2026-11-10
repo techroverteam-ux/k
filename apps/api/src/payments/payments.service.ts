@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { soleAdminMayApprove } from '../common/maker-checker';
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, ilike, or, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, forbidden, notFound } from '../common/errors';
 import { formatMoney } from '../common/money';
@@ -209,7 +209,7 @@ export class PaymentsService {
   }
 
   /** Scoped listing: admin → all, broker → own traders, trader → self. */
-  async list(actor: Actor, opts: { status?: PaymentStatus[]; userId?: string; limit: number }) {
+  async list(actor: Actor, opts: { status?: PaymentStatus[]; userId?: string; limit: number; offset?: number; type?: string; search?: string; from?: Date; to?: Date }) {
     const where: (SQL | undefined)[] = [];
     if (opts.userId) {
       await this.policy.assertCanAccessUser(actor, opts.userId);
@@ -219,7 +219,14 @@ export class PaymentsService {
       where.push(inArray(paymentRequests.userId, this.dbs.db.select({ id: users.id }).from(users).where(eq(users.brokerId, actor.userId))));
     }
     if (opts.status?.length) where.push(inArray(paymentRequests.status, opts.status));
+    if (opts.type) where.push(eq(paymentRequests.type, opts.type as 'DEPOSIT' | 'WITHDRAWAL'));
+    if (opts.from) where.push(gte(paymentRequests.createdAt, opts.from));
+    if (opts.to) where.push(lt(paymentRequests.createdAt, opts.to));
+    if (opts.search?.trim()) {
+      const term = `%${opts.search.trim().replace(/[%_\\]/g, (v) => '\\' + v).slice(0, 120)}%`;
+      where.push(or(sql`${paymentRequests.id}::text ILIKE ${term}`, inArray(paymentRequests.userId, this.dbs.db.select({ id: users.id }).from(users).where(or(ilike(users.username, term), ilike(users.displayName, term))))));
+    }
     where.push(afterWipeFor(actor, paymentRequests.createdAt, paymentRequests.userId));
-    return this.dbs.db.select().from(paymentRequests).where(and(...where)).orderBy(desc(paymentRequests.createdAt)).limit(opts.limit);
+    return this.dbs.db.select().from(paymentRequests).where(and(...where)).orderBy(desc(paymentRequests.createdAt)).limit(opts.limit).offset(opts.offset ?? 0);
   }
 }

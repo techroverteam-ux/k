@@ -105,6 +105,8 @@ export function toOrder(o: OrderRow): Order {
 
 export function toPayment(p: PaymentRow, username?: string): PaymentRequest {
   return {
+    externalRef: p.externalRef ?? undefined,
+    reviewedAt: p.reviewedAt ?? undefined,
     id: p.id,
     userId: p.userId,
     username,

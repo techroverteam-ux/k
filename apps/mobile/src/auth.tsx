@@ -29,7 +29,7 @@ interface Ctx {
 }
 const C = createContext<Ctx | null>(null);
 
-export const homeFor = (r: Role) => (r === 'SUPER_ADMIN' ? '/(admin)' : r === 'BROKER' ? '/(broker)' : '/(trader)');
+export const homeFor = (r: Role) => (r === 'SUPER_ADMIN' ? '/(admin)' : r === 'BROKER' ? '/(broker)' : '/(trader)/watchlist');
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);

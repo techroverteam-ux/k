@@ -41,9 +41,9 @@ export default function Security() {
         <div className="panel panel-pad spread">
           <div className="row" style={{ flexWrap: 'nowrap' }}>
             <span className="mark" style={{ background: me.mfaEnabled ? 'var(--pos-soft)' : 'var(--bg-3)', color: me.mfaEnabled ? 'var(--pos)' : 'var(--text-2)' }}><Icon name="shield" size={18} /></span>
-            <div><div className="w6">{me.mfaEnabled ? 'On' : 'Off'}</div><div className="t3">{me.mfaEnabled ? 'You’ll enter a code from your authenticator app when you sign in.' : 'Protect your account with an authenticator app.'}</div></div>
+            <div><div className="w6">{me.mfaEnabled ? 'On' : 'Off'}</div><div className="t3">{me.mfaEnabled ? 'You’ll enter a code from your authenticator app when you sign in or reset your password.' : 'Set up an authenticator to recover a forgotten password.'}</div></div>
           </div>
-          {!me.mfaEnabled && <Link className="btn btn-primary" href="/mfa-setup">Turn on</Link>}
+          {!me.mfaEnabled && <Link className="btn btn-primary" href="/mfa-setup?from=account">Turn on</Link>}
         </div>
       </section>
 

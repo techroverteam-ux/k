@@ -71,7 +71,7 @@ export class UsersService {
     }
     const cond = and(...where);
     const [items, [{ total }]] = await Promise.all([
-      this.dbs.db.select().from(users).where(cond).orderBy(users.createdAt).limit(f.limit).offset(f.offset),
+      this.dbs.db.select().from(users).where(cond).orderBy(sql`CASE WHEN ${users.status} = 'PENDING' THEN 0 ELSE 1 END`, users.createdAt, users.id).limit(f.limit).offset(f.offset),
       this.dbs.db.select({ total: sql<number>`count(*)::int` }).from(users).where(cond),
     ]);
     return { items, total };

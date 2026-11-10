@@ -64,6 +64,8 @@ export class FeesService {
   async addPayee(actor: Actor, i: PayeeInput, ip: string) {
     const clean = (v?: string) => (v ?? '').trim();
     const label = clean(i.label), accountName = clean(i.accountName);
+    const name = /^[\p{L}\p{M} &'().,\-]+$/u;
+    if (!name.test(label) || !name.test(accountName)) throw badInput('Payment label and account holder name must contain letters, spaces and name punctuation only.');
     if (label.length < 2 || label.length > 80) throw badInput('Give it a short name, like “HDFC current account”.');
     if (accountName.length < 2 || accountName.length > 120) throw badInput('Enter the account holder’s name exactly as the bank has it.');
     const row: typeof payeeAccounts.$inferInsert = { kind: i.kind, label, accountName, createdById: actor.userId };
@@ -71,7 +73,10 @@ export class FeesService {
       const accountNumber = clean(i.accountNumber).replace(/\s/g, ''), ifsc = clean(i.ifsc).toUpperCase();
       if (!ACCOUNT_RE.test(accountNumber)) throw badInput('Account number: 9–18 digits.');
       if (!IFSC_RE.test(ifsc)) throw badInput('IFSC: 11 characters, like HDFC0001234.');
-      Object.assign(row, { accountNumber: sealOpt(accountNumber, A_ACC), ifsc, bankName: clean(i.bankName).slice(0, 120) || null, branch: clean(i.branch).slice(0, 120) || null });
+      const bankName = clean(i.bankName), branch = clean(i.branch);
+      if (bankName && (bankName.length < 2 || bankName.length > 120 || !name.test(bankName))) throw badInput('Bank name: 2-120 characters, with no numbers.');
+      if (branch && (branch.length < 2 || branch.length > 60 || !name.test(branch))) throw badInput('Branch: 2-60 characters, with no numbers.');
+      Object.assign(row, { accountNumber: sealOpt(accountNumber, A_ACC), ifsc, bankName: clean(i.bankName).slice(0, 120) || null, branch: branch || null });
     } else if (i.kind === 'UPI') {
       const upiId = clean(i.upiId).toLowerCase();
       if (!UPI_RE.test(upiId)) throw badInput('UPI ID looks like name@bank.');

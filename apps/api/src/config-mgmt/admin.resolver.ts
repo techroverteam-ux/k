@@ -1,4 +1,4 @@
-import { Args, ID, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Args, Field, ID, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import type { Actor, GqlContext } from '../common/context';
 import { Ctx, CurrentActor, RequireStepUp, Roles } from '../common/context';
 import { badInput } from '../common/errors';
@@ -12,6 +12,12 @@ import { Subscription, Context } from '@nestjs/graphql';
 import { soleAdminMayApprove } from '../common/maker-checker';
 import { DbService } from '../db/db';
 import { unauthenticated } from '../common/errors';
+
+@ObjectType()
+class NavigationBadge {
+  @Field() href: string;
+  @Field(() => Int) count: number;
+}
 
 type CfgRow = Awaited<ReturnType<ConfigService['history']>>[number];
 const toVersion = (r: CfgRow): ConfigVersion => ({
@@ -149,6 +155,16 @@ export class AdminResolver {
   @Query(() => [Notification], { name: 'notifications' })
   async notifications_(@CurrentActor() a: Actor, @Args('limit', { type: () => Int, nullable: true }) limit?: number) {
     return (await this.notifications.list(a.userId, clampLimit(limit))).map((n) => ({ ...n, readAt: n.readAt ?? undefined }));
+  }
+
+  @Query(() => [NavigationBadge])
+  navigationBadges(@CurrentActor() a: Actor) {
+    return this.notifications.navigationCounts(a);
+  }
+
+  @Mutation(() => Boolean)
+  markNavigationRead(@CurrentActor() a: Actor, @Args('href') href: string) {
+    return this.notifications.markNavigationRead(a, href.slice(0, 120));
   }
 
   @Query(() => Int)

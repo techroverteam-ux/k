@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { PayFees } from '@/components/fees';
 import { useState } from 'react';
 import { CreateUserDialog, Person, USER_FIELDS, type UserRow } from '@/components/accounts';
 import { Icon } from '@/components/icons';
@@ -50,6 +51,7 @@ export default function BrokerTraders() {
           </>
         )}
       </section>
+      <PayFees />
       {creating && <CreateUserDialog roles={['TRADER']} onClose={() => setCreating(false)} onDone={refetch} />}
     </>
   );

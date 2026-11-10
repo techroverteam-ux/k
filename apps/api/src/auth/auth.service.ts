@@ -453,53 +453,56 @@ export class AuthService {
     return { username: r.user.username, status: r.user.status };
   }
 
-  // ---------------------------------------------------------------- forgot password (OTP to the registered mobile)
+  // ---------------------------------------------------------------- authenticator password recovery
 
-  /**
-   * Always answers the same way, whether or not the account exists, so it can't be used to
-   * discover usernames. Super Admin passwords can't be reset this way (another admin must do it).
-   */
+  /** Same response for every username; recovery never sends SMS or email. */
   async requestPasswordReset(rawUsername: string, ip: string) {
     const username = rawUsername.trim().toLowerCase().slice(0, 40);
-    const [u] = await this.dbs.db.select().from(users).where(eq(users.username, username)).limit(1);
-    let devCode: string | null = null;
-    const phone = u ? readPhone(u) : null;
-    const eligible = u && phone && u.status === 'ACTIVE' && u.role !== 'SUPER_ADMIN' && !u.isDemo;
-    if (eligible) {
-      requestContext.setActor({ userId: u.id, role: u.role });
-      const code = await this.issueOtp(phone!, 'reset', ip);
-      devCode = this.sms.isDev ? code : null;
-    }
-    await this.audit.recordStandalone({
-      actor: u ? { userId: u.id, role: u.role } : undefined,
-      action: 'auth.password_reset_requested',
-      outcome: eligible ? 'SUCCESS' : 'DENIED',
-      ip,
-      metadata: eligible ? { phone: maskPhone(phone!) } : { reason: !u ? 'unknown_user' : u.role === 'SUPER_ADMIN' ? 'admin' : !phone ? 'no_phone' : 'inactive' },
+    const key = peppered(`reset:${username}`);
+    await this.dbs.serializable(async (tx) => {
+      // Serialise requests for this username, including unknown accounts.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${key}))`);
+      const [{ c }] = await tx.select({ c: sql<number>`count(*)::int` }).from(otpChallenges)
+        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'reset'), gt(otpChallenges.createdAt, new Date(Date.now() - 10 * 60_000))));
+      if (c >= OTP_MAX_PER_WINDOW) throw new AppError('RATE_LIMITED', 'Too many reset attempts. Please wait a few minutes.');
+      await tx.insert(otpChallenges).values({ phone: key, purpose: 'reset', codeHash: peppered('pending-reset'), expiresAt: new Date(Date.now() + OTP_TTL_MS), requestIp: ip });
     });
-    return { message: 'If this account can be reset, we have sent a 6-digit code to its registered mobile number.', resendAfterSec: 30, devCode };
+    await this.audit.recordStandalone({ action: 'auth.password_reset_requested', outcome: 'SUCCESS', ip });
+    return { message: 'Enter the current 6-digit code from the authenticator enrolled on your account. If you have not set one up or lost access, contact your administrator.', resendAfterSec: 30, devCode: null };
   }
 
   async resetPassword(rawUsername: string, code: string, newPassword: string, ip: string) {
     const username = rawUsername.trim().toLowerCase().slice(0, 40);
-    const [u] = await this.dbs.db.select().from(users).where(eq(users.username, username)).limit(1);
-    const generic = new AppError('UNAUTHENTICATED', 'Incorrect or expired code.');
-    const phone = u ? readPhone(u) : null;
-    if (!u || !phone || u.status !== 'ACTIVE' || u.role === 'SUPER_ADMIN' || u.isDemo) throw generic;
-    requestContext.setActor({ userId: u.id, role: u.role });
-    this.passwords.assertStrong(newPassword, u.username);
-    const hash = await this.passwords.hash(newPassword);
+    const key = peppered(`reset:${username}`);
+    const generic = new AppError('UNAUTHENTICATED', 'Invalid authentication code or reset request. Start again and use the current code from your authenticator.');
+    if (!/^\d{6}$/.test(code.trim())) throw generic;
     const ok = await this.dbs.serializable(async (tx) => {
-      if (!(await this.consumeOtp(tx, phone, 'reset', code))) return false;
+      const [u] = await tx.select().from(users).where(eq(users.username, username)).for('update');
+      const [ch] = await tx.select().from(otpChallenges)
+        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'reset'), isNull(otpChallenges.consumedAt), gt(otpChallenges.expiresAt, new Date())))
+        .orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
+      if (!ch || ch.attempts >= OTP_MAX_ATTEMPTS) return false;
+      const codeHash = peppered(`${u?.id ?? username}:reset:${code.trim()}`);
+      const [used] = await tx.select({ id: otpChallenges.id }).from(otpChallenges)
+        .where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'reset'), eq(otpChallenges.codeHash, codeHash), gt(otpChallenges.consumedAt, new Date(Date.now() - 10 * 60_000)))).limit(1);
+      const valid = u && u.status === 'ACTIVE' && u.mfaEnabled && u.mfaSecretEnc && !used && authenticator.check(code.trim(), decryptSecret(u.mfaSecretEnc));
+      if (!valid) {
+        await tx.update(otpChallenges).set({ attempts: ch.attempts + 1 }).where(eq(otpChallenges.id, ch.id));
+        return false;
+      }
+      requestContext.setActor({ userId: u.id, role: u.role });
+      this.passwords.assertStrong(newPassword, u.username);
+      const hash = await this.passwords.hash(newPassword);
+      await tx.update(otpChallenges).set({ consumedAt: new Date(), codeHash }).where(eq(otpChallenges.id, ch.id));
       await tx.update(users).set({ passwordHash: hash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() }).where(eq(users.id, u.id));
       await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: 'password_reset' }).where(and(eq(sessions.userId, u.id), isNull(sessions.revokedAt)));
       await this.revokeTrustedDevices(tx, u.id, 'password_reset');
       await this.audit.record(tx, { actor: { userId: u.id, role: u.role }, action: 'auth.password_reset', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip });
-      await this.notifications.notify(tx, u.id, 'security.password_reset', 'Password was reset', 'Your password was reset with a code sent to your mobile, and all devices were signed out. If this wasn’t you, contact support.');
+      await this.notifications.notify(tx, u.id, 'security.password_reset', 'Password was reset', 'Your password was reset using your authenticator, and all devices were signed out. If this was not you, contact support.');
       return true;
     });
     if (!ok) {
-      await this.audit.recordStandalone({ actor: { userId: u.id, role: u.role }, action: 'auth.password_reset_failed', outcome: 'FAILURE', ip });
+      await this.audit.recordStandalone({ action: 'auth.password_reset_failed', outcome: 'FAILURE', ip });
       throw generic;
     }
     return true;

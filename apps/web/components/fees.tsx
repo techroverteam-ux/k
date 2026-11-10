@@ -52,6 +52,7 @@ export function PayFees() {
   const [show, setShow] = useState<Fee | null>(null);
   const list = payees.data?.payeeAccounts ?? [];
   if (payees.loading && !payees.data) return null;
+  if (payees.error && !payees.data) return <ErrorState error={payees.error} retry={payees.refetch} />;
   if (!list.length && !(mine.data?.feePayments.length)) return null;
   return (
     <section className="section">
@@ -211,40 +212,49 @@ export function FeesAdmin({ meId }: { meId: string }) {
 function AddPayee({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const sole = useSoleAdmin();
   const [kind, setKind] = useState<'BANK' | 'UPI'>('BANK');
+  const [step, setStep] = useState(0);
   const [f, setF] = useState({ label: '', accountName: '', bankName: '', accountNumber: '', ifsc: '', branch: '', upiId: '' });
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const toast = useToast();
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
-  return (
-    <Dialog title="Add payment details" sub={sole ? 'Traders see them as soon as you add them.' : 'A different Super Admin must approve them before traders see them.'} onClose={onClose}>
-      <form className="stack" style={{ gap: 12 }} onSubmit={async (e) => {
-        e.preventDefault(); setBusy(true); setErr(null);
-        try {
-          const i = kind === 'BANK' ? { kind, label: f.label, accountName: f.accountName, bankName: f.bankName || undefined, accountNumber: f.accountNumber, ifsc: f.ifsc, branch: f.branch || undefined } : { kind, label: f.label, accountName: f.accountName, upiId: f.upiId };
-          const d = await gql<{ addPayeeAccount: { status: string } }>(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });
-          toast(d.addPayeeAccount.status === 'ACTIVE' ? 'Added: traders can see it now' : 'Added. Another Super Admin needs to approve it.'); onDone();
-        } catch (x) { setErr((x as Error).message); setBusy(false); }
-      }}>
-        <Tabs label="Type" value={kind} onChange={setKind} items={[{ v: 'BANK', label: 'Bank account' }, { v: 'UPI', label: 'UPI ID' }]} />
-        <div className="field"><label htmlFor="pa-label">Name for this (shown to traders)</label><input id="pa-label" className="input" maxLength={80} placeholder={kind === 'BANK' ? 'e.g. HDFC current account' : 'e.g. Company UPI'} value={f.label} onChange={set('label')} /></div>
-        <div className="field"><label htmlFor="pa-name">Account holder name</label><input id="pa-name" className="input" maxLength={120} value={f.accountName} onChange={set('accountName')} /></div>
-        {kind === 'BANK' ? (
-          <>
-            <div className="field"><label htmlFor="pa-no">Account number</label><input id="pa-no" className="input" inputMode="numeric" maxLength={18} value={f.accountNumber} onChange={(e) => setF({ ...f, accountNumber: e.target.value.replace(/\D/g, '') })} /></div>
-            <div className="two"><div className="field"><label htmlFor="pa-ifsc">IFSC</label><input id="pa-ifsc" className="input" maxLength={11} value={f.ifsc} onChange={(e) => setF({ ...f, ifsc: e.target.value.toUpperCase() })} /></div>
-              <div className="field"><label htmlFor="pa-bank">Bank (optional)</label><input id="pa-bank" className="input" maxLength={120} value={f.bankName} onChange={set('bankName')} /></div></div>
-            <div className="field"><label htmlFor="pa-branch">Branch (optional)</label><input id="pa-branch" className="input" maxLength={120} value={f.branch} onChange={set('branch')} /></div>
-          </>
-        ) : (
-          <div className="field"><label htmlFor="pa-upi">UPI ID</label><input id="pa-upi" className="input" maxLength={120} placeholder="name@bank" value={f.upiId} onChange={set('upiId')} /></div>
-        )}
-        <div className="notice info"><Icon name="info" size={18} /><span>Double-check every digit. Traders will send real money here.</span></div>
-        {err && <div className="notice err">{err}</div>}
-        <div className="row" style={{ justifyContent: 'flex-end' }}><button type="button" className="btn" onClick={onClose}>Cancel</button><button type="submit" className="btn btn-primary" disabled={busy}>Add for approval</button></div>
-      </form>
-    </Dialog>
-  );
+  const name = /^[\p{L}\p{M} &'().,\-]+$/u;
+  const nameError = (v: string, max: number, optional = false) => !v.trim() && optional ? '' : v.trim().length < 2 || v.length > max || !name.test(v) ? `Use 2-${max} characters: letters, spaces and name punctuation only.` : '';
+  const errors = {
+    label: nameError(f.label, 80), accountName: nameError(f.accountName, 120), bankName: nameError(f.bankName, 120), branch: nameError(f.branch, 60, true),
+    accountNumber: /^\d{9,18}$/.test(f.accountNumber) ? '' : 'Enter 9-18 digits.',
+    ifsc: /^[A-Z]{4}0[A-Z0-9]{6}$/.test(f.ifsc) ? '' : 'Use a valid 11-character IFSC, e.g. HDFC0001234.',
+    upiId: /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(f.upiId) ? '' : 'Enter a valid UPI ID, e.g. name@bank.',
+  };
+  const keys: (keyof typeof f)[] = step === 0 ? ['label', 'accountName'] : kind === 'BANK' ? ['accountNumber', 'ifsc', 'bankName', 'branch'] : ['upiId'];
+  const valid = keys.every((k) => !errors[k]);
+  const field = (k: keyof typeof f, label: string, max: number, placeholder = '') => <div className="field" key={k}>
+    <label htmlFor={`pa-${k}`}>{label}</label>
+    <input id={`pa-${k}`} className="input" value={f[k]} maxLength={max} placeholder={placeholder} autoComplete="off" inputMode={k === 'accountNumber' ? 'numeric' : undefined}
+      aria-invalid={!!touched[k] && !!errors[k]} aria-describedby={`pa-${k}-error`} onBlur={() => setTouched((v) => ({ ...v, [k]: true }))}
+      onChange={(e) => { let value = e.target.value; if (['label', 'accountName', 'bankName', 'branch'].includes(k)) value = value.replace(/\p{N}/gu, ''); if (k === 'accountNumber') value = value.replace(/\D/g, ''); if (k === 'ifsc') value = value.toUpperCase().replace(/[^A-Z0-9]/g, ''); setF((v) => ({ ...v, [k]: value })); }} />
+    {touched[k] && errors[k] && <span id={`pa-${k}-error`} className="err xs">{errors[k]}</span>}
+  </div>;
+  return <Dialog title="Add payment details" sub={`Step ${step + 1} of 2 - ${step === 0 ? 'Account names' : 'Payment destination'}`} size="lg" className="payee-dialog" onClose={onClose}>
+    <form className="stack payee-form" onSubmit={async (e) => {
+      e.preventDefault(); setTouched((v) => ({ ...v, ...Object.fromEntries(keys.map((k) => [k, true])) }));
+      if (!valid) return;
+      if (!step) { setStep(1); return; }
+      setBusy(true); setErr(null);
+      try {
+        const i = kind === 'BANK' ? { kind, label: f.label.trim(), accountName: f.accountName.trim(), bankName: f.bankName.trim(), accountNumber: f.accountNumber, ifsc: f.ifsc, branch: f.branch.trim() || undefined } : { kind, label: f.label.trim(), accountName: f.accountName.trim(), upiId: f.upiId.trim() };
+        const d = await gql<{ addPayeeAccount: { status: string } }>(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });
+        toast(d.addPayeeAccount.status === 'ACTIVE' ? 'Added: traders can see it now' : 'Added for another administrator to approve.'); onDone();
+      } catch (x) { setErr((x as Error).message); setBusy(false); }
+    }}>
+      {!step ? <><Tabs label="Type" value={kind} onChange={setKind} items={[{ v: 'BANK', label: 'Bank account' }, { v: 'UPI', label: 'UPI ID' }]} />
+        {field('label', 'Name shown to traders', 80, 'Company payment account')}{field('accountName', 'Account holder name', 120)}
+      </> : <div className="payee-fields">{kind === 'BANK' ? <>{field('accountNumber', 'Account number', 18)}{field('ifsc', 'IFSC', 11, 'HDFC0001234')}{field('bankName', 'Bank name', 120)}{field('branch', 'Branch (optional)', 60)}</> : field('upiId', 'UPI ID', 120, 'name@bank')}</div>}
+      <p className="t3 xs" style={{ margin: 0 }}>{sole ? 'Payment details go live when added.' : 'Another administrator must approve these details.'}</p>
+      {err && <div className="notice err" role="alert">{err}</div>}
+      <div className="actions"><button type="button" className="btn" disabled={busy} onClick={() => step ? setStep(0) : onClose()}>{step ? 'Back' : 'Cancel'}</button><button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Adding...' : step ? 'Add payment details' : 'Next'}</button></div>
+    </form>
+  </Dialog>;
 }
 
 function ReviewFee({ f, ok, onClose, onDone }: { f: Fee; ok: boolean; onClose: () => void; onDone: () => void }) {

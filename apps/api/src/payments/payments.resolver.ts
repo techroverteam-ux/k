@@ -29,10 +29,11 @@ export class PaymentsResolver {
   ) {}
 
   private async withNames(rows: Awaited<ReturnType<PaymentsService['list']>>) {
-    const ids = [...new Set(rows.map((r) => r.userId))];
-    const names = ids.length ? await this.dbs.db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, ids)) : [];
+    const ids = [...new Set(rows.flatMap((r) => [r.userId, r.requestedById, ...(r.reviewedById ? [r.reviewedById] : [])]))];
+    const names = ids.length ? await this.dbs.db.select({ id: users.id, username: users.username, displayName: users.displayName }).from(users).where(inArray(users.id, ids)) : [];
     const map = new Map(names.map((n) => [n.id, n.username]));
-    return rows.map((r) => toPayment(r, map.get(r.userId)));
+    const display = new Map(names.map((n) => [n.id, `${n.displayName} (${n.username})`]));
+    return rows.map((r) => ({ ...toPayment(r, map.get(r.userId)), requestedByName: display.get(r.requestedById), reviewedByName: r.reviewedById ? display.get(r.reviewedById) : undefined }));
   }
 
   @Mutation(() => PaymentRequest)
@@ -52,8 +53,14 @@ export class PaymentsResolver {
     @Args('status', { type: () => [PaymentStatusGql], nullable: true }) status?: PaymentStatusGql[],
     @Args('userId', { type: () => ID, nullable: true }) userId?: string,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+    @Args('offset', { type: () => Int, nullable: true }) offset?: number,
+    @Args('type', { type: () => PaymentTypeGql, nullable: true }) type?: PaymentTypeGql,
+    @Args('search', { nullable: true }) search?: string,
+    @Args('from', { nullable: true }) from?: Date,
+    @Args('to', { nullable: true }) to?: Date,
   ) {
-    return this.withNames(await this.payments.list(a, { status: status as any, userId, limit: clampLimit(limit) }));
+    if (from && to && from >= to) throw badInput('The end date must follow the start date.');
+    return this.withNames(await this.payments.list(a, { status: status as any, userId, limit: clampLimit(limit), offset: Math.max(0, Math.min(offset ?? 0, 1_000_000)), type, search, from, to }));
   }
 
   @Roles('SUPER_ADMIN')

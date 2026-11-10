@@ -1,9 +1,8 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
 import { useSoleAdmin } from './sole-admin';
-import { DemoDepositDetails } from './demo-deposit';
 import { router, useFocusEffect } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Linking, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { API_URL, gql, newKey, subscribe } from './api';
 import { useActive } from './active';
@@ -15,7 +14,7 @@ import { QuickTradeSheet } from './quick-trade';
 import { Icon } from './icons';
 import { CTL, inr, initials, R, S, shortSymbol, toneOfValue, useTheme, when } from './theme';
 import {
-  Badge, Button, Change, Chips, DateField, Divider, Empty, ErrorState, Field, IconButton, IconMark, ListRow, Mark, Metrics, Notice, Row, Screen, SearchBox,
+  Badge, Button, Change, Chips, DateField, Divider, Empty, ErrorState, Field, IconButton, IconMark, ListRow, Lines, Mark, Metrics, Notice, Row, Screen, SearchBox,
   Flash, Section, Sheet, Skeleton, Spread, StatusBadge, SwipeRow, T, Tabs, tap, toast, useQuery, VList, ymdLabel,
 } from './ui';
 
@@ -43,21 +42,25 @@ function MarketFilter({ cat, lot, onCat, onLot }: { cat: Cat; lot: Lot; onCat: (
 const expiryTime = (expiry?: string, ts?: string) =>
   `${expiry ? `${new Date(expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · ` : ''}${ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }) : '—'}`;
 
+const scriptPrice = (value?: string) => inr(value).replace(/\.00$/, '');
+
 /** Bid (red) and ask (green) boxes; each blinks green when its price rises and red when it falls. Low / High below. */
 function BidAsk({ id, qq, onPick }: { id: string; qq?: Quote; onPick?: (side: 'BUY' | 'SELL') => void }) {
   const t = useTheme();
+  const { width } = useWindowDimensions();
+  const columnWidth = Math.min(108, Math.max(68, (width - 100) * .25));
   return (
     <>
       {(['SELL', 'BUY'] as const).map((sd) => {
         const v = sd === 'BUY' ? qq?.ask : qq?.bid;
         return (
-          <Pressable key={sd} onPress={() => { tap(); if (onPick) onPick(sd); else router.push(`/instrument/${id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${v ?? ''}`} style={{ alignItems: 'center', gap: 2 }}>
-            <Flash value={v} style={{ borderRadius: R.md, overflow: 'hidden' }}>
-              <View style={{ minWidth: 72, paddingVertical: 6, paddingHorizontal: 6, backgroundColor: sd === 'BUY' ? t.posSoft : t.negSoft, alignItems: 'center' }}>
-                <T v="num" c={sd === 'BUY' ? 'pos' : 'neg'}>{inr(v)}</T>
+          <Pressable key={sd} onPress={() => { tap(); if (onPick) onPick(sd); else router.push(`/instrument/${id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${v ?? ''}`} style={{ width: columnWidth, alignItems: 'stretch', gap: 5 }}>
+            <Flash value={v} style={{ borderRadius: 12, overflow: 'hidden' }}>
+              <View style={{ width: columnWidth, paddingVertical: 12, paddingHorizontal: 3, backgroundColor: sd === 'BUY' ? t.pos : t.negSoft, alignItems: 'center' }}>
+                <T v="num" c={sd === 'BUY' ? 'text' : 'neg'} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ fontSize: 14, ...(sd === 'BUY' ? { color: '#fff' } : {}) }}>{scriptPrice(v)}</T>
               </View>
             </Flash>
-            <T v="xs">{sd === 'BUY' ? `H ${inr(qq?.high)}` : `L ${inr(qq?.low)}`}</T>
+            <T v="xs" numberOfLines={1} adjustsFontSizeToFit style={{ textAlign: 'center', fontSize: 10 }}>{sd === 'BUY' ? `H ${scriptPrice(qq?.high)}` : `L ${scriptPrice(qq?.low)}`}</T>
           </Pressable>
         );
       })}
@@ -250,6 +253,7 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
 
 export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPOSIT' | 'WITHDRAWAL'; userId?: string; available?: string; onClose: () => void }) {
   const [amount, setAmount] = useState('');
+  const [review, setReview] = useState(false);
   const [touched, setTouched] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -265,17 +269,20 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : under ? `Minimum to add is ${minLabel}` : over ? `You can withdraw up to ₹${inr(available)}` : null);
   return (
     <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
-      <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} autoFocus onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
+      {!review ? <>
+      <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
       {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={[min, min * 2, min * 4, min * 10].map(String).map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
-      {type === 'DEPOSIT' && !sole && <DemoDepositDetails />}
+      </> : <Lines lines={[[type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw', `\u20b9${inr(amount)}`], ['Approval', sole ? 'Posts immediately' : 'Administrator review']]} />}
+      {review && <Button kind="ghost" title="Edit amount" disabled={busy} onPress={() => setReview(false)} />}
       {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title="Send request" busy={busy} onPress={async () => {
+      <Button kind="primary" size="lg" title={review ? "Send request" : "Review request"} busy={busy} onPress={async () => {
         setTouched(true);
         if (!fmt || over || under) return;
+        if (!review) { setReview(true); return; }
         setBusy(true); setErr(null);
         try {
           const d = await gql<{ requestPayment: { id: string } }>(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } });
-          // Only one Super Admin: post it now (asks for the password), no separate approval step.
+          // Only one Super Admin: post immediately without a separate approval step.
           if (sole) {
             try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: d.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
             catch { toast('Request saved. Approve it under Approvals.'); }
@@ -316,7 +323,7 @@ export function Movers() {
 }
 
 /* ====================================================================== watchlist */
-interface WEntry { id: string; instrument: Inst }
+interface WEntry { id: string; instrument: Inst; quote?: Quote }
 
 /** One watchlist row. Memoised: re-renders only when its own quote changes. */
 const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove, onOpen }: { e: WEntry; qq?: Quote; detailed: boolean; onRemove: (e: WEntry) => void; onOpen: (id: string, side?: 'BUY' | 'SELL') => void }) {
@@ -324,16 +331,18 @@ const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove, onOpen }: {
   const sym = shortSymbol(e.instrument.symbol);
   const row = detailed ? (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
-      <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Row gap={6}><T w="700" numberOfLines={1}>{sym}</T><Badge text={e.instrument.segment} /></Row>
-        <Row gap={6}><T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'}>{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} pctOnly /></Row>
-        <T v="xs" numberOfLines={1}>{expiryTime(e.instrument.expiry, qq?.ts)}</T>
+      <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}><T w="700" style={{ fontSize: 15 }}>{sym.toUpperCase()}</T>{e.instrument.expiry && <T v="xs" style={{ fontSize: 9 }}>{new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })}</T>}</View>
+        <View style={{ alignSelf: 'flex-start' }}><Badge text={e.instrument.category === 'CRYPTO' ? 'CRYPTO' : e.instrument.exchange} /></View>
+        <T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} numberOfLines={1} adjustsFontSizeToFit style={{ fontSize: 15 }}>{scriptPrice(qq?.ltp)}</T>
+        <T v="xs" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} style={{ fontSize: 10 }}>{qq?.change ? `${Number(qq.change) < 0 ? '\u25bc' : '\u25b2'} ${inr(qq.change, true)} (${inr(qq.changePct, true)}%)` : '\u2014'}</T>
+        <T v="xs" style={{ fontSize: 9 }}>{expiryTime(undefined, qq?.ts)}</T>
       </Pressable>
       <BidAsk id={e.instrument.id} qq={qq} onPick={(sd) => onOpen(e.instrument.id, sd)} />
     </View>
   ) : (
     <ListRow onPress={() => onOpen(e.instrument.id)} label={`${sym}, ₹${qq?.ltp ?? ''}`} title={sym} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
-      right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{inr(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} /></View>} />
+      right={<View style={{ alignItems: 'flex-end', gap: 2 }}><T v="num">₹{scriptPrice(qq?.ltp)}</T><Change value={qq?.change} pct={qq?.changePct} /></View>} />
   );
   return (
     <SwipeRow action={() => onRemove(e)} actionLabel="Remove">
@@ -346,8 +355,11 @@ const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove, onOpen }: {
 /** The watchlist: one list, with a search bar on top that finds instruments and adds them in place. */
 export function WatchlistBlock({ limit, header }: { limit?: number; header?: ReactNode }) {
   const { prefs } = usePrefs();
+  const t = useTheme();
+  const { width } = useWindowDimensions();
+  const columnWidth = Math.min(108, Math.max(68, (width - 100) * .25));
   const detailed = !limit && prefs.watchlistView === 'detailed';
-  const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry } } }`, { l: 0 });
+  const { data, error, loading, refetch } = useQuery<{ watchlist: WEntry[] }>(`query($l:Int!){ watchlist(listIndex:$l){ id instrument{ id symbol name exchange segment expiry category } quote{ ${QF} } } }`, { l: 0 });
   // Coming back from "Add script": reload so the scripts just added show up.
   const seen = useRef(false);
   useFocusEffect(useCallback(() => { if (seen.current) void refetch(); seen.current = true; }, [refetch]));
@@ -368,13 +380,14 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
     <>
       {header}
       <Spread style={{ alignItems: 'center', marginBottom: S[1] }}>
-        <T w="600">Watchlist <T v="sm" c="text2">{count}/50</T></T>
+        {count > 0 ? <T w="600">Watchlist <T v="sm" c="text2">{count}/50</T></T> : <View />}
         <Button size="sm" kind="primary" icon="plus" title="Add script" disabled={count >= 50} onPress={addScript} />
       </Spread>
+      {entries.length > 0 && detailed && <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}><T v="xs" w="600" style={{ flex: 1, fontSize: 9 }}>INSTRUMENT · LTP · CHG%</T><T v="xs" c="neg" w="600" style={{ width: columnWidth, textAlign: 'center' }}>BID</T><T v="xs" c="pos" w="600" style={{ width: columnWidth, textAlign: 'center' }}>ASK</T></View>}
     </>
   );
   const state = loading && !data ? <Skeleton /> : error && !data ? <ErrorState error={error} retry={refetch} />
-    : <Empty icon="eye" title="Your watchlist is empty" action={<Button size="sm" kind="primary" icon="plus" title="Add script" onPress={addScript} />}>Tap Add script to pick the instruments you follow.</Empty>;
+    : null;
   const hint = entries.length ? <T v="xs" style={{ textAlign: 'center', marginTop: S[3] }}>{detailed ? 'Tap a row or a price to trade. Swipe a row left to remove it.' : 'Tap a row to trade. Swipe a row left to remove it.'}</T> : null;
   const sheet = (
     <Sheet visible={!!removing} title={removing ? `Remove ${shortSymbol(removing.instrument.symbol)}?` : ''} sub={removing?.instrument.name} onClose={() => setRemoving(null)}>
@@ -387,7 +400,7 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   return (
     <>
       <VList data={entries} keyOf={(e) => e.id} header={top} empty={state} footer={hint}
-        render={(e) => <WatchRow e={e} qq={q[e.instrument.id]} detailed={detailed} onRemove={onRemove} onOpen={onOpen} />} />
+        render={(e) => <WatchRow e={e} qq={q[e.instrument.id] ?? e.quote} detailed={detailed} onRemove={onRemove} onOpen={onOpen} />} />
       {sheet}
       {quick && <QuickTradeSheet instrumentId={quick.id} initialSide={quick.side} onClose={() => setQuick(null)} />}
     </>
@@ -542,7 +555,7 @@ export function ProfileView() {
         <View style={{ flex: 1 }}><T v="h2">{me?.displayName}</T><T v="sm" c="text2">{me?.username} · {role}{me?.isDemo ? ' · demo' : ''}</T></View>
       </Row>
       <View>
-        <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Sign-ins ask for a code from your authenticator app' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
+        <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Your authenticator can recover a forgotten password' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
         {!me?.isDemo && <Item icon="key" label="Change password" onPress={() => setPw(true)} />}
         {!me?.isDemo && me?.role !== 'SUPER_ADMIN' && <Item icon="fingerprint" label="MPIN & fingerprint" sub={quick?.owner.userId === me?.id ? (quick?.owner.biometric ? 'On: MPIN and fingerprint' : 'On: MPIN') : 'Off. Unlock without your password'} onPress={() => router.push('/quick-settings')} />}
         {me?.role !== 'SUPER_ADMIN' && <Item icon="alert" label="Wipe out account" sub="Fresh start: clear your history and reset the balance" onPress={() => router.push('/wipe')} />}

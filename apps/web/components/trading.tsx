@@ -7,7 +7,6 @@ import { gql, newKey, subscribe } from '@/lib/api';
 import { fullName, inr, shortSymbol, tone, when, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
-import { DemoDepositDetails } from './demo-deposit';
 import { Private, usePrefs } from '@/lib/prefs';
 import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
 
@@ -271,7 +270,8 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
 export function PaymentDialog({ type, userId, onClose, onDone, available }: { type: 'DEPOSIT' | 'WITHDRAWAL'; userId?: string; onClose: () => void; onDone?: () => void; available?: string }) {
   const [amount, setAmount] = useState('');
   const [touched, setTouched] = useState(false);
-  const key = useMemo(newKey, []);
+  const [review, setReview] = useState(false);
+  const key = useMemo(newKey, [amount]);
   const toast = useToast();
   const m = useMutation(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id status } }`);
   const { settings, me } = useAuth();
@@ -282,48 +282,31 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
   const under = type === 'DEPOSIT' && fmtOk && Number(amount) < min;
   const over = type === 'WITHDRAWAL' && available !== undefined && fmtOk && Number(amount) > Number(available);
   const invalid = touched && (!fmtOk || over || under);
-  return (
-    <Dialog
-      title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'}
-      sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'}
-      onClose={onClose}
-    >
-      <form className="stack" onSubmit={async (e) => {
-        e.preventDefault(); setTouched(true);
-        if (!fmtOk || over || under) return;
-        const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } }) as { requestPayment: { id: string } } | null;
-        if (!r) return;
-        // Only one Super Admin: post it now (asks for the password), no separate approval step.
-        if (sole) {
-          try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: r.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
-          catch { toast('Request saved. Approve it on Transactions.'); }
-        } else toast('Request sent for review');
-        onDone?.(); onClose();
-      }}>
-        <div className="field">
-          <label htmlFor="amt">Amount</label>
-          <div className="input-icon">
-            <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-2)' }}>₹</span>
-            <input id="amt" className="input num" style={{ background: 'var(--bg)', borderColor: 'var(--line-2)', paddingLeft: 30, fontSize: 18, height: 48 }} inputMode="decimal" autoFocus value={amount} aria-invalid={invalid} aria-describedby="amt-h" onBlur={() => setTouched(true)} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" />
-          </div>
-          <span id="amt-h" className={invalid ? 'err' : 'hint'}>
-            {invalid ? (over ? `You can withdraw up to ₹${inr(available)}` : under ? `Minimum to add is ${minLabel}` : 'Enter an amount with up to 2 decimals') : type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : 'Up to 2 decimal places'}
-          </span>
+  return <Dialog title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={review ? 'Review your request' : 'Enter the amount you want to request.'} className="funds-dialog" onClose={onClose}>
+    <form className="funds-form" onSubmit={async (e) => {
+      e.preventDefault(); setTouched(true);
+      if (!fmtOk || over || under) return;
+      if (!review) { setReview(true); return; }
+      const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } }) as { requestPayment: { id: string } } | null;
+      if (!r) return;
+      if (sole) {
+        try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: r.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
+        catch { toast('Request saved. Approve it on Transactions.'); }
+      } else toast('Request sent for review');
+      onDone?.(); onClose();
+    }}>
+      {!review ? <>
+        <div className="field"><label htmlFor="amt">Amount (INR)</label>
+          <div className="funds-amount"><span aria-hidden>₹</span><input id="amt" className="input num" inputMode="decimal" autoComplete="off" maxLength={15} value={amount} aria-invalid={invalid} aria-describedby="amt-h" onBlur={() => setTouched(true)} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" /></div>
+          <span id="amt-h" className={invalid ? 'err' : 'hint'}>{invalid ? over ? `You can withdraw up to ₹${inr(available)}` : under ? `Minimum to add is ${minLabel}` : 'Enter an amount with up to 2 decimals' : type === 'DEPOSIT' ? `Minimum ${minLabel}` : available ? `Available: ₹${inr(available)}` : 'Up to 2 decimal places'}</span>
         </div>
-        {type === 'DEPOSIT' && (
-          <div className="chips" aria-label="Quick amounts">
-            {[min, min * 2, min * 4, min * 10].map(String).map((v) => <button type="button" key={v} className="chip" aria-pressed={amount === v} onClick={() => setAmount(v)}>+₹{inr(v, { decimals: false })}</button>)}
-          </div>
-        )}
-        {type === 'DEPOSIT' && !sole && <DemoDepositDetails />}
-        {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}
-        <div className="actions" style={{ marginTop: 4 }}>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={m.pending}>{m.pending ? 'Sending…' : 'Send request'}</button>
-        </div>
-      </form>
-    </Dialog>
-  );
+        {type === 'DEPOSIT' && <div className="funds-quick" aria-label="Quick amounts">{[min, min * 2, min * 4, min * 10].map(String).map((v) => <button type="button" className="chip" key={v} aria-pressed={amount === v} onClick={() => { setAmount(v); setTouched(true); }}>₹{inr(v, { decimals: false })}</button>)}</div>}
+      </> : <div className="funds-review"><span className="t2">{type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw'}</span><strong className="num">₹{inr(amount)}</strong><span className="badge">{sole ? 'Posts immediately' : 'Pending administrator approval'}</span></div>}
+      <p className="funds-note">{sole ? 'The amount posts to the ledger when you confirm.' : 'An administrator reviews your request before your trading balance changes.'}</p>
+      {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}
+      <div className="actions"><button type="button" className="btn" disabled={m.pending} onClick={() => review ? setReview(false) : onClose()}>{review ? 'Back' : 'Cancel'}</button><button type="submit" className="btn btn-primary" disabled={m.pending}>{m.pending ? 'Sending...' : review ? 'Send request' : 'Review request'}</button></div>
+    </form>
+  </Dialog>;
 }
 
 /* ======================================================================= watchlist */
@@ -447,6 +430,10 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
   }, [searching, hitEntries, entries]);
 
   const totalDisplayed = searching ? (hits?.length ?? 0) : entries.length;
+
+  if (!adding && data && !entries.length) return (
+    <div className="wl-empty"><Link className="btn btn-primary" href="/trader/add-script"><Icon name="plus" size={18} />Add script</Link></div>
+  );
 
   return (
     <section className="panel wl" aria-label={adding ? 'Add script' : 'Watchlist'}>
@@ -584,85 +571,35 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
             </div>
           </>
         )
-      ) : loading && !data ? <SkeletonRows rows={6} pad /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !entries.length ? (
-        <Empty icon="eye" title="Your watchlist is empty" action={<Link className="btn btn-sm btn-primary" href="/trader/add-script"><Icon name="plus" size={16} />Add script</Link>}>Add the scripts you follow and they show up here.</Empty>
-      ) : compact ? (
-        <div className="list list-pad">
-          {entries.map((e) => (
-            <CompactRow
-              key={e.id}
-              e={e}
-              q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
-              inList
-              onToggle={() => void remove(e.instrument.id, e.instrument.symbol)}
-            />
-          ))}
+      ) : loading && !data ? <SkeletonRows rows={6} pad /> : error && !data ? <ErrorState error={error} retry={refetch} /> : entries.length ? (
+        compact ? <div className="list list-pad">{entries.map((e) => <CompactRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote} inList onToggle={() => void remove(e.instrument.id, e.instrument.symbol)} />)}</div> :
+        <div className="script-table" role="table" aria-label="Watchlist scripts">
+          <div className="script-table-head" role="row"><span role="columnheader">Instrument · LTP · Chg%</span><span role="columnheader" className="neg">Bid</span><span role="columnheader" className="pos">Ask</span></div>
+          {entries.map((e) => <ScriptRow key={e.id} e={e} q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote} onRemove={() => void remove(e.instrument.id, e.instrument.symbol)} />)}
         </div>
-      ) : (
-        <>
-          <div className="list list-pad only-mob">
-            {displayedGroups.map((g) => (
-              <div key={g.category}>
-                <div className="spread" style={{ padding: '8px 12px', background: 'var(--bg-2)', fontWeight: 600, fontSize: 13, textTransform: 'uppercase' }}>
-                  <span>{g.label}</span>
-                  <span className="badge">{g.items.length}</span>
-                </div>
-                {g.items.map((e) => (
-                  <CompactRow
-                    key={e.id}
-                    e={e}
-                    q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
-                    withBidAsk={prefs.watchlistView === 'detailed'}
-                    inList
-                    onToggle={() => void remove(e.instrument.id, e.instrument.symbol)}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-          <div className="table-wrap only-desk">
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Instrument ({totalDisplayed})</th>
-                  <th className="r">LTP</th>
-                  <th className="r">Chg %</th>
-                  <th className="hide-sm">Expiry</th>
-                  <th className="r hide-sm">Time</th>
-                  <th className="r">Bid · Ask <span className="t3 xs">(Low · High)</span></th>
-                  <th className="r"><span className="sr-only">Remove</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedGroups.map((g) => (
-                  <Fragment key={g.category}>
-                    <tr className="cat-group-row">
-                      <th colSpan={7}>
-                        <div className="cat-group-head">
-                          <span>{g.label}</span>
-                          <span className="badge">{g.items.length}</span>
-                        </div>
-                      </th>
-                    </tr>
-                    {g.items.map((e) => (
-                      <FullRow
-                        key={e.id}
-                        e={e}
-                        q={live[e.instrument.id] ?? e.quote ?? e.instrument.quote}
-                        inList
-                        onRemove={() => void remove(e.instrument.id, e.instrument.symbol)}
-                      />
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+      ) : null}
     </section>
   );
 }
+
+const scriptPrice = (value?: string) => inr(value).replace(/\.00$/, '');
+
+/** Same three-column quote layout on desktop and phones. */
+const ScriptRow = memo(function ScriptRow({ e, q, onRemove }: { e: WEntry; q?: Quote; onRemove: () => void }) {
+  const href = `/trader/instrument/${e.instrument.id}`;
+  const name = fullName(e.instrument);
+  const bidTick = useTick(q?.bid), askTick = useTick(q?.ask);
+  return <div className="script-row" role="row">
+    <div className="script-info" role="cell">
+      <div className="script-identity"><Link className="script-name" href={href}>{name}</Link>{e.instrument.expiry && <span className="script-expiry">{expiryText(e.instrument.expiry)}</span>}<button className="script-remove" onClick={onRemove} aria-label={`Remove ${name} from watchlist`} title="Remove from watchlist"><Icon name="x" size={14} /></button></div>
+      <span className="script-market">{e.instrument.category === 'CRYPTO' ? 'CRYPTO' : e.instrument.category === 'FOREX' ? 'FOREX' : e.instrument.exchange}</span>
+      <Link className={`script-ltp num ${tone(q?.change)}`} href={href}>{scriptPrice(q?.ltp)}</Link>
+      <div className="script-change"><Change value={q?.change} pct={q?.changePct} size="sm" /><time className="script-time" dateTime={q?.ts}>{quoteTime(q?.ts)}</time></div>
+    </div>
+    <div className="script-quote" role="cell"><Link className={`script-price bid ${bidTick}`} href={`${href}?side=SELL`} aria-label={`Sell ${name} at ${q?.bid ?? ''}`}>{scriptPrice(q?.bid)}</Link><span className="script-extreme num">L: {scriptPrice(q?.low)}</span></div>
+    <div className="script-quote" role="cell"><Link className={`script-price ask ${askTick}`} href={`${href}?side=BUY`} aria-label={`Buy ${name} at ${q?.ask ?? ''}`}>{scriptPrice(q?.ask)}</Link><span className="script-extreme num">H: {scriptPrice(q?.high)}</span></div>
+  </div>;
+});
 
 const CompactRow = memo(function CompactRow({
   e,
@@ -967,5 +904,5 @@ export function LedgerTable({ userId }: { userId?: string }) {
   );
 }
 
-export interface Payment { id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; reviewNote?: string; createdAt: string; requestedById: string }
-export const PAYMENT_FIELDS = 'id userId username type mode amount status reviewNote createdAt requestedById';
+export interface Payment { requestedByName?: string; reviewedByName?: string; updatedAt?: string; reviewedAt?: string; reviewedById?: string; journalId?: string; externalRef?: string; id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; reviewNote?: string; createdAt: string; requestedById: string }
+export const PAYMENT_FIELDS = 'id userId username type mode amount status reviewNote createdAt updatedAt reviewedAt reviewedById journalId externalRef requestedById requestedByName reviewedByName';

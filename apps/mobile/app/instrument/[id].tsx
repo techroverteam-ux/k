@@ -189,11 +189,11 @@ export default function StockScreen() {
   );
 }
 
-type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS' | 'TAKE_PROFIT';
+type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS';
 interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; brokeragePerLot?: string; brokeragePerMegaLot?: string; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
-const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
-const isTrig = (t: OType) => t === 'STOP_LOSS' || t === 'TAKE_PROFIT';
-const firesOnFall = (t: OType, s: Side) => (t === 'STOP_LOSS' && s === 'SELL') || (t === 'TAKE_PROFIT' && s === 'BUY');
+const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss' };
+const isTrig = (t: OType) => t === 'STOP_LOSS';
+const firesOnFall = (t: OType, s: Side) => t === 'STOP_LOSS' && s === 'SELL';
 const roundToTick = (v: number, tick: number) => { const t = Math.round(tick * 100); return (Math.max(t, Math.round((v * 100) / t) * t) / 100).toFixed(2); };
 
 function QtyChip({ text, onPress, tone }: { text: string; onPress?: () => void; tone?: 'info' }) {
@@ -277,7 +277,7 @@ function OrderSheet({ i, q, side, setSide, initialQty, onClose }: { i: I; q?: { 
           {session && (
             <Row gap={6}><View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: session.isOpen ? t.pos : t.neg }} /><T v="xs" c="text2">{session.isOpen ? `${i.exchange} open · ${session.open}–${session.close} IST` : session.message}</T></Row>
           )}
-          <Chips value={type} onChange={(k) => { setType(k); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }, { k: 'TAKE_PROFIT', label: 'TP' }]} />
+          <Chips fill value={type} onChange={(k) => { setType(k); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }]} />
           <Row style={{ alignItems: 'flex-start' }}>
             <View style={{ flex: 1.2, gap: 6 }}>
               <T v="sm" c="text2" w="500">Quantity (lots)</T>

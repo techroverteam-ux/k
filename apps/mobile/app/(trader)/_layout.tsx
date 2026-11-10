@@ -36,8 +36,8 @@ export default function TraderTabs() {
   if (me.role !== 'TRADER') return <Redirect href={homeFor(me.role)} />;
   return (
     <>
-      <Tabs screenOptions={opts}>
-        <Tabs.Screen name="index" options={{ title: 'Home', tabBarIcon: ico('home') }} />
+      <Tabs initialRouteName="watchlist" screenOptions={opts}>
+        <Tabs.Screen name="index" options={{ href: null }} />
         <Tabs.Screen name="watchlist" options={{ title: 'Watchlist', tabBarIcon: ico('eye') }} />
         <Tabs.Screen name="positions" options={{ title: 'Portfolio', tabBarIcon: ico('briefcase') }} />
         <Tabs.Screen name="trade" options={{ title: 'Funds', tabBarIcon: ico('wallet') }} />

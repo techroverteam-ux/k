@@ -92,7 +92,7 @@ export function QuickTradeSheet({ instrumentId, initialSide, initialQty, onClose
         <Row gap={S[2]}>{box('SELL')}{box('BUY')}</Row>
       </Spread>
 
-      <Chips value={type} onChange={(v) => { setType(v); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }]} />
+      <Chips fill value={type} onChange={(v) => { setType(v); setPrice(''); }} items={[{ k: 'MARKET', label: 'Market' }, { k: 'LIMIT', label: 'Limit' }, { k: 'STOP_LOSS', label: 'SL' }]} />
       <Row style={{ alignItems: 'flex-start' }}>
         <View style={{ flex: 1, gap: 4 }}>
           <T v="sm" c="text2" w="500">Lots</T>

@@ -17,7 +17,7 @@ import { NUM_SCALE, usePrefs } from './prefs';
 
 /* ============================================================== text */
 type TV = 'h1' | 'h2' | 'h3' | 'body' | 'sm' | 'xs' | 'num' | 'numLg' | 'hero';
-export function T({ v = 'body', c, w, style, children, ...p }: { v?: TV; c?: 'text' | 'text2' | 'text3' | 'pos' | 'neg' | 'brand' | 'warn'; w?: '400' | '500' | '600' | '700'; style?: TextStyle; children: ReactNode; numberOfLines?: number; selectable?: boolean; accessibilityRole?: 'header' | 'text' | 'alert' }) {
+export function T({ v = 'body', c, w, style, children, ...p }: { v?: TV; c?: 'text' | 'text2' | 'text3' | 'pos' | 'neg' | 'brand' | 'warn'; w?: '400' | '500' | '600' | '700'; style?: TextStyle; children: ReactNode; adjustsFontSizeToFit?: boolean; minimumFontScale?: number; numberOfLines?: number; selectable?: boolean; accessibilityRole?: 'header' | 'text' | 'alert' }) {
   const t = useTheme();
   const { prefs } = usePrefs();
   const k = NUM_SCALE[prefs.numberSize];
@@ -279,15 +279,15 @@ export function Tabs<K extends string>({ value, onChange, items, scroll, right }
 }
 
 /** Pill chips (filters, order type, period). */
-export function Chips<K extends string>({ value, onChange, items }: { value: K; onChange: (k: K) => void; items: { k: K; label: string; disabled?: boolean }[] }) {
+export function Chips<K extends string>({ value, onChange, items, fill }: { fill?: boolean; value: K; onChange: (k: K) => void; items: { k: K; label: string; disabled?: boolean }[] }) {
   const t = useTheme();
   return (
-    <Row gap={S[2]} style={{ flexWrap: 'wrap' }}>
+    <Row gap={S[2]} style={{ flexWrap: fill ? 'nowrap' : 'wrap' }}>
       {items.map((i) => {
         const on = value === i.k;
         return (
           <Pressable key={i.k} disabled={i.disabled} onPress={() => { if (!on) tap('select'); onChange(i.k); }} accessibilityRole="button" accessibilityState={{ selected: on, disabled: !!i.disabled }}
-            style={({ pressed }) => ({ height: CTL.hSm, paddingHorizontal: S[3], borderRadius: R.pill, borderWidth: 1, borderColor: on ? t.brand : t.line2, backgroundColor: on ? t.brandSoft : pressed ? t.bg3 : t.bg, justifyContent: 'center', opacity: i.disabled ? 0.4 : 1 })}>
+            style={({ pressed }) => ({ height: fill ? CTL.h : CTL.hSm, flex: fill ? 1 : undefined, alignItems: fill ? 'center' : undefined, paddingHorizontal: fill ? S[2] : S[3], borderRadius: fill ? R.md : R.pill, borderWidth: 1, borderColor: on ? t.brand : t.line2, backgroundColor: on ? t.brandSoft : pressed ? t.bg3 : t.bg, justifyContent: 'center', opacity: i.disabled ? 0.4 : 1 })}>
             <T v="sm" c={on ? 'brand' : 'text2'} w="500">{i.label}</T>
           </Pressable>
         );

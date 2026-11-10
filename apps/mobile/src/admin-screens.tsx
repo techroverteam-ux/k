@@ -324,10 +324,9 @@ export function CommissionsScreen() {
   const t = useTheme();
   const [m, setM] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const range = useMemo(() => ({ f: new Date(m.y, m.m, 1).toISOString(), t: new Date(m.y, m.m + 1, 1).toISOString() }), [m]);
-  const q = useQuery<{ commissionReport: { perMiniLot: string; perMegaLot: string; total: string; lines: { userId: string; username: string; brokerage: string; miniLots: number; megaLots: number; commission: string }[] } }>(
-    `query($f:DateTime!,$t:DateTime!){ commissionReport(from:$f,to:$t){ perMiniLot perMegaLot total lines{ userId username brokerage miniLots megaLots commission } } }`, range);
+  const q = useQuery<{ commissionReport: { perMiniLot: string; perMegaLot: string; total: string; lines: { userId: string; username: string; miniLots: number; megaLots: number; commission: string }[] } }>(
+    `query($f:DateTime!,$t:DateTime!){ commissionReport(from:$f,to:$t){ perMiniLot perMegaLot total lines{ userId username miniLots megaLots commission } } }`, range);
   const r = q.data?.commissionReport;
-  const brokerage = r?.lines.reduce((a, l) => a + Number(l.brokerage), 0).toFixed(2);
   const now = new Date();
   const isCurrent = m.y === now.getFullYear() && m.m === now.getMonth();
   const label = new Date(m.y, m.m, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -342,10 +341,10 @@ export function CommissionsScreen() {
       </Spread>
       {q.error && !r ? <ErrorState error={q.error} retry={q.refetch} /> : !r ? <Skeleton /> : (
         <>
-          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: 'Brokerage from traders', v: `₹${inr(brokerage)}` }, { k: 'Per lot', v: `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` }, { k: 'Traders with trades', v: r.lines.length }]} />
+          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: 'Per lot', v: `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` }, { k: 'Traders with trades', v: r.lines.length }]} />
           <Section title="By trader">
             {!r.lines.length ? <Empty icon="users" title="No trades this month" /> : r.lines.map((l) => (
-              <ListRow key={l.userId} onPress={() => router.push(`/trader-detail/${l.userId}`)} label={`${l.username} commission`} title={l.username} sub={`${l.miniLots} mini · ${l.megaLots} mega lots · brokerage ₹${inr(l.brokerage)}`} right={<T v="num" c="pos">₹{inr(l.commission)}</T>} />
+              <ListRow key={l.userId} onPress={() => router.push(`/trader-detail/${l.userId}`)} label={`${l.username} commission`} title={l.username} sub={`${l.miniLots} mini · ${l.megaLots} mega lots`} right={<T v="num" c="pos">₹{inr(l.commission)}</T>} />
             ))}
           </Section>
         </>

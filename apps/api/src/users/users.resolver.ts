@@ -1,13 +1,13 @@
 import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength } from 'class-validator';
 import { soleAdminMayApprove } from '../common/maker-checker';
 import { DbService } from '../db/db';
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { users, type UserRow } from '../db/schema';
 import { Transform } from 'class-transformer';
 import { RX } from '../common/validation';
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const trimLower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
-import { Args, Field, ID, InputType, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Args, Field, ID, InputType, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import type { Actor, GqlContext } from '../common/context';
 import { Ctx, CurrentActor, RequireStepUp, Roles } from '../common/context';
 import { badInput } from '../common/errors';
@@ -18,6 +18,23 @@ import { PaymentsService } from '../payments/payments.service';
 import { ReconciliationService } from '../reconciliation/reconciliation.service';
 import { RoleGql, UserPage, UserStatusGql, UserType } from './user.types';
 import { UsersService } from './users.service';
+import { renderCommission } from './commission-export';
+
+@ObjectType()
+class AdminPendingCounts {
+  @Field(() => Int) accounts: number;
+  @Field(() => Int) payments: number;
+  @Field(() => Int) fees: number;
+  @Field(() => Int) configuration: number;
+}
+
+@ObjectType()
+class CommissionDownload {
+  @Field() fileName: string;
+  @Field() mimeType: string;
+  @Field() base64: string;
+}
+
 
 @InputType()
 class CreateUserInput {
@@ -170,6 +187,29 @@ export class UsersResolver {
     };
   }
 
+  @Roles('SUPER_ADMIN')
+  @Query(() => AdminPendingCounts)
+  async adminPendingCounts(): Promise<AdminPendingCounts> {
+    const { rows } = await this.dbs.db.execute<{ accounts: number; payments: number; fees: number; configuration: number }>(sql`
+      SELECT (SELECT count(*)::int FROM users WHERE status = 'PENDING') AS accounts,
+             (SELECT count(*)::int FROM payment_requests WHERE status = 'REQUESTED') AS payments,
+             ((SELECT count(*)::int FROM payee_accounts WHERE status = 'PENDING') + (SELECT count(*)::int FROM fee_payments WHERE status = 'SUBMITTED')) AS fees,
+             (SELECT count(*)::int FROM config_versions WHERE status = 'PENDING') AS configuration`);
+    return rows[0];
+  }
+
+  @Roles('BROKER')
+  @Query(() => CommissionDownload)
+  async commissionDownload(@CurrentActor() a: Actor, @Args('month') month: string, @Args('format') format: string) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month < '2000-01' || month > new Date(Date.now() + 19_800_000).toISOString().slice(0, 7)) throw badInput('Choose a valid month.');
+    if (format !== 'PDF' && format !== 'XLSX') throw badInput('Choose PDF or XLSX.');
+    const [year, m] = month.split('-').map(Number);
+    const from = new Date(`${month}-01T00:00:00+05:30`);
+    const to = new Date(Date.UTC(year, m, 1) - 19_800_000);
+    const report = await this.users.brokerCommission(a, a.userId, from, to);
+    return renderCommission(report, month, format);
+  }
+
   @Roles('SUPER_ADMIN', 'BROKER')
   @Query(() => CommissionReport)
   async commissionReport(
@@ -183,7 +223,7 @@ export class UsersResolver {
       shareBps: r.shareBps,
       perMiniLot: formatMoney(r.perMiniLotMinor),
       perMegaLot: formatMoney(r.perMegaLotMinor),
-      lines: r.lines.map((l) => ({ userId: l.userId, username: l.username, brokerage: formatMoney(l.brokerageMinor), miniLots: l.miniLots, megaLots: l.megaLots, commission: formatMoney(l.commissionMinor) })),
+      lines: r.lines.map((l) => ({ userId: l.userId, username: l.username, brokerage: a.role === 'SUPER_ADMIN' ? formatMoney(l.brokerageMinor) : undefined, miniLots: l.miniLots, megaLots: l.megaLots, commission: formatMoney(l.commissionMinor) })),
       total: formatMoney(r.totalMinor),
     };
   }

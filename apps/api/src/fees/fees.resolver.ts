@@ -33,7 +33,7 @@ class PayeeAccountInput {
   @Field({ nullable: true }) @IsOptional() @MaxLength(120) bankName?: string;
   @Field({ nullable: true }) @IsOptional() @MaxLength(24) accountNumber?: string;
   @Field({ nullable: true }) @IsOptional() @MaxLength(11) ifsc?: string;
-  @Field({ nullable: true }) @IsOptional() @MaxLength(120) branch?: string;
+  @Field({ nullable: true }) @IsOptional() @MaxLength(60) branch?: string;
   @Field({ nullable: true }) @IsOptional() @MaxLength(120) upiId?: string;
 }
 

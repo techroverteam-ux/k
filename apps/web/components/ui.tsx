@@ -33,7 +33,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 /* ======================================================================= dialog / confirm */
-export function Dialog({ title, sub, children, size = 'md', onClose }: { title: string; sub?: string; children: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl'; onClose: () => void }) {
+export function Dialog({ title, sub, children, size = 'md', className = '', onClose }: { title: string; sub?: string; children: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   // Keep the latest onClose without re-running the effect: callers often pass a new function on every render, and
   // re-running it would move the cursor back to the first field after every keystroke.
@@ -70,7 +70,7 @@ export function Dialog({ title, sub, children, size = 'md', onClose }: { title: 
   // Rendered at the end of <body>, so no sticky panel, chart or other stacking context can cover it.
   const node = (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`dialog ${size ? `dialog-${size}` : ''}`} role="dialog" aria-modal="true" aria-labelledby="dlg-t" ref={ref}>
+      <div className={`dialog ${size ? `dialog-${size}` : ''} ${className}`} role="dialog" aria-modal="true" aria-labelledby="dlg-t" ref={ref}>
         <div className="spread" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
           <div>
             <h2 id="dlg-t">{title}</h2>

@@ -210,12 +210,12 @@ function StockPage() {
   );
 }
 
-type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS' | 'TAKE_PROFIT';
+type OType = 'MARKET' | 'LIMIT' | 'STOP_LOSS';
 interface Rules { minQty: number; maxQtyPerOrder: number; maxQtyPerInstrument: number; brokeragePerLot?: string; brokeragePerMegaLot?: string; marketHoursEnforced: boolean; sessions: { exchange: string; open: string; close: string; isOpen: boolean; message?: string }[] }
-const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'Take-profit' };
-const isTrig = (t: OType) => t === 'STOP_LOSS' || t === 'TAKE_PROFIT';
+const TYPE_LABEL: Record<OType, string> = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'Stop-loss' };
+const isTrig = (t: OType) => t === 'STOP_LOSS';
 /** Does the trigger fire when the LTP falls to it (else when it rises)? Mirrors the API. */
-const firesOnFall = (t: OType, s: Side) => (t === 'STOP_LOSS' && s === 'SELL') || (t === 'TAKE_PROFIT' && s === 'BUY');
+const firesOnFall = (t: OType, s: Side) => t === 'STOP_LOSS' && s === 'SELL';
 
 function roundToTick(v: number, tick: number) {
   const t = Math.round(tick * 100);
@@ -334,7 +334,7 @@ function OrderPanel({ instrument: i, q, initialSide, initialQty }: { instrument:
             {session.isOpen ? `${i.exchange} open · ${session.open}–${session.close} IST` : session.message}
           </div>
         )}
-        <Chips label="Order type" value={type} onChange={(t) => { setType(t); setPrice(''); }} items={(['MARKET', 'LIMIT', 'STOP_LOSS', 'TAKE_PROFIT'] as OType[]).map((t) => ({ v: t, label: t === 'STOP_LOSS' ? 'SL' : t === 'TAKE_PROFIT' ? 'TP' : TYPE_LABEL[t], title: TYPE_LABEL[t] }))} />
+        <div className="order-types"><Chips label="Order type" value={type} onChange={(t) => { setType(t); setPrice(''); }} items={(['MARKET', 'LIMIT', 'STOP_LOSS'] as OType[]).map((t) => ({ v: t, label: t === 'STOP_LOSS' ? 'SL' : TYPE_LABEL[t], title: TYPE_LABEL[t] }))} /></div>
         <div className="field">
           <label htmlFor="qty">Quantity (lots)</label>
           <div className="lot-step">

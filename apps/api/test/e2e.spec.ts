@@ -699,23 +699,31 @@ describe('self sign-up and forgot password', () => {
     expect(t.accessToken).toBeTruthy();
   });
 
-  it('resets a password by OTP without revealing whether an account exists', async () => {
+  it('recovers a password using an authenticator without revealing account existence', async () => {
     const session = await freshLogin('asha.rao', 'Asha-Strong-Pass-9');
+    const en = await gql(`mutation{ beginMfaEnrollment{ secret } }`, {}, { token: session.accessToken });
+    const secret = en.data.beginMfaEnrollment.secret;
+    await gql(`mutation($c:String!){ confirmMfaEnrollment(code:$c) }`, { c: authenticator.generate(secret) }, { token: session.accessToken });
     const known = await gql(`mutation{ requestPasswordReset(username:"asha.rao"){ message devCode } }`);
     const unknown = await gql(`mutation{ requestPasswordReset(username:"nobody.at.all"){ message devCode } }`);
     const adminReq = await gql(`mutation{ requestPasswordReset(username:"admin"){ message devCode } }`);
     expect(unknown.data.requestPasswordReset.message).toBe(known.data.requestPasswordReset.message);
-    expect(adminReq.data.requestPasswordReset.devCode).toBeNull(); // Super Admins can't self-reset
-    const wrong = await gql(`mutation{ resetPassword(username:"asha.rao", code:"000000", newPassword:"Brand-New-Pass-77") }`);
+    expect(adminReq.data.requestPasswordReset.message).toBe(known.data.requestPasswordReset.message);
+    expect(known.data.requestPasswordReset.devCode).toBeNull();
+    const RESET = `mutation($c:String!){ resetPassword(username:"asha.rao", code:$c, newPassword:"Brand-New-Pass-77") }`;
+    const validCode = authenticator.generate(secret);
+    const wrong = await gql(RESET, { c: 'not-a-code' });
     expect(code(wrong)).toBe('UNAUTHENTICATED');
-    const ok = await gql(`mutation($c:String!){ resetPassword(username:"asha.rao", code:$c, newPassword:"Brand-New-Pass-77") }`, { c: known.data.requestPasswordReset.devCode });
-    expect(ok.data.resetPassword).toBe(true);
-    expect(code(await gql(`{ me { id } }`, {}, { token: session.accessToken }))).toBe('UNAUTHENTICATED'); // every device signed out
+    expect((await gql(RESET, { c: validCode })).data.resetPassword).toBe(true);
+    expect(code(await gql(`{ me { id } }`, {}, { token: session.accessToken }))).toBe('UNAUTHENTICATED');
     await expect(freshLogin('asha.rao', 'Asha-Strong-Pass-9')).rejects.toThrow();
-    expect((await freshLogin('asha.rao', 'Brand-New-Pass-77')).accessToken).toBeTruthy();
-    // the code is single-use
-    const again = await gql(`mutation($c:String!){ resetPassword(username:"asha.rao", code:$c, newPassword:"Another-Pass-88x") }`, { c: known.data.requestPasswordReset.devCode });
-    expect(code(again)).toBe('UNAUTHENTICATED');
+    const next = await freshLogin('asha.rao', 'Brand-New-Pass-77');
+    expect(next.mfaRequired).toBe(true);
+    const login = await gql(`mutation($t:String!,$c:String!){ completeMfaLogin(mfaToken:$t, code:$c){ accessToken } }`, { t: next.mfaToken, c: authenticator.generate(secret) });
+    expect(login.data.completeMfaLogin.accessToken).toBeTruthy();
+    // Reusing the code is denied even after requesting another reset.
+    await gql(`mutation{ requestPasswordReset(username:"asha.rao"){ message } }`);
+    expect(code(await gql(RESET, { c: validCode }))).toBe('UNAUTHENTICATED');
   });
 });
 

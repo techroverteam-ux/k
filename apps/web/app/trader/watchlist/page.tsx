@@ -1,7 +1,12 @@
 'use client';
-import { Watchlist } from '@/components/trading';
+import { PortfolioSummary, Watchlist } from '@/components/trading';
 
-/** One watchlist with search on top. Prices update live; tap a sell or buy price to trade. */
+/** Trader home: account funds and live watchlist prices. */
 export default function WatchlistPage() {
-  return <div className="home"><Watchlist /></div>;
+  return (
+    <div className="home stack" style={{ gap: 20 }}>
+      <PortfolioSummary compact detail actions title="Available balance" />
+      <Watchlist />
+    </div>
+  );
 }

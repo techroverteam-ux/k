@@ -258,14 +258,14 @@ export class AuthResolver {
 
   @Public()
   @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
-  @Mutation(() => PasswordResetRequest, { description: 'Sends a reset code to the registered mobile. Same answer whether or not the account exists.' })
+  @Mutation(() => PasswordResetRequest, { description: 'Starts authenticator password recovery for any role. Same answer whether or not the account exists.' })
   requestPasswordReset(@Args('username') username: string, @Ctx() c: GqlContext) {
     return this.auth.requestPasswordReset(username, c.ip);
   }
 
   @Public()
   @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
-  @Mutation(() => Boolean, { description: 'Sets a new password with the code; signs out every device.' })
+  @Mutation(() => Boolean, { description: 'Sets a new password using the enrolled authenticator; signs out every device.' })
   resetPassword(@Args('username') username: string, @Args('code') code: string, @Args('newPassword') newPassword: string, @Ctx() c: GqlContext) {
     if (newPassword.length > 128 || code.length > 10) throw unauthenticated();
     return this.auth.resetPassword(username, code, newPassword, c.ip);
