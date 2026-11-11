@@ -30,6 +30,8 @@ jobs:
           SMS_PROVIDER=dev
           SEED_PASSWORD=Ci-Only-Passw0rd!
           THROTTLE_SCALE=20
+          MARKET_FEED=simulated
+          MARKET_HOURS=always_open
           ENV
           npm test
   web:

@@ -20,7 +20,9 @@ import { RiskService } from '../src/risk/risk.service';
 import { ActivityLogService } from '../src/logging/activity-log.service';
 import { archiveDay, verifyArchive } from '../src/logging/archive';
 import { DbService } from '../src/db/db';
-import { appendFileSync, rmSync } from 'fs';
+import { appendFileSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { sessionStatus } from '../src/trading/market-hours';
 import { ConfigService } from '../src/config-mgmt/config.service';
 import { AlgoRunnerService } from '../src/algo/algo-runner.service';
@@ -567,20 +569,23 @@ describe('activity log & audit enrichment', () => {
       await pg.query(`INSERT INTO activity_log (at, request_id, ip, op_type, op_name, outcome) VALUES ($1, $2, '10.0.0.1', 'mutation', 'oldOp', 'OK')`, [`${day}T10:00:00Z`, `old-${day}`]);
     }
     const db = app.get(DbService).db;
-    const dir = process.env.LOG_ARCHIVE_DIR!;
-    rmSync(dir, { recursive: true, force: true });
-    const a = await archiveDay(db, dir, '2026-01-10', 'activity');
-    expect(a.rows).toBe(1);
-    expect((await verifyArchive(db, '2026-01-10', 'activity')).ok).toBe(true);
-    // purge everything older than now, but only archived days may go
-    const { rows: [n] } = await pg.query(`SELECT td_purge_activity(now() - interval '1 day', true) AS n`);
-    expect(Number(n.n)).toBe(1);
-    const { rows: left } = await pg.query(`SELECT request_id FROM activity_log WHERE op_name = 'oldOp'`);
-    expect(left.map((r) => r.request_id)).toEqual(['old-2026-01-11']);
-    // tampering with the archive file is detected
-    appendFileSync(a.location, 'x');
-    const v = await verifyArchive(db, '2026-01-10', 'activity');
-    expect(v).toMatchObject({ ok: false, reason: 'checksum mismatch' });
+    const dir = mkdtempSync(join(tmpdir(), 'tradedesk-archive-test-'));
+    try {
+      const a = await archiveDay(db, dir, '2026-01-10', 'activity');
+      expect(a.rows).toBe(1);
+      expect((await verifyArchive(db, '2026-01-10', 'activity')).ok).toBe(true);
+      // purge everything older than now, but only archived days may go
+      const { rows: [n] } = await pg.query(`SELECT td_purge_activity(now() - interval '1 day', true) AS n`);
+      expect(Number(n.n)).toBe(1);
+      const { rows: left } = await pg.query(`SELECT request_id FROM activity_log WHERE op_name = 'oldOp'`);
+      expect(left.map((r) => r.request_id)).toEqual(['old-2026-01-11']);
+      // tampering with the archive file is detected
+      appendFileSync(a.location, 'x');
+      const v = await verifyArchive(db, '2026-01-10', 'activity');
+      expect(v).toMatchObject({ ok: false, reason: 'checksum mismatch' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('still verifies the audit hash chain with the new device/session/request fields', async () => {
@@ -1010,11 +1015,12 @@ describe('automated trading (paper)', () => {
     const market = app.get(MarketDataService);
     const runner = app.get(AlgoRunnerService);
     const now = Date.now();
+    const nextBarSettled = Math.floor(now / 60_000) * 60_000 + 63_000;
     market.setPrice(instrumentId, 80000n); // a tick in the current minute, so that candle exists
-    await runner.cycle(now + 63_000); // ...and has now closed: the entry rule fires
+    await runner.cycle(nextBarSettled); // ...and has now closed: the entry rule fires
     const after = (await gql(`query($id:ID!){ strategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken })).data.strategy;
     expect(after.position).toBe(2);
-    await runner.cycle(now + 64_000); // same candle again: no second entry
+    await runner.cycle(nextBarSettled + 1_000); // same candle again: no second entry
     const { rows: o1 } = await pg.query(`SELECT status, client_ip FROM orders WHERE strategy_id = $1`, [s.id]);
     expect(o1).toHaveLength(1);
     expect(o1[0]).toMatchObject({ status: 'FILLED', client_ip: 'algo' });
@@ -1035,10 +1041,11 @@ describe('automated trading (paper)', () => {
     const market = app.get(MarketDataService);
     const runner = app.get(AlgoRunnerService);
     const now = Date.now();
+    const nextBarSettled = Math.floor(now / 60_000) * 60_000 + 63_000;
     market.setPrice(instrumentId, 80000n);
-    await runner.cycle(now + 63_000);
+    await runner.cycle(nextBarSettled);
     market.setPrice(instrumentId, 79000n); // ₹10 × 2 = ₹20 open loss > ₹10 limit
-    await runner.cycle(now + 65_000);
+    await runner.cycle(nextBarSettled + 2_000);
     const st = (await gql(`query($id:ID!){ strategy(id:$id){ ${F} } }`, { id: s.id }, { token: t.accessToken })).data.strategy;
     expect(st).toMatchObject({ status: 'STOPPED', position: 0 });
     expect(st.stopReason).toMatch(/Daily loss limit/);
