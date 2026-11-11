@@ -54,12 +54,12 @@ export class NotificationsService {
                (SELECT count(*)::int FROM payment_requests WHERE status = 'REQUESTED') AS payments,
                ((SELECT count(*)::int FROM payee_accounts WHERE status = 'PENDING') + (SELECT count(*)::int FROM fee_payments WHERE status = 'SUBMITTED')) AS fees,
                (SELECT count(*)::int FROM config_versions WHERE status = 'PENDING') AS configuration,
-               (SELECT count(*)::int FROM platform_wipes WHERE status = 'PENDING' AND target_user_id IS NULL AND expires_at > now()) AS resets`);
+               ((SELECT count(*)::int FROM platform_wipes WHERE status = 'PENDING' AND target_user_id IS NULL AND expires_at > now()) + (SELECT count(*)::int FROM account_reset_requests WHERE status = 'PENDING' AND expires_at > now())) AS resets`);
       pending = { '/admin/users': r.accounts, '/admin/payments': r.payments, '/admin/fees': r.fees, '/admin/config': r.configuration, '/admin/reset': r.resets };
     } else if (actor.role === 'BROKER') {
       const { rows: [r] } = await this.dbs.db.execute<{ traders: number; requests: number }>(sql`
         SELECT (SELECT count(*)::int FROM users WHERE broker_id = ${uid} AND role = 'TRADER' AND status = 'PENDING') AS traders,
-               (SELECT count(*)::int FROM payment_requests p JOIN users u ON u.id = p.user_id WHERE u.broker_id = ${uid} AND p.status = 'REQUESTED' AND p.created_at >= coalesce(u.data_since, '-infinity'::timestamptz)) AS requests`);
+               (SELECT count(*)::int FROM payment_requests p JOIN users u ON u.id = p.user_id WHERE u.broker_id = ${uid} AND p.status = 'REQUESTED' AND p.created_at >= coalesce((SELECT data_since FROM users WHERE id = ${uid}), '-infinity'::timestamptz)) + (SELECT count(*)::int FROM account_reset_requests r JOIN users u ON u.id = r.user_id WHERE u.broker_id = ${uid} AND r.status = 'PENDING' AND r.expires_at > now()) AS requests`);
       pending = { '/broker/traders': r.traders, '/broker/requests': r.requests };
     } else {
       const { rows: [r] } = await this.dbs.db.execute<{ orders: number; positions: number; funds: number }>(sql`

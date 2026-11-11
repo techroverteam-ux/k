@@ -142,7 +142,7 @@ export class UsersResolver {
     return UserType.from(await this.approveWithOpening(a, id, c.ip), a);
   }
 
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'BROKER')
   @RequireStepUp()
   @Mutation(() => UserType)
   async setUserStatus(

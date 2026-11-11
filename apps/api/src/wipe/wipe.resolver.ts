@@ -8,6 +8,21 @@ import { formatMoney } from '../common/money';
 import { WipeService } from './wipe.service';
 
 @ObjectType()
+class AccountResetRequest {
+  @Field(() => ID) id: string;
+  @Field(() => ID) userId: string;
+  @Field() status: string;
+  @Field() reason: string;
+  @Field() createdAt: Date;
+  @Field() expiresAt: Date;
+  @Field(() => ID, { nullable: true }) decidedById?: string;
+  @Field({ nullable: true }) decidedAt?: Date;
+  @Field({ nullable: true }) username?: string;
+  @Field({ nullable: true }) role?: string;
+  @Field({ nullable: true }) canApprove?: boolean;
+}
+
+@ObjectType()
 class WipePreview {
   @Field({ description: 'Balance now.' }) balance: string;
   @Field({ description: 'Balance after the wipe (the opening balance).' }) resetTo: string;
@@ -70,6 +85,21 @@ const toPlatform = (r: WipeRow): PlatformWipe => ({
 export class WipeResolver {
   constructor(private readonly wipe: WipeService, private readonly dbs: DbService) {}
 
+  @Query(() => [AccountResetRequest])
+  accountResetRequests(@CurrentActor() a: Actor) { return this.wipe.listAccountResets(a); }
+
+  @Roles('TRADER', 'BROKER')
+  @Mutation(() => AccountResetRequest)
+  requestAccountReset(@CurrentActor() a: Actor, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
+    return this.wipe.requestAccountReset(a, reason, confirm, c.ip);
+  }
+
+  @Roles('SUPER_ADMIN', 'BROKER')
+  @Mutation(() => AccountResetRequest)
+  decideAccountReset(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Args('approve') approve: boolean, @Ctx() c: GqlContext) {
+    return this.wipe.decideAccountReset(a, id, approve, c.ip);
+  }
+
   // ---- a trader or broker wiping their own account
   @Roles('TRADER', 'BROKER')
   @Query(() => WipePreview, { description: 'What “wipe out” would do to my account.' })
@@ -92,10 +122,10 @@ export class WipeResolver {
     return this.wipe.wipeSelf(a, code, confirm, c.ip);
   }
 
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'BROKER')
   @Query(() => [AccountWipe], { description: 'Wipes of one account, with what each one cleared.' })
-  async accountWipes(@Args('userId', { type: () => ID }) userId: string): Promise<AccountWipe[]> {
-    const rows = await this.wipe.listForUser(userId);
+  async accountWipes(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) userId: string): Promise<AccountWipe[]> {
+    const rows = await this.wipe.listForUser(userId, a);
     return rows.map((r) => ({ id: r.id, byId: r.byId, verifiedWith: r.verifiedWith, balanceBefore: formatMoney(r.balanceBeforeMinor), balanceAfter: formatMoney(r.balanceAfterMinor), snapshot: JSON.stringify(r.snapshot), ip: r.ip ?? undefined, createdAt: r.createdAt }));
   }
 
@@ -111,8 +141,6 @@ export class WipeResolver {
   @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete every trader and broker account and all trading data. Another Super Admin must approve within 30 minutes. confirm = "WIPE ALL DATA".' })
   async requestPlatformWipe(@CurrentActor() a: Actor, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     const r = await this.wipe.requestPlatform(a, reason, confirm, c.ip);
-    // Only one Super Admin (single-admin mode): the wipe runs now.
-    if (await soleAdminMayApprove(this.dbs.db)) { await this.wipe.approvePlatform(a, r.id, confirm, c.ip); return toPlatform(await this.wipe.getWipe(r.id)); }
     return toPlatform(r);
   }
 

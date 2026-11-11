@@ -1,7 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
-import { gql, takeSignedOutReason } from '@/lib/api';
+import { ApiError, gql, takeSignedOutReason } from '@/lib/api';
 import { deviceLabel, stamp } from '@/lib/activity';
 
 const AUTH_FIELDS = 'accessToken sessionConflict conflictToken conflictLimit activeSessions { id deviceName userAgent ip lastUsedAt }';
@@ -21,8 +21,18 @@ const DEVICE = typeof navigator !== 'undefined' ? `Web · ${navigator.platform |
 export default function Login() {
   const { me, signIn, settings, loading } = useAuth();
   const router = useRouter();
+  const [cooldown, setCooldown] = useState<{ username: string; until: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    try { const value = sessionStorage.getItem('k.loginCooldown'); if (value) { const saved = JSON.parse(value); setCooldown(saved); setUsername((current) => current || saved.username); } } catch {}
+  }, []);
+  useEffect(() => { if (!cooldown) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [cooldown]);
   const [step, setStep] = useState<Step>('signin');
   const [username, setUsername] = useState('');
+  const locked = cooldown?.username === username.trim().toLowerCase() && cooldown.until > now;
+  const seconds = locked && cooldown ? Math.ceil((cooldown.until - now) / 1000) : 0;
+  const retryClock = `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds / 60 % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [caps, setCaps] = useState(false);
@@ -38,6 +48,11 @@ export default function Login() {
   const [info, setInfo] = useState<string | null>(null);
   const [su, setSu] = useState({ displayName: '', username: '', email: '', password: '' });
   const toast = useToast();
+  useEffect(() => {
+    if (!cooldown || cooldown.until > now) return;
+    setCooldown(null); try { sessionStorage.removeItem('k.loginCooldown'); } catch {}
+    if (cooldown.username === username.trim().toLowerCase()) { setErr(null); toast('Cooldown finished. You can try signing in again.'); }
+  }, [cooldown, now, username, toast]);
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const [signedOut, setSignedOut] = useState<string | null>(null);
   useEffect(() => { const m = takeSignedOutReason(); if (m) setSignedOut(m); }, []); // guarded: React dev runs effects twice
@@ -64,6 +79,10 @@ export default function Login() {
     try {
       await fn();
     } catch (e) {
+      if (e instanceof ApiError && e.extensions.lockedUntil) {
+        const next = { username: username.trim().toLowerCase(), until: Date.now() + (e.extensions.retryAfterSec ?? 3600) * 1000 };
+        setCooldown(next); setNow(Date.now()); try { sessionStorage.setItem('k.loginCooldown', JSON.stringify(next)); } catch {}
+      }
       setErr((e as Error).message);
     } finally {
       setBusy(false);
@@ -93,6 +112,7 @@ export default function Login() {
 
   const onSignIn = (e: FormEvent) => {
     e.preventDefault();
+    if (locked) return;
     void go(async () => {
       const d = await gql(`mutation($u:String!,$p:String!,$d:String){ login(username:$u,password:$p,deviceName:$d){ mfaRequired mfaToken ${AUTH_FIELDS} } }`, { u: username, p: password, d: DEVICE });
       try { localStorage.setItem(LAST_USER, username.trim()); } catch { /* storage unavailable */ }
@@ -273,7 +293,8 @@ export default function Login() {
                 {caps && <span id="caps" className="hint warn-t">Caps Lock is on.</span>}
               </div>
               {err && <div className="notice err" role="alert"><Icon name="alert" size={18} />{err}</div>}
-              <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username || !password}>{busy ? <><span className="spin" aria-hidden />Signing in…</> : 'Sign in'}</button>
+              {locked && <div className="notice warn" role="status"><Icon name="lock" size={18} /><span>Sign-in is locked after too many incorrect attempts. Retry in <strong className="num">{retryClock}</strong>.</span></div>}
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || locked || !username || !password}>{busy ? <><span className="spin" aria-hidden />Signing in…</> : 'Sign in'}</button>
               {settings?.signupEnabled !== false && (
                 <p className="t2 auth-alt">New to {settings?.appName ?? 'The K'}? <button type="button" className="link-btn" onClick={() => { setErr(null); setStep('signup'); }}>Create an account</button></p>
               )}

@@ -1,5 +1,5 @@
 'use client';
-import { useSoleAdmin } from '@/lib/sole-admin';
+import { AccountResetPanel } from './account-resets';
 import Link from 'next/link';
 import { useState } from 'react';
 import { gql } from '@/lib/api';
@@ -9,86 +9,8 @@ import { Icon } from './icons';
 import { Dialog, Empty, ErrorState, SectionHead, SkeletonRows, useToast } from './ui';
 
 /* ================================================================== trader / broker: wipe out my account */
-interface Preview { balance: string; resetTo: string; openPositions: number; openOrders: number; runningStrategies: number; pendingRequests: number; method: string }
 
-export function WipeOutSection() {
-  const [open, setOpen] = useState(false);
-  return (
-    <section className="section">
-      <SectionHead title="Wipe out account" />
-      <p className="t2 sm" style={{ margin: 0 }}>Start fresh: your balance goes back to the opening amount and your past orders, trades and statements are cleared from your view. Administrators keep a copy.</p>
-      <div><button className="btn btn-danger" onClick={() => setOpen(true)}><Icon name="refresh" size={16} />Wipe out my account</button></div>
-      {open && <WipeDialog onClose={() => setOpen(false)} />}
-    </section>
-  );
-}
-
-function WipeDialog({ onClose }: { onClose: () => void }) {
-  const pv = useQuery<{ wipePreview: Preview }>(`{ wipePreview { balance resetTo openPositions openOrders runningStrategies pendingRequests method } }`);
-  const [step, setStep] = useState<'review' | 'verify'>('review');
-  const [ch, setCh] = useState<{ method: string; sentTo?: string; devCode?: string } | null>(null);
-  const [code, setCode] = useState('');
-  const [typed, setTyped] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const toast = useToast();
-  const p = pv.data?.wipePreview;
-
-  const begin = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const d = await gql<{ beginAccountWipe: { method: string; sentTo?: string; devCode?: string } }>(`mutation { beginAccountWipe { method sentTo devCode } }`);
-      setCh(d.beginAccountWipe); setCode(''); setStep('verify');
-      if (d.beginAccountWipe.devCode) toast(`Development code: ${d.beginAccountWipe.devCode}`);
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-  };
-  const wipe = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const d = await gql<{ wipeMyAccount: { balance: string } }>(`mutation($c:String!,$w:String!){ wipeMyAccount(code:$c, confirm:$w){ balance } }`, { c: code, w: typed });
-      toast(`Account wiped out. Balance: ₹${inr(d.wipeMyAccount.balance)}`);
-      window.location.assign('/'); // reload every screen with the fresh account
-    } catch (e) { setErr((e as Error).message); setBusy(false); }
-  };
-
-  return (
-    <Dialog title="Wipe out your account?" sub="This can’t be undone from your side." onClose={onClose}>
-      {pv.loading && !p ? <SkeletonRows rows={4} pad={false} /> : pv.error && !p ? <ErrorState error={pv.error} retry={pv.refetch} /> : p && step === 'review' ? (
-        <div className="stack" style={{ gap: 14 }}>
-          <ul className="confirm-lines" style={{ margin: 0 }}>
-            <li><span className="t2">Balance now</span><span className="num w6">₹{inr(p.balance)}</span></li>
-            <li><span className="t2">Balance after</span><span className="num w6">₹{inr(p.resetTo)}</span></li>
-            {p.openOrders > 0 && <li><span className="t2">Pending orders</span><span className="num">{p.openOrders} will be cancelled</span></li>}
-            {p.runningStrategies > 0 && <li><span className="t2">Running strategies</span><span className="num">{p.runningStrategies} will be stopped</span></li>}
-            {p.pendingRequests > 0 && <li><span className="t2">Fund requests</span><span className="num">{p.pendingRequests} will be cancelled</span></li>}
-          </ul>
-          <p className="t2 sm" style={{ margin: 0 }}>Your orders, trades, ledger, statements, strategies, watchlist and notifications will be cleared from your view. A Super Admin can still see everything.</p>
-          {p.openPositions > 0 && <div className="notice err"><Icon name="alert" size={18} /><span>You have {p.openPositions} open position{p.openPositions > 1 ? 's' : ''}. <Link href="/trader/positions" style={{ textDecoration: 'underline' }}>Exit them</Link> first.</span></div>}
-          {err && <div className="notice err">{err}</div>}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn btn-sell" disabled={busy || p.openPositions > 0} onClick={() => void begin()}>Continue</button>
-          </div>
-        </div>
-      ) : ch ? (
-        <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void wipe(); }}>
-          <div className="field">
-            <label htmlFor="wipe-typed">Type <b>WIPE</b> to confirm</label>
-            <input id="wipe-typed" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
-          </div>
-          {err && <div className="notice err">{err}</div>}
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            {ch.method === 'SMS' ? <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void begin()}>Send a new code</button> : <span />}
-            <div className="row">
-              <button type="button" className="btn" onClick={onClose}>Cancel</button>
-              <button type="submit" className="btn btn-sell" disabled={busy || typed.trim().toUpperCase() !== 'WIPE'}>Wipe out</button>
-            </div>
-          </div>
-        </form>
-      ) : null}
-    </Dialog>
-  );
-}
+export function WipeOutSection() { return <AccountResetPanel allowRequest />; }
 
 /* ================================================================== Super Admin: an account's wipes */
 interface AccountWipe { id: string; verifiedWith: string; balanceBefore: string; balanceAfter: string; snapshot: string; ip?: string; createdAt: string }
@@ -103,7 +25,7 @@ export function AccountWipes({ userId }: { userId: string }) {
   return (
     <section className="section">
       <SectionHead title="Wipe-outs" />
-      <p className="t3 sm" style={{ margin: 0 }}>This account was wiped out by its owner. Everything before each wipe is hidden from them and their broker; you still see it in the tabs above.</p>
+      <p className="t3 sm" style={{ margin: 0 }}>Approved resets hide past data only from its owner. Assigned brokers and Super Admins retain the history and archived snapshots.</p>
       <div className="panel">
         <div className="list list-pad">
           {rows.map((w) => {
@@ -133,7 +55,6 @@ interface PlatformWipe { id: string; status: string; requestedById: string; reas
 const STATUS: Record<string, string> = { PENDING: 'Waiting for a second Super Admin', EXECUTED: 'Done', REJECTED: 'Rejected', EXPIRED: 'Expired' };
 
 export function PlatformWipePanel({ meId }: { meId: string }) {
-  const sole = useSoleAdmin();
   const { data, loading, error, refetch } = useQuery<{ platformWipes: PlatformWipe[] }>(`{ platformWipes { id status requestedById reason decidedById decidedAt expiresAt summary createdAt } }`, undefined, { pollMs: 15_000 });
   const [dlg, setDlg] = useState<{ kind: 'request' } | { kind: 'approve'; w: PlatformWipe } | null>(null);
   const toast = useToast();
@@ -145,16 +66,14 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
         <Icon name="alert" size={18} />
         <span>
           <b>Wipe all data</b> permanently deletes everything except the Super Admin accounts: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
-          {sole
-            ? <>You are the only Super Admin, so <b>the wipe runs as soon as you confirm</b>: there is no second approval. Confirm below to continue.</>
-            : <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both confirm their decision.</>}
+          <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both confirm their decision.</>
         </span>
       </div>
       {loading && !data ? <SkeletonRows rows={2} pad={false} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : pending ? (
         <div className="panel panel-pad stack" style={{ gap: 10 }}>
           <div className="w6">Pending request · expires {when(pending.expiresAt)}</div>
           <div className="t2 sm">Reason: {pending.reason}</div>
-          {pending.requestedById === meId && !sole ? (
+          {pending.requestedById === meId ? (
             <div className="row"><span className="t3 sm grow">Waiting for another Super Admin to approve.</span><button className="btn" onClick={async () => { try { await gql(`mutation($id:ID!){ rejectPlatformWipe(id:$id){ id } }`, { id: pending.id }); toast('Request cancelled'); void refetch(); } catch (e) { toast((e as Error).message, true); } }}>Cancel request</button></div>
           ) : (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -164,7 +83,7 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
           )}
         </div>
       ) : (
-        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />{sole ? 'Wipe all data now' : 'Request a full wipe'}</button></div>
+        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />Request a full wipe</button></div>
       )}
       <section className="section">
         <SectionHead title="History" />
@@ -185,12 +104,12 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
           </div></div>
         )}
       </section>
-      {dlg && <PlatformWipeDialog mode={dlg} sole={sole} onClose={() => setDlg(null)} onDone={() => { setDlg(null); void refetch(); }} />}
+      {dlg && <PlatformWipeDialog mode={dlg} onClose={() => setDlg(null)} onDone={() => { setDlg(null); void refetch(); }} />}
     </div>
   );
 }
 
-function PlatformWipeDialog({ mode, sole, onClose, onDone }: { mode: { kind: 'request' } | { kind: 'approve'; w: PlatformWipe }; sole: boolean; onClose: () => void; onDone: () => void }) {
+function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request' } | { kind: 'approve'; w: PlatformWipe }; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -213,8 +132,8 @@ function PlatformWipeDialog({ mode, sole, onClose, onDone }: { mode: { kind: 're
   };
   return (
     <Dialog
-      title={mode.kind === 'approve' ? 'Approve the full wipe?' : sole ? 'Wipe all data now' : 'Request a full wipe'}
-      sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : sole ? "You're the only Super Admin, so this runs immediately. There's no second approval." : 'Another Super Admin will have to approve it.'}
+      title={mode.kind === 'approve' ? 'Approve the full wipe?' : 'Request a full wipe'}
+      sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : 'Another Super Admin will have to approve it.'}
       onClose={onClose}>
       <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void go(); }}>
         {mode.kind === 'request' && (
@@ -225,7 +144,7 @@ function PlatformWipeDialog({ mode, sole, onClose, onDone }: { mode: { kind: 're
         {err && <div className="notice err">{err}</div>}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? (sole ? 'Wipe now' : 'Send request') : 'Approve and wipe'}</button>
+          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? 'Send request' : 'Approve and wipe'}</button>
         </div>
       </form>
     </Dialog>

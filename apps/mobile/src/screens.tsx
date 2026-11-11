@@ -1,4 +1,5 @@
 /** Domain building blocks shared by trader / broker / admin screens. */
+import { ReenableResetTrader } from './resets';
 import { useSoleAdmin } from './sole-admin';
 import { router, useFocusEffect } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -558,7 +559,7 @@ export function ProfileView() {
         <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Your authenticator can recover a forgotten password' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
         {!me?.isDemo && <Item icon="key" label="Change password" onPress={() => setPw(true)} />}
         {!me?.isDemo && me?.role !== 'SUPER_ADMIN' && <Item icon="fingerprint" label="MPIN & fingerprint" sub={quick?.owner.userId === me?.id ? (quick?.owner.biometric ? 'On: MPIN and fingerprint' : 'On: MPIN') : 'Off. Unlock without your password'} onPress={() => router.push('/quick-settings')} />}
-        {me?.role !== 'SUPER_ADMIN' && <Item icon="alert" label="Wipe out account" sub="Fresh start: clear your history and reset the balance" onPress={() => router.push('/wipe')} />}
+        {me?.role !== 'SUPER_ADMIN' && <Item icon="alert" label="Request account reset" sub="Staff approval is required; historical data is retained" onPress={() => router.push('/wipe')} />}
         <Item icon="lock" label="Login history" sub="Sign-ins and failed attempts, and the rules you accepted" onPress={() => router.push('/logins')} />
         <Item icon="activity" label="Account activity" sub="Every action with time, IP and device" onPress={() => router.push('/activity')} />
         {me?.role === 'TRADER' && <>
@@ -735,7 +736,7 @@ export function ConsentList({ userId }: { userId?: string }) {
 
 /* ====================================================================== account detail (broker / admin) */
 export function AccountDetailView({ id }: { id: string }) {
-  const u = useQuery<{ user: { displayName: string; username: string; status: string; role: string } }>(`query($id:ID!){ user(id:$id){ displayName username status role } }`, { id });
+  const u = useQuery<{ user: { id: string; resetDisabledAt?: string; displayName: string; username: string; status: string; role: string } }>(`query($id:ID!){ user(id:$id){ id resetDisabledAt displayName username status role } }`, { id });
   const [tab, setTab] = useState<'pos' | 'ord' | 'led' | 'req' | 'log'>('pos');
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const t = useTheme();
@@ -745,15 +746,16 @@ export function AccountDetailView({ id }: { id: string }) {
     <Screen back title={x?.displayName ?? 'Trader'} onRefresh={u.refetch}>
       {!x ? <Skeleton /> : (
         <>
+          <ReenableResetTrader user={x} onDone={u.refetch} />
           <Row>
             <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: t.brandSoft, alignItems: 'center', justifyContent: 'center' }}><T v="h3" c="brand">{initials(x.displayName)}</T></View>
             <View style={{ flex: 1, gap: 4 }}><T v="h2">{x.displayName}</T><Row gap={S[2]}><T v="sm" c="text2">{x.username}</T><StatusBadge v={x.status} /></Row></View>
           </Row>
           <SummaryBlock userId={id} title="Available balance" />
-          <Row>
+          {x.status === 'ACTIVE' && <Row>
             <Button block title="Request withdrawal" onPress={() => setPay('WITHDRAWAL')} />
             <Button block kind="primary" title="Request deposit" onPress={() => setPay('DEPOSIT')} />
-          </Row>
+          </Row>}
           <Tabs scroll value={tab} onChange={setTab} items={[{ k: 'pos', label: 'Positions' }, { k: 'ord', label: 'Orders' }, { k: 'led', label: 'Ledger' }, { k: 'req', label: 'Fund requests' }, { k: 'log', label: 'Logins' }]} />
           {tab === 'log' && <LoginHistoryList userId={id} />}
           {tab === 'pos' && <PositionsList userId={id} />}

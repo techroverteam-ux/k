@@ -1,8 +1,9 @@
+import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { gql, takeSignedOutReason } from '@/api';
+import { ApiError, gql, takeSignedOutReason } from '@/api';
 import { AUTH_FIELDS, ConflictPrompt, type AuthPayload } from '@/conflict';
 import { DEVICE_NAME, homeFor, useAuth } from '@/auth';
 import { skippedQuickSetup } from '@/quick';
@@ -13,6 +14,8 @@ import { Button, Divider, Field, Notice, Row, T, toast } from '@/ui';
 export default function Login() {
   const t = useTheme();
   const { signIn, settings, quick, dropQuick } = useAuth();
+  const [cooldown, setCooldown] = useState<{ username: string; until: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
   const [u, setU] = useState('');
   const [p, setP] = useState('');
   const [show, setShow] = useState(false);
@@ -24,6 +27,19 @@ export default function Login() {
   const [signedOut, setSignedOut] = useState<string | null>(null);
   useEffect(() => { const m = takeSignedOutReason(); if (m) setSignedOut(m); }, []);
 
+  const locked = cooldown?.username === u.trim().toLowerCase() && cooldown.until > now;
+  const seconds = locked && cooldown ? Math.ceil((cooldown.until - now) / 1000) : 0;
+  const clock = `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds / 60 % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+  useEffect(() => { if (!cooldown) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [cooldown]);
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    void SecureStore.getItemAsync('login.cooldown').then((value) => { if (value) { const saved = JSON.parse(value); setCooldown(saved); setU((current) => current || saved.username); } }).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!cooldown || cooldown.until > now) return;
+    setCooldown(null); if (Platform.OS !== 'web') void SecureStore.deleteItemAsync('login.cooldown');
+    if (cooldown.username === u.trim().toLowerCase()) { setErr(null); toast('Cooldown finished. You can sign in again.'); }
+  }, [cooldown, now, u]);
   const finish = async (a: string, r: string) => {
     const me = await signIn(a, r);
     if (!me) return;
@@ -40,6 +56,7 @@ export default function Login() {
     if (p.accessToken) await finish(p.accessToken, p.refreshToken!);
   };
   const go = async () => {
+    if (locked && !mfaToken) return;
     setBusy(true); setErr(null);
     try {
       if (mfaToken) {
@@ -49,7 +66,10 @@ export default function Login() {
         const d = await gql(`mutation($u:String!,$p:String!,$d:String){ login(username:$u, password:$p, deviceName:$d){ mfaRequired mfaToken ${AUTH_FIELDS} } }`, { u: u.trim(), p, d: DEVICE_NAME });
         if (d.login.mfaRequired) { setMfaToken(d.login.mfaToken); setCode(''); } else await done(d.login);
       }
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    } catch (e) {
+      if (e instanceof ApiError && e.extensions.lockedUntil) { const next = { username: u.trim().toLowerCase(), until: Date.now() + (e.extensions.retryAfterSec ?? 3600) * 1000 }; setCooldown(next); setNow(Date.now()); if (Platform.OS !== 'web') void SecureStore.setItemAsync('login.cooldown', JSON.stringify(next)); }
+      setErr((e as Error).message);
+    } finally { setBusy(false); }
   };
 
   return (
@@ -68,6 +88,7 @@ export default function Login() {
             <>
               <Field label="6-digit code" keyboardType="number-pad" textContentType="oneTimeCode" maxLength={6} value={code} onChangeText={(v) => setCode(v.replace(/\D/g, ''))} autoFocus />
               {err && <Notice tone="err">{err}</Notice>}
+          {locked && <Notice tone="warn">Sign-in is locked. You can retry in {clock}.</Notice>}
               <Button kind="primary" size="lg" title="Verify and sign in" busy={busy} disabled={code.length !== 6} onPress={go} />
               <Button kind="ghost" title="Back" onPress={() => setMfaToken(null)} />
             </>
@@ -81,6 +102,7 @@ export default function Login() {
                 </Pressable>
               </View>
               {err && <Notice tone="err">{err}</Notice>}
+          {locked && <Notice tone="warn">Sign-in is locked. You can retry in {clock}.</Notice>}
               <Button kind="primary" size="lg" title="Sign in" busy={busy} disabled={!u || !p} onPress={go} />
               <View style={{ alignItems: 'flex-end', marginTop: -S[2] }}><Button kind="ghost" size="sm" title="Forgot password?" onPress={() => router.push('/forgot')} /></View>
               <Row><View style={{ flex: 1 }}><Divider /></View><T v="xs">or</T><View style={{ flex: 1 }}><Divider /></View></Row>

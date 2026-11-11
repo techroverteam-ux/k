@@ -161,12 +161,17 @@ export class UsersService {
       const [u] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
       if (!u) throw notFound('Account');
       if (u.role === 'SUPER_ADMIN') throw forbidden('Super Admin status is managed by operations.');
+      if (actor.role !== 'SUPER_ADMIN' && !(actor.role === 'BROKER' && u.role === 'TRADER' && u.brokerId === actor.userId && u.resetDisabledAt && status === 'ACTIVE')) throw forbidden('Only the assigned broker can re-enable a reset-disabled trader.');
       if (u.status === 'PENDING') throw badInput('Approve the account first.');
-      const [r] = await tx.update(users).set({ status, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
+      const [r] = await tx.update(users).set({ status, updatedAt: new Date(), ...(status === 'ACTIVE' && u.resetDisabledAt ? { resetDisabledAt: null, dataSince: sql`now()`, riskState: 'OK' } : {}) }).where(eq(users.id, userId)).returning();
       if (status !== 'ACTIVE') {
         await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: `account_${status.toLowerCase()}` }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
         await tx.update(deviceCredentials).set({ revokedAt: new Date(), revokedReason: `account_${status.toLowerCase()}` }).where(and(eq(deviceCredentials.userId, userId), isNull(deviceCredentials.revokedAt)));
         await tx.update(orders).set({ status: 'CANCELLED', updatedAt: new Date() }).where(and(eq(orders.userId, userId), eq(orders.status, 'OPEN')));
+      }
+      if (status === 'ACTIVE' && u.resetDisabledAt) {
+        const admins = await tx.select({ id: users.id }).from(users).where(eq(users.role, 'SUPER_ADMIN'));
+        for (const id of new Set([u.id, ...(u.brokerId ? [u.brokerId] : []), ...admins.map((a) => a.id)])) await this.notifications.notify(tx, id, 'account.reenabled', 'Trader account re-enabled', `${u.username} has been re-enabled with a fresh view and zero starting balance. Historical records remain available to staff.`);
       }
       await this.audit.record(tx, { actor, action: `user.${status.toLowerCase()}`, entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { from: u.status, reason } });
       return r;
@@ -314,7 +319,7 @@ export class UsersService {
         JOIN journal_entries j ON j.id = p.journal_id AND j.kind = 'FEE'
         LEFT JOIN orders o ON j.ref_type = 'order' AND o.id = j.ref_id
         LEFT JOIN instruments i ON i.id = o.instrument_id
-       WHERE u.broker_id = ${brokerId} AND p.created_at >= ${from} AND p.created_at < ${to}
+       WHERE u.broker_id = ${brokerId} AND p.created_at >= ${from} AND (${actor.role} = 'SUPER_ADMIN' OR p.created_at >= coalesce((SELECT data_since FROM users WHERE id = ${actor.userId}), '-infinity'::timestamptz)) AND p.created_at < ${to}
        GROUP BY u.id, u.username
        ORDER BY u.username`);
     const lines = r.rows.map((x) => {

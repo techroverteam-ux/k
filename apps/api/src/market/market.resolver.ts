@@ -1,5 +1,5 @@
 import { Args, Float, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
-import { and, asc, eq, ilike, inArray, not, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, ilike, inArray, not, or, sql } from 'drizzle-orm';
 import type { Actor, GqlContext } from '../common/context';
 import { AllowWithoutMfa, Ctx, CurrentActor, Public, Roles } from '../common/context';
 import { AuditService } from '../audit/audit.service';
@@ -223,7 +223,7 @@ export class MarketResolver {
       .select({ w: watchlistItems, i: instruments })
       .from(watchlistItems)
       .innerJoin(instruments, eq(instruments.id, watchlistItems.instrumentId))
-      .where(and(eq(watchlistItems.userId, a.userId), eq(watchlistItems.listIndex, listIndex)))
+      .where(and(eq(watchlistItems.userId, a.userId), eq(watchlistItems.listIndex, listIndex), isNull(watchlistItems.archivedAt)))
       .orderBy(asc(watchlistItems.sortOrder), asc(instruments.symbol));
     return rows.map(({ w, i }) => {
       const q = this.market.quote(i.id);
@@ -236,7 +236,7 @@ export class MarketResolver {
     return this.dbs.db
       .select({ listIndex: watchlistItems.listIndex, count: sql<number>`count(*)::int` })
       .from(watchlistItems)
-      .where(eq(watchlistItems.userId, a.userId))
+      .where(and(eq(watchlistItems.userId, a.userId), isNull(watchlistItems.archivedAt)))
       .groupBy(watchlistItems.listIndex)
       .orderBy(watchlistItems.listIndex);
   }
@@ -245,9 +245,9 @@ export class MarketResolver {
   async addToWatchlist(@CurrentActor() a: Actor, @Args('listIndex', { type: () => Int }) listIndex: number, @Args('instrumentId', { type: () => ID }) instrumentId: string) {
     if (listIndex < 0 || listIndex >= MAX_LISTS) throw badInput('Invalid watchlist.');
     if (!this.market.instrument(instrumentId)) throw notFound('Instrument');
-    const existing = await this.dbs.db.$count(watchlistItems, and(eq(watchlistItems.userId, a.userId), eq(watchlistItems.listIndex, listIndex)));
+    const existing = await this.dbs.db.$count(watchlistItems, and(eq(watchlistItems.userId, a.userId), eq(watchlistItems.listIndex, listIndex), isNull(watchlistItems.archivedAt)));
     if (existing >= MAX_PER_LIST) throw badInput(`A watchlist can hold up to ${MAX_PER_LIST} scripts.`);
-    await this.dbs.db.insert(watchlistItems).values({ userId: a.userId, listIndex, instrumentId, sortOrder: existing }).onConflictDoNothing();
+    await this.dbs.db.insert(watchlistItems).values({ userId: a.userId, listIndex, instrumentId, sortOrder: existing }).onConflictDoUpdate({ target: [watchlistItems.userId, watchlistItems.listIndex, watchlistItems.instrumentId], set: { archivedAt: null, createdAt: new Date() } });
     return true;
   }
 

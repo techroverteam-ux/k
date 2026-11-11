@@ -177,38 +177,51 @@ export class AuthService {
 
   async login(username: string, password: string, meta: ClientMeta) {
     const uname = username.trim().toLowerCase();
-    const [u] = await this.dbs.db.select().from(users).where(eq(users.username, uname)).limit(1);
-    const ok = await this.passwords.verify(u?.passwordHash, password);
-
-    // Attribute the attempt (even a failed one) to the targeted account so it shows in its activity log.
+    // Lock per username so concurrent requests cannot skip the five-attempt limit.
+    const attempt = await this.dbs.serializable(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`login:${uname}`}))`);
+      const [u] = await tx.select().from(users).where(eq(users.username, uname)).limit(1).for('update');
+      const ok = await this.passwords.verify(u?.passwordHash, password);
+      const now = new Date();
+      if (!u) {
+        // Unknown usernames get the same counters/messages; do not expose account existence.
+        const key = peppered(`login:${uname}`);
+        const [ch] = await tx.select().from(otpChallenges).where(and(eq(otpChallenges.phone, key), eq(otpChallenges.purpose, 'login'), gt(otpChallenges.expiresAt, now))).orderBy(desc(otpChallenges.createdAt)).limit(1).for('update');
+        if (ch && ch.attempts >= 5) return { u: undefined, ok: false, remaining: 0, until: ch.expiresAt };
+        const fails = (ch?.attempts ?? 0) + 1;
+        const expiresAt = new Date(now.getTime() + 3_600_000);
+        if (ch) await tx.update(otpChallenges).set({ attempts: fails, ...(fails >= 5 ? { expiresAt } : {}) }).where(eq(otpChallenges.id, ch.id));
+        else await tx.insert(otpChallenges).values({ phone: key, purpose: 'login', codeHash: peppered('login-attempt'), attempts: fails, expiresAt, requestIp: meta.ip });
+        return { u: undefined, ok: false, remaining: Math.max(0, 5 - fails), until: fails >= 5 ? expiresAt : null };
+      }
+      if (u.lockedUntil && u.lockedUntil > now) return { u, ok: false, remaining: 0, until: u.lockedUntil };
+      const max = u.role === 'SUPER_ADMIN' ? await this.config.get('security.maxFailedLogins') : 5;
+      const minutes = u.role === 'SUPER_ADMIN' ? await this.config.get('security.lockoutMinutes') : 60;
+      if (!ok) {
+        const fails = (u.lockedUntil ? 0 : u.failedLoginCount) + 1;
+        const until = fails >= max ? new Date(now.getTime() + minutes * 60_000) : null;
+        await tx.update(users).set({ failedLoginCount: fails, lockedUntil: until }).where(eq(users.id, u.id));
+        return { u, ok: false, remaining: Math.max(0, max - fails), until };
+      }
+      await tx.update(users).set({ failedLoginCount: 0, lockedUntil: null }).where(eq(users.id, u.id));
+      return { u, ok: true, remaining: max, until: null };
+    });
+    const u = attempt.u;
     if (u) requestContext.setActor({ userId: u.id, role: u.role });
-    if (!u) {
-      await this.audit.recordStandalone({ action: 'auth.login_failed', outcome: 'FAILURE', ip: meta.ip, metadata: { reason: 'unknown_user' } });
-      throw new AppError('UNAUTHENTICATED', GENERIC_LOGIN_ERROR);
+    if (!attempt.ok) {
+      await this.audit.recordStandalone({ actor: u ? { userId: u.id, role: u.role } : undefined, action: attempt.until ? 'auth.login_locked' : 'auth.login_failed', outcome: attempt.until ? 'DENIED' : 'FAILURE', ip: meta.ip, metadata: { remainingAttempts: attempt.remaining } });
+      if (attempt.until) throw new AppError('LOGIN_LOCKED', 'Too many incorrect attempts. Sign-in is temporarily locked. Please wait for the countdown to finish.', { remainingAttempts: 0, lockedUntil: attempt.until.toISOString(), retryAfterSec: Math.max(0, Math.ceil((attempt.until.getTime() - Date.now()) / 1000)) });
+      throw new AppError('UNAUTHENTICATED', `${GENERIC_LOGIN_ERROR} ${attempt.remaining} attempt${attempt.remaining === 1 ? '' : 's'} remaining.`, { remainingAttempts: attempt.remaining });
     }
-    if (u.lockedUntil && u.lockedUntil > new Date()) {
-      await this.audit.recordStandalone({ actor: { userId: u.id, role: u.role }, action: 'auth.login_locked', outcome: 'DENIED', ip: meta.ip });
-      throw new AppError('RATE_LIMITED', 'Too many attempts. Try again later.');
-    }
-    if (!ok) {
-      const max = await this.config.get('security.maxFailedLogins');
-      const mins = await this.config.get('security.lockoutMinutes');
-      const fails = u.failedLoginCount + 1;
-      await this.dbs.db
-        .update(users)
-        .set({ failedLoginCount: fails >= max ? 0 : fails, lockedUntil: fails >= max ? new Date(Date.now() + mins * 60_000) : u.lockedUntil })
-        .where(eq(users.id, u.id));
-      await this.audit.recordStandalone({ actor: { userId: u.id, role: u.role }, action: 'auth.login_failed', outcome: 'FAILURE', ip: meta.ip, metadata: { fails } });
-      throw new AppError('UNAUTHENTICATED', GENERIC_LOGIN_ERROR);
-    }
+    if (!u) throw unauthenticated();
     if (u.status !== 'ACTIVE') {
       await this.audit.recordStandalone({ actor: { userId: u.id, role: u.role }, action: 'auth.login_inactive', outcome: 'DENIED', ip: meta.ip, metadata: { status: u.status } });
       // The password was correct, so it's safe to say why (this doesn't reveal anything to a stranger).
+      if (u.resetDisabledAt) throw new AppError('FORBIDDEN', 'Your account was disabled after a reset. Ask your assigned broker or a Super Admin to re-enable it.');
       if (u.status === 'PENDING') throw new AppError('FORBIDDEN', 'Your account is waiting for approval. You can sign in once an administrator approves it.');
       throw new AppError('UNAUTHENTICATED', GENERIC_LOGIN_ERROR);
     }
 
-    await this.dbs.db.update(users).set({ failedLoginCount: 0, lockedUntil: null }).where(eq(users.id, u.id));
 
     if (u.mfaEnabled) {
       const mfaToken = this.jwt.sign(

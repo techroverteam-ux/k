@@ -1323,53 +1323,30 @@ describe('wipe out', () => {
     await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'wipe'`);
   });
 
-  it('a trader wipes their own account: fresh start for them, full history for Super Admin', async () => {
+  it('an approved trader reset disables the account, keeps staff history and re-enables with zero balance', async () => {
     const t = await login('trader.three');
-    const tok = { token: t.accessToken };
-    const buy = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
-    expect(buy.data.placeOrder.status).toBe('FILLED');
-    const pv = await gql(`{ wipePreview { balance resetTo openPositions method } }`, {}, tok);
-    expect(pv.data.wipePreview.openPositions).toBe(1);
-
-    const begin = async () => {
-      const b = await gql(`mutation{ beginAccountWipe{ method devCode } }`, {}, tok);
-      expect(b.errors).toBeUndefined();
-      return b.data.beginAccountWipe.method === 'SMS' ? b.data.beginAccountWipe.devCode : PW;
-    };
-    const WIPE = `mutation($c:String!,$w:String!){ wipeMyAccount(code:$c, confirm:$w){ balance } }`;
-    let code = await begin();
-    expect((await gql(WIPE, { c: code, w: 'WIPE' }, tok)).errors?.[0].message).toMatch(/Exit your open positions/);
-    await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, tok);
-
-    expect(code === PW ? 'skip' : (await gql(WIPE, { c: code, w: 'nope' }, tok)).errors?.[0].extensions?.code).toMatch(/skip|BAD_USER_INPUT/);
-    const before = (await gql(`{ orders(limit:100){ id } }`, {}, tok)).data.orders.length;
-    expect(before).toBeGreaterThan(0);
-    await pg.query(`DELETE FROM otp_challenges WHERE purpose = 'wipe'`);
-    code = await begin();
-    const done = await gql(WIPE, { c: code, w: 'WIPE' }, tok);
-    expect(done.errors).toBeUndefined();
-    expect(done.data.wipeMyAccount.balance).toBe(pv.data.wipePreview.resetTo);
-
-    // The trader: empty history, balance back to the opening amount, no fees or P&L shown.
-    expect((await gql(`{ orders(limit:100){ id } }`, {}, tok)).data.orders).toHaveLength(0);
-    const sum = (await gql(`{ accountSummary { balance fees realizedPnl } }`, {}, tok)).data.accountSummary;
-    expect(sum).toEqual({ balance: pv.data.wipePreview.resetTo, fees: '0.00', realizedPnl: '0.00' });
-    const led = (await gql(`{ ledgerHistory(limit:50){ kind memo } }`, {}, tok)).data.ledgerHistory;
-    expect(led.every((l: { kind: string }) => l.kind === 'ADJUSTMENT')).toBe(true);
-    expect((await gql(`{ positions { id } }`, {}, tok)).data.positions).toHaveLength(0);
-
-    // Their broker doesn't see the old history either.
-    const uid = t.user.id;
     const broker = await login('broker.two');
-    expect((await gql(`query($u:ID){ orders(userId:$u, limit:100){ id } }`, { u: uid }, { token: broker.accessToken })).data.orders).toHaveLength(0);
-
-    // Super Admin sees everything, plus what the wipe cleared.
     const admin = await adminLogin('admin');
-    expect((await gql(`query($u:ID){ orders(userId:$u, limit:100){ id } }`, { u: uid }, { token: admin.token })).data.orders.length).toBe(before);
-    const wipes = (await gql(`query($u:ID!){ accountWipes(userId:$u){ verifiedWith balanceBefore balanceAfter snapshot } }`, { u: uid }, { token: admin.token })).data.accountWipes;
-    expect(wipes).toHaveLength(1);
-    expect(JSON.parse(wipes[0].snapshot).positions.length).toBeGreaterThan(0);
-    // The ledger stayed balanced and append-only: the reset is one more journal, nothing was deleted.
+    const buy = await gql(PLACE, { i: { instrumentId, side: 'BUY', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    expect(buy.data.placeOrder.status).toBe('FILLED');
+    const req = await gql(`mutation{ requestAccountReset(reason:"Start a fresh trader account",confirm:"WIPE"){ id status } }`, {}, { token: t.accessToken });
+    expect(req.data.requestAccountReset.status).toBe('PENDING');
+    const DECIDE = `mutation($id:ID!){ decideAccountReset(id:$id,approve:true){ status } }`;
+    expect(code(await gql(DECIDE, { id: req.data.requestAccountReset.id }, { token: broker.accessToken }))).toBe('CONFLICT');
+    await gql(PLACE, { i: { instrumentId, side: 'SELL', type: 'MARKET', quantity: 1, idempotencyKey: randomUUID() } }, { token: t.accessToken });
+    const history = `query($u:ID){ orders(userId:$u,limit:100){ id } }`;
+    const before = (await gql(history, { u: t.user.id }, { token: admin.token })).data.orders.length;
+    expect((await gql(DECIDE, { id: req.data.requestAccountReset.id }, { token: broker.accessToken })).data.decideAccountReset.status).toBe('APPROVED');
+    expect(code(await gql(`{ me { id } }`, {}, { token: t.accessToken }))).toBe('UNAUTHENTICATED');
+    expect((await gql(history, { u: t.user.id }, { token: broker.accessToken })).data.orders.length).toBe(before);
+    expect((await gql(history, { u: t.user.id }, { token: admin.token })).data.orders.length).toBe(before);
+    expect((await gql(SUMMARY, { u: t.user.id }, { token: admin.token })).data.accountSummary.balance).toBe('0.00');
+    const reenable = await gql(`mutation($u:ID!){ setUserStatus(userId:$u,status:ACTIVE,reason:"Re-enabled after approved reset"){ status } }`, { u: t.user.id }, { token: broker.accessToken });
+    expect(reenable.data.setUserStatus.status).toBe('ACTIVE');
+    tokenCache.delete('trader.three');
+    const fresh = await login('trader.three');
+    expect((await gql(history, {}, { token: fresh.accessToken })).data.orders).toHaveLength(0);
+    expect((await gql(SUMMARY, {}, { token: fresh.accessToken })).data.accountSummary.balance).toBe('0.00');
     const unbalanced = await pg.query(`SELECT journal_id FROM ledger_postings GROUP BY journal_id HAVING SUM(amount_minor) <> 0`);
     expect(unbalanced.rows).toHaveLength(0);
   });
@@ -1451,9 +1428,10 @@ describe('wipe out', () => {
     const left = await pg.query(`SELECT role, count(*)::int n FROM users GROUP BY role`);
     expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 2 }]);
     for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries',
-      'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'candles_1m', 'candles_1d', 'notifications', 'account_wipes']) {
+      'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'candles_1m', 'candles_1d', 'account_wipes']) {
       expect((await pg.query(`SELECT count(*)::int n FROM ${tbl}`)).rows[0].n).toBe(0);
     }
+    expect((await pg.query(`SELECT count(*)::int n FROM notifications WHERE kind = 'platform.wipe_completed'`)).rows[0].n).toBe(2);
     // Settings read their defaults again, and both Super Admins can still sign in.
     expect((await gql(`{ appSettings { minDeposit } }`)).data.appSettings.minDeposit).toBe('50000.00');
     expect((await freshLogin('admin')).mfaRequired).toBe(true);

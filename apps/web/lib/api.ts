@@ -7,6 +7,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public code: string,
+    public extensions: { lockedUntil?: string; retryAfterSec?: number; remainingAttempts?: number } = {},
   ) {
     super(message);
   }
@@ -43,7 +44,7 @@ export function takeSignedOutReason(): string | null {
   try { const m = sessionStorage.getItem(SIGNED_OUT_KEY); sessionStorage.removeItem(SIGNED_OUT_KEY); return m; } catch { return null; }
 }
 
-async function raw<T>(query: string, variables: Record<string, unknown> | undefined, stepUp?: string): Promise<{ data?: T; errors?: { message: string; extensions?: { code?: string } }[] }> {
+async function raw<T>(query: string, variables: Record<string, unknown> | undefined, stepUp?: string): Promise<{ data?: T; errors?: { message: string; extensions?: { code?: string; lockedUntil?: string; retryAfterSec?: number; remainingAttempts?: number } }[] }> {
   // Same-origin relay (app/graphql/route.ts) so the refresh cookie is first-party.
   const res = await fetch('/graphql', {
     method: 'POST',
@@ -123,7 +124,7 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     throw new ApiError('Verification cancelled.', 'CANCELLED');
   }
   if (code === 'RATE_LIMITED') throw new ApiError('Too many requests right now. Updates will resume in a few seconds.', code);
-  throw new ApiError(err.message, code);
+  throw new ApiError(err.message, code, err.extensions);
 }
 
 let ws: Client | null = null;

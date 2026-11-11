@@ -240,7 +240,8 @@ export class TradingResolver {
   ): Promise<LedgerLine[]> {
     const u = await this.users.get(a, userId ?? a.userId, c.ip);
     const acct = await this.ledger.cashAccount(this.dbs.db, u.id, u.mode);
-    const rows = await this.ledger.history(acct, clampLimit(limit), before, a.role === 'SUPER_ADMIN' ? null : u.dataSince);
+    const viewer = a.role === 'BROKER' ? await this.users.get(a, a.userId, c.ip) : u;
+    const rows = await this.ledger.history(acct, clampLimit(limit), before, a.role === 'SUPER_ADMIN' ? null : viewer.dataSince);
     return rows.map((r) => ({ postingId: r.postingId, journalId: r.journalId, kind: r.kind, memo: r.memo, amount: formatMoney(r.amountMinor), createdAt: r.createdAt }));
   }
 

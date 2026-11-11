@@ -1,3 +1,4 @@
+import { afterWipeFor } from '../wipe/visibility';
 import { Injectable } from '@nestjs/common';
 import { soleAdminMayApprove } from '../common/maker-checker';
 import { and, asc, desc, eq, inArray, type SQL } from 'drizzle-orm';
@@ -137,6 +138,7 @@ export class FeesService {
     const where: (SQL | undefined)[] = [];
     if (actor.role === 'TRADER') where.push(eq(feePayments.userId, actor.userId));
     else if (actor.role === 'BROKER') where.push(inArray(feePayments.userId, this.dbs.db.select({ id: users.id }).from(users).where(eq(users.brokerId, actor.userId))));
+    where.push(afterWipeFor(actor, feePayments.createdAt, feePayments.userId));
     if (status?.length) where.push(inArray(feePayments.status, status));
     return this.dbs.db
       .select({ f: feePayments, username: users.username, displayName: users.displayName, payee: payeeAccounts.label, proofBytes: feePaymentProofs.bytes })

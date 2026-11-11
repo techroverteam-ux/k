@@ -1,4 +1,6 @@
 'use client';
+import { ReenableResetTrader } from './account-resets';
+import { AccountWipes } from './wipe';
 import { useSoleAdmin } from '@/lib/sole-admin';
 import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
@@ -9,8 +11,8 @@ import { Icon } from './icons';
 import { LedgerTable, OrdersTable, PAYMENT_FIELDS, PaymentDialog, PortfolioSummary, PositionsTable, type Payment } from './trading';
 import { Dialog, Empty, ErrorState, SkeletonRows, Status, Tabs, useToast } from './ui';
 
-export interface UserRow { id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled createdAt phone';
+export interface UserRow { resetDisabledAt?: string; id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone';
 /** "40.00" → "40%"; empty for non-brokers. Brokers without their own value use the platform default. */
 export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPerMiniLot' | 'commissionPerMegaLot'>) => (u.role !== 'BROKER' ? '' : u.commissionPerMiniLot ? `₹${Number(u.commissionPerMiniLot).toLocaleString('en-IN')} / mini lot · ₹${Number(u.commissionPerMegaLot).toLocaleString('en-IN')} / mega` : '');
 export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
@@ -171,7 +173,8 @@ export function AccountDetail({ id, back, actions }: { id: string; back: { href:
         </div>
         <div className="row">
           {actions?.(t)}
-          {t.role === 'TRADER' && <>
+          {!actions && <ReenableResetTrader user={t} onDone={u.refetch} />}
+          {t.role === 'TRADER' && t.status === 'ACTIVE' && <>
             <button className="btn" onClick={() => setPay('WITHDRAWAL')}>Request withdrawal</button>
             <button className="btn btn-primary" onClick={() => setPay('DEPOSIT')}>Request deposit</button>
           </>}
@@ -179,6 +182,7 @@ export function AccountDetail({ id, back, actions }: { id: string; back: { href:
       </div>
       {t.role === 'TRADER' ? (
         <>
+          <AccountWipes userId={id} />
           <PortfolioSummary userId={id} title="Available balance" />
           <section>
             <Tabs label="Account data" value={tab} onChange={setTab} items={[{ v: 'positions', label: 'Positions' }, { v: 'orders', label: 'Orders' }, { v: 'ledger', label: 'Ledger' }, { v: 'requests', label: 'Fund requests' }]} />

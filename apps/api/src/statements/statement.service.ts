@@ -91,7 +91,11 @@ export class StatementService {
     if (!u) throw new AppError('NOT_FOUND', 'Account not found.');
     let from = istDayStart(c.from);
     // After a wipe-out, the user (and their broker) only get statements of the fresh account; Super Admin gets everything.
-    if (c.role !== 'SUPER_ADMIN' && u.dataSince && from < u.dataSince) from = u.dataSince;
+    const [viewer] = await this.dbs.db.select().from(users).where(eq(users.id, c.sub));
+    if (!viewer || viewer.status !== 'ACTIVE') throw unauthenticated();
+    await this.usersSvc.get({ userId: viewer.id, role: viewer.role, sessionId: 'statement', mfaVerified: true }, u.id, ip);
+    const cutoff = viewer.role === 'SUPER_ADMIN' ? null : viewer.role === 'BROKER' ? viewer.dataSince : u.dataSince;
+    if (cutoff && from < cutoff) from = cutoff;
     const to = new Date(istDayStart(c.to).getTime() + 86_400_000);
     const cash = await this.ledger.cashAccount(this.dbs.db, u.id, u.mode);
     const [open] = await this.dbs.db

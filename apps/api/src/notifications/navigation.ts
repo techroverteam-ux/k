@@ -2,6 +2,8 @@ import type { Actor } from '../common/context';
 
 /** One destination per update; unknown kinds remain available in Notifications. */
 export function notificationDestination(role: Actor['role'], kind: string): string | undefined {
+  if (kind.startsWith('account.reset_')) return role === 'SUPER_ADMIN' ? '/admin/reset' : role === 'BROKER' ? '/broker/requests' : '/account';
+  if (kind === 'account.reenabled') return role === 'SUPER_ADMIN' ? '/admin/users' : role === 'BROKER' ? '/broker/traders' : '/account';
   if (kind.startsWith('security.')) return '/account';
   if (role === 'SUPER_ADMIN') {
     if (kind.startsWith('payment.')) return '/admin/payments';
@@ -30,7 +32,7 @@ export function notificationDestination(role: Actor['role'], kind: string): stri
 
 /** These events are represented by current queue records, so never count them twice. */
 export function isQueueNotification(role: Actor['role'], kind: string): boolean {
-  return role === 'SUPER_ADMIN' && ['payment.review', 'fees.review', 'fees.payee_pending', 'user.review', 'account.pending', 'user.delete_requested', 'platform.wipe_requested'].includes(kind);
+  return role === 'SUPER_ADMIN' && ['payment.review', 'fees.review', 'fees.payee_pending', 'user.review', 'account.pending', 'user.delete_requested', 'platform.wipe_requested', 'account.reset_requested'].includes(kind);
 }
 
 export function mergeNavigationCounts(role: Actor['role'], pending: Record<string, number>, updates: { kind: string; count: number }[]) {

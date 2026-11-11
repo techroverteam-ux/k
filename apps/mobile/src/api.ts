@@ -16,7 +16,7 @@ const store = Platform.OS === 'web'
   : SecureStore;
 
 export class ApiError extends Error {
-  constructor(message: string, public code: string, public reason?: string) {
+  constructor(message: string, public code: string, public reason?: string, public extensions: { lockedUntil?: string; retryAfterSec?: number; remainingAttempts?: number } = {}) {
     super(message);
   }
 }
@@ -102,7 +102,7 @@ async function rawFetch(query: string, variables?: Record<string, unknown>, step
     },
     body: JSON.stringify({ query, variables }),
   });
-  return (await res.json()) as { data?: any; errors?: { message: string; extensions?: { code?: string; reason?: string } }[] };
+  return (await res.json()) as { data?: any; errors?: { message: string; extensions?: { code?: string; reason?: string; lockedUntil?: string; retryAfterSec?: number; remainingAttempts?: number } }[] };
 }
 
 export async function refreshSession(): Promise<boolean> {
@@ -151,7 +151,7 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     if (t) return gql<T>(query, variables, { ...opts, stepUp: t });
     throw new ApiError('Verification cancelled.', 'CANCELLED');
   }
-  throw new ApiError(e.message, code, e.extensions?.reason);
+  throw new ApiError(e.message, code, e.extensions?.reason, e.extensions);
 }
 
 let ws: Client | null = null;

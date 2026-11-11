@@ -4,6 +4,7 @@
  * commissions report. Sensitive actions ask for step-up verification through the API, like on the web.
  * Configuration changes and log archives stay on the web portal.
  */
+import { AccountResetPanel, ReenableResetTrader } from './resets';
 import { useSoleAdmin } from './sole-admin';
 import { router } from 'expo-router';
 import { memo, useCallback, useMemo, useState } from 'react';
@@ -19,8 +20,8 @@ import {
   StatusBadge, T, Tabs, toast, useQuery, VList,
 } from './ui';
 
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled createdAt phone';
-export interface UserRow { id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone';
+export interface UserRow { resetDisabledAt?: string; id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
 const ROLE: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 const useBrokers = () => useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
@@ -147,6 +148,7 @@ export function AdminUserScreen({ id }: { id: string }) {
   const brokerName = brokers.data?.users.items.find((b) => b.id === x.brokerId);
   return (
     <Screen back title={x.displayName}>
+      <ReenableResetTrader user={x} onDone={u.refetch} />
       <PendingDeletions userId={x.id} onDeleted={() => router.back()} />
       <Row>
         <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: t.brandSoft, alignItems: 'center', justifyContent: 'center' }}><T v="h3" c="brand">{initials(x.displayName)}</T></View>
@@ -248,7 +250,7 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
 }
 
 /* ============================================================== security */
-type SecTab = 'logins' | 'consents' | 'checks';
+type SecTab = 'logins' | 'consents' | 'checks' | 'resets';
 export function AdminSecurityScreen() {
   const { me } = useAuth();
   const [tab, setTab] = useState<SecTab>('logins');
@@ -256,7 +258,8 @@ export function AdminSecurityScreen() {
   const logins = useQuery<{ loginAudit: LoginEvent[] }>(`query($o:String,$n:Int){ loginAudit(outcome:$o, limit:$n){ ${LOGIN_FIELDS} } }`, { o: outcome || undefined, n: 200 }, 30000, !me?.mfaEnabled || tab !== 'logins');
   const consents = useQuery<{ consentLog: ConsentRecord[] }>(`query($n:Int){ consentLog(limit:$n){ ${CONSENT_FIELDS} } }`, { n: 200 }, undefined, !me?.mfaEnabled || tab !== 'consents');
   if (!me?.mfaEnabled) return <AdminMfaGate title="Security" />;
-  const tabs = <Tabs value={tab} onChange={setTab} items={[{ k: 'logins', label: 'Sign-ins' }, { k: 'consents', label: 'Consents' }, { k: 'checks', label: 'Checks' }]} />;
+  const tabs = <Tabs value={tab} onChange={setTab} items={[{ k: 'logins', label: 'Sign-ins' }, { k: 'consents', label: 'Consents' }, { k: 'checks', label: 'Checks' }, { k: 'resets', label: 'Resets' }]} />;
+  if (tab === 'resets') return <Screen title="Account resets" right={<BellButton />}>{tabs}<AccountResetPanel /></Screen>;
   if (tab === 'checks') return <Screen title="Security" right={<BellButton />}>{tabs}<Checks /></Screen>;
   if (tab === 'consents') {
     const list = consents.data?.consentLog ?? [];
@@ -362,7 +365,7 @@ function UserWipes({ userId }: { userId: string }) {
   if (!rows.length) return null;
   return (
     <Section title="Wipe-outs">
-      <T v="xs">Everything before each wipe is hidden from the trader and their broker. You still see it.</T>
+      <T v="xs">Trader resets hide history only from the trader. Their broker and Super Admins retain it.</T>
       {rows.map((w) => {
         const s = JSON.parse(w.snapshot) as { positions: { symbol: string }[]; watchlist: unknown[]; cancelledOrders: unknown[]; stoppedStrategies: unknown[] };
         return <ListRow key={w.id} left={<IconMark icon="alert" tone="warn" />} title={`₹${inr(w.balanceBefore)} → ₹${inr(w.balanceAfter)}`} sub={`${when(w.createdAt)} · via ${w.verifiedWith.toLowerCase()} · cleared ${s.positions.length} positions, ${s.watchlist.length} watchlist items, ${s.cancelledOrders.length} orders`} />;

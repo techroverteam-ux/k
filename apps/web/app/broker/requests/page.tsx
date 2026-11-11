@@ -1,4 +1,5 @@
 'use client';
+import { AccountResetPanel } from '@/components/account-resets';
 import { useState } from 'react';
 import { PAYMENT_FIELDS, type Payment } from '@/components/trading';
 import { Chips, Empty, ErrorState, PageHead, SkeletonRows, Status } from '@/components/ui';
@@ -11,6 +12,7 @@ export default function BrokerRequests() {
   const { data, loading, error, refetch } = useQuery<{ paymentRequests: Payment[] }>(`query($s:[PaymentStatus!]){ paymentRequests(status:$s, limit:100){ ${PAYMENT_FIELDS} } }`, { s: f === 'ALL' ? undefined : f === 'REJECTED' ? ['REJECTED', 'FAILED', 'CANCELLED'] : [f] }, { pollMs: 10_000 });
   return (
     <>
+      <AccountResetPanel />
       <PageHead title="Fund requests" sub="Deposit and withdrawal requests for your traders. A Super Admin approves each one. To raise a new request, open a trader." />
       <div style={{ marginBottom: 12 }}><Chips label="Status" value={f} onChange={setF} items={[{ v: 'ALL', label: 'All' }, { v: 'REQUESTED', label: 'In review' }, { v: 'POSTED', label: 'Completed' }, { v: 'REJECTED', label: 'Not completed' }]} /></div>
       <section className="panel">

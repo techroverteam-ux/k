@@ -11,6 +11,7 @@ export type ErrorCode =
   | 'BAD_USER_INPUT'
   | 'CONFLICT'
   | 'RATE_LIMITED'
+  | 'LOGIN_LOCKED'
   | 'STEP_UP_REQUIRED'
   | 'MFA_REQUIRED'
   | 'INSUFFICIENT_FUNDS'

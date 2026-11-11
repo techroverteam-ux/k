@@ -8,7 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
 import { DbService, type DbOrTx, type Tx } from '../db/db';
 import {
-  accountWipes, candles1d, candles1m, configVersions, deviceCredentials, feePayments, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders,
+  accountResetRequests, accountWipes, candles1d, candles1m, configVersions, deviceCredentials, feePayments, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders,
   otpChallenges, payeeAccounts, paymentRequests, platformWipes, positions, reconciliationRuns, sessions, strategies, strategyEvents, strategyRuns, tradingConsents, users, watchlistItems,
 } from '../db/schema';
 import { LedgerService } from '../ledger/ledger.service';
@@ -24,20 +24,11 @@ const DELETE_REASON = (r: string) => { const why = r.trim(); if (why.length < 10
 const jsonSafe = (rows: unknown) => JSON.parse(JSON.stringify(rows, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
 
 /**
- * "Wipe out".
- *
- * A trader or broker wiping their own account gets a fresh start, but nothing is destroyed:
- *  - history before now (orders, ledger lines, statements, requests, strategies, notifications, activity) is hidden
- *    from them and their broker through users.data_since; Super Admin still sees all of it;
- *  - the balance goes back to the opening balance with a balanced ADJUSTMENT journal (the ledger stays append-only);
- *  - positions and the watchlist, which can't be hidden by date, are copied into account_wipes.snapshot, then cleared;
- *  - open orders are cancelled, running strategies stopped, pending fund requests cancelled.
- * It needs a signed-in session and typing WIPE.
- * Open positions must be closed first.
- *
- * A Super Admin "wipe all trading data" permanently deletes every trader and broker account and all their trading data.
- * One Super Admin requests it, a different one approves it within 30 minutes; both re-verify (step-up) and type the phrase.
- * Super Admin logins, settings, instruments, candles and the audit log (with a record of the wipe) are kept.
+ * Owner resets require staff approval. A broker reset changes only that broker's visibility.
+ * A trader reset preserves all history for staff, posts a zero-balance adjustment, archives
+ * watchlist/position snapshots and disables the trader until the assigned broker or an admin re-enables it.
+ * Full platform wipes hard-delete operational data only after a different Super Admin approves
+ * within 30 minutes. The immutable audit/request logs and Super Admin accounts remain.
  */
 /**
  * Permanently delete these accounts and everything they own. Must run inside a transaction that has
@@ -71,6 +62,8 @@ export async function purgeAccounts(tx: Tx, targets: string[], signedOut: string
   }
   if (accts.length) await tx.delete(ledgerAccounts).where(inArray(ledgerAccounts.id, accts));
   counts.consents = n(await tx.delete(tradingConsents).where(inArray(tradingConsents.userId, targets)).returning({ id: tradingConsents.id }));
+  counts.feePayments = n(await tx.delete(feePayments).where(inArray(feePayments.userId, targets)).returning({ id: feePayments.id }));
+  await tx.delete(accountResetRequests).where(inArray(accountResetRequests.userId, targets));
   counts.watchlistItems = n(await tx.delete(watchlistItems).where(inArray(watchlistItems.userId, targets)).returning({ id: watchlistItems.id }));
   counts.notifications = n(await tx.delete(notifications).where(inArray(notifications.userId, targets)).returning({ id: notifications.id }));
   await tx.delete(deviceCredentials).where(inArray(deviceCredentials.userId, targets));
@@ -148,7 +141,7 @@ export class WipeService {
       this.dbs.db.select({ n: sql<number>`count(*)::int` }).from(paymentRequests).where(and(eq(paymentRequests.userId, u.id), eq(paymentRequests.status, 'REQUESTED'))),
     ]);
     const method = 'SESSION';
-    return { balance: formatMoney(balance), resetTo: formatMoney(opening), openPositions: pos.filter((p) => p.netQty !== 0).length, openOrders, runningStrategies: running, pendingRequests: pending, method };
+    return { balance: formatMoney(balance), resetTo: u.role === 'TRADER' ? '0.00' : formatMoney(balance), openPositions: pos.filter((p) => p.netQty !== 0).length, openOrders, runningStrategies: running, pendingRequests: pending, method };
   }
 
   async begin(actor: Actor, ip: string) {
@@ -158,31 +151,71 @@ export class WipeService {
     return r;
   }
 
+  /** Legacy endpoint now queues a request; it can never bypass approval. */
   async wipeSelf(actor: Actor, code: string, confirm: string, ip: string) {
-    if (confirm.trim().toUpperCase() !== WIPE_CONFIRM) throw badInput(`Type ${WIPE_CONFIRM} to confirm.`);
+    const r = await this.requestAccountReset(actor, 'Owner requested an account reset.', confirm, ip);
+    return { wipeId: r.id, balance: '0.00', status: 'PENDING' };
+  }
+
+  async requestAccountReset(actor: Actor, reason: string, confirm: string, ip: string) {
+    if (confirm.trim().toUpperCase() !== WIPE_CONFIRM) throw badInput('Type WIPE to confirm.');
+    const why = DELETE_REASON(reason);
     const u = await this.self(actor);
-    const chk = await this.auth.checkChallenge(u, 'wipe', code);
-    if (!chk.ok) {
-      await this.audit.recordStandalone({ actor, action: 'account.wipe_failed', entityType: 'user', entityId: u.id, outcome: 'FAILURE', ip, metadata: { method: chk.method } });
-      throw new AppError('UNAUTHENTICATED', chk.message);
-    }
-    const out = await this.dbs.serializable(async (tx) => {
+    return this.dbs.serializable(async (tx) => {
+      const [current] = await tx.select().from(users).where(eq(users.id, u.id)).for('update');
+      if (!current || current.status !== 'ACTIVE') throw new AppError('CONFLICT', 'This account is no longer active.');
+      await tx.update(accountResetRequests).set({ status: 'EXPIRED' }).where(and(eq(accountResetRequests.userId, u.id), eq(accountResetRequests.status, 'PENDING'), sql`${accountResetRequests.expiresAt} <= now()`));
+      const [pending] = await tx.select().from(accountResetRequests).where(and(eq(accountResetRequests.userId, u.id), eq(accountResetRequests.status, 'PENDING')));
+      if (pending) throw new AppError('CONFLICT', 'A reset request is already waiting for approval.');
+      const [r] = await tx.insert(accountResetRequests).values({ userId: u.id, requestedById: u.id, brokerId: u.brokerId, reason: why, expiresAt: new Date(Date.now() + PLATFORM_WIPE_TTL_MS) }).returning();
+      const recipients = await this.resetRecipients(tx, u);
+      for (const recipient of recipients) await this.notifications.notify(tx, recipient, 'account.reset_requested', 'Account reset approval requested', `${u.username} requested a reset. ${u.role === 'TRADER' ? 'Approval disables this trader and resets the balance to zero. Staff retain all history.' : "Only this broker's view is cleared; traders are unchanged."} Approve within 30 minutes.`);
+      await this.audit.record(tx, { actor, action: 'account.reset_requested', entityType: 'account_reset', entityId: r.id, outcome: 'SUCCESS', ip });
+      return r;
+    });
+  }
+
+  private async resetRecipients(tx: DbOrTx, u: { id: string; role: string; brokerId: string | null }): Promise<string[]> {
+    const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
+    return [...new Set([...admins.map((a) => a.id), ...(u.role === 'TRADER' && u.brokerId ? [u.brokerId] : [])])];
+  }
+
+  async listAccountResets(actor: Actor) {
+    const scope = actor.role === 'SUPER_ADMIN' ? undefined : actor.role === 'BROKER' ? sql`(${accountResetRequests.userId} = ${actor.userId} OR ${users.brokerId} = ${actor.userId})` : eq(accountResetRequests.userId, actor.userId);
+    const rows = await this.dbs.db.select({ request: accountResetRequests, username: users.username, role: users.role, brokerId: users.brokerId }).from(accountResetRequests).innerJoin(users, eq(users.id, accountResetRequests.userId)).where(scope).orderBy(desc(accountResetRequests.createdAt)).limit(100);
+    return rows.map(({ request, username, role, brokerId }) => ({ ...request, username, role, status: request.status === 'PENDING' && request.expiresAt <= new Date() ? 'EXPIRED' : request.status, canApprove: request.status === 'PENDING' && request.expiresAt > new Date() && request.userId !== actor.userId && (actor.role === 'SUPER_ADMIN' || (actor.role === 'BROKER' && role === 'TRADER' && brokerId === actor.userId)) }));
+  }
+
+  async decideAccountReset(actor: Actor, id: string, approve: boolean, ip: string) {
+    let signedOut: string[] = [];
+    const result = await this.dbs.serializable(async (tx) => {
+      signedOut = [];
+      const [r] = await tx.select().from(accountResetRequests).where(eq(accountResetRequests.id, id)).for('update');
+      if (!r || r.status !== 'PENDING') throw notFound('Pending reset request');
+      const [u] = await tx.select().from(users).where(eq(users.id, r.userId)).for('update');
+      if (!u) throw notFound('Account');
+      const allowed = actor.role === 'SUPER_ADMIN' || (actor.role === 'BROKER' && u.role === 'TRADER' && u.brokerId === actor.userId);
+      if (!allowed || actor.userId === u.id) throw new AppError('FORBIDDEN', "Only a Super Admin or this trader's assigned broker may decide this request.");
+      if (r.expiresAt <= new Date()) { await tx.update(accountResetRequests).set({ status: 'EXPIRED' }).where(eq(accountResetRequests.id, id)); return null; }
+      if (approve && u.status !== 'ACTIVE') throw new AppError('CONFLICT', 'The account must be active before its reset can be approved.');
+      if (approve && u.role === 'TRADER') {
       const cash = await this.ledger.cashAccount(tx, u.id, u.mode);
       await this.ledger.lock(tx, cash); // no order can fill while we reset
       const pos = await tx.select({ p: positions, symbol: instruments.symbol }).from(positions).innerJoin(instruments, eq(instruments.id, positions.instrumentId)).where(eq(positions.userId, u.id));
       if (pos.some((r) => r.p.netQty !== 0)) throw new AppError('CONFLICT', 'Exit your open positions first, then wipe out.');
-      const wl = await tx.select({ listIndex: watchlistItems.listIndex, symbol: instruments.symbol, instrumentId: watchlistItems.instrumentId }).from(watchlistItems).innerJoin(instruments, eq(instruments.id, watchlistItems.instrumentId)).where(eq(watchlistItems.userId, u.id));
+      const wl = await tx.select({ listIndex: watchlistItems.listIndex, symbol: instruments.symbol, instrumentId: watchlistItems.instrumentId }).from(watchlistItems).innerJoin(instruments, eq(instruments.id, watchlistItems.instrumentId)).where(and(eq(watchlistItems.userId, u.id), isNull(watchlistItems.archivedAt)));
       const now = new Date();
       const cancelled = await tx.update(orders).set({ status: 'CANCELLED', rejectReason: 'Cancelled: account wiped out', updatedAt: now }).where(and(eq(orders.userId, u.id), eq(orders.status, 'OPEN'))).returning({ id: orders.id });
       const stopped = await tx.update(strategies).set({ status: 'STOPPED', stoppedAt: now, stopReason: 'Account wiped out' }).where(and(eq(strategies.userId, u.id), eq(strategies.status, 'RUNNING'))).returning({ id: strategies.id });
       const requests = await tx.update(paymentRequests).set({ status: 'CANCELLED', reviewNote: 'Cancelled: account wiped out', updatedAt: now }).where(and(eq(paymentRequests.userId, u.id), eq(paymentRequests.status, 'REQUESTED'))).returning({ id: paymentRequests.id });
-      await tx.delete(positions).where(eq(positions.userId, u.id));
-      await tx.delete(watchlistItems).where(eq(watchlistItems.userId, u.id));
+      // Closed position summaries and the watchlist are archived in the snapshot; retain the rows.
+      await tx.update(positions).set({ netQty: 0, avgPriceMinor: 0n, realizedPnlMinor: 0n, updatedAt: now }).where(eq(positions.userId, u.id));
+      await tx.update(watchlistItems).set({ archivedAt: now }).where(eq(watchlistItems.userId, u.id));
 
       const before = await this.ledger.balance(tx, cash);
-      const target = await this.openingBalance(tx, cash);
+      const target = 0n;
       const [w] = await tx.insert(accountWipes).values({
-        userId: u.id, byId: actor.userId, verifiedWith: chk.method, balanceBeforeMinor: before, balanceAfterMinor: target, ip,
+        userId: u.id, byId: actor.userId, verifiedWith: 'APPROVAL', balanceBeforeMinor: before, balanceAfterMinor: target, ip,
         snapshot: jsonSafe({ positions: pos.map((r) => ({ ...r.p, symbol: r.symbol })), watchlist: wl, cancelledOrders: cancelled.map((c) => c.id), stoppedStrategies: stopped.map((s) => s.id), cancelledRequests: requests.map((r) => r.id) }),
       }).returning();
       let journalId: string | null = null;
@@ -191,26 +224,38 @@ export class WipeService {
         const adj = await this.ledger.systemAccount(tx, 'ADJUSTMENT', u.mode);
         const j = await this.ledger.post(tx, {
           idempotencyKey: `wipe:${w.id}`, kind: 'ADJUSTMENT', mode: u.mode, createdById: actor.userId, refType: 'account_wipe', refId: w.id,
-          memo: `Account wiped out: balance reset to the opening ₹${formatMoney(target)}`,
+          memo: `Account wiped out: balance reset to ₹${formatMoney(target)}`,
           postings: [{ accountId: cash, amountMinor: diff }, { accountId: adj, amountMinor: -diff }],
         });
         journalId = j.id;
         await tx.update(accountWipes).set({ journalId }).where(eq(accountWipes.id, w.id));
       }
-      // Everything before this transaction is now hidden from the user (and their broker); the reset line itself stays visible.
-      await tx.update(users).set({ dataSince: sql`now()`, updatedAt: now }).where(eq(users.id, u.id));
-      await this.audit.record(tx, {
-        actor, action: 'account.wiped', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip,
-        metadata: { wipeId: w.id, method: chk.method, balanceBefore: formatMoney(before), balanceAfter: formatMoney(target), cancelledOrders: cancelled.length, stoppedStrategies: stopped.length, cancelledRequests: requests.length },
-      });
-      return { wipeId: w.id, balance: formatMoney(target) };
+
+        const live = await tx.update(sessions).set({ revokedAt: now, revokedReason: 'account_reset' }).where(and(eq(sessions.userId, u.id), isNull(sessions.revokedAt))).returning({ id: sessions.id });
+        signedOut.push(...live.map((s) => s.id));
+        await this.auth.revokeTrustedDevices(tx, u.id, 'account_reset');
+        await tx.update(users).set({ dataSince: sql`now()`, resetDisabledAt: now, status: 'SUSPENDED', riskState: 'OK', updatedAt: now }).where(eq(users.id, u.id));
+      } else if (approve) {
+        // Broker reset is a visibility change only; never mutate assigned traders or their ledger.
+        await tx.update(users).set({ dataSince: sql`now()`, updatedAt: new Date() }).where(eq(users.id, u.id));
+      }
+      const [decided] = await tx.update(accountResetRequests).set({ status: approve ? 'APPROVED' : 'REJECTED', decidedById: actor.userId, decidedAt: new Date() }).where(eq(accountResetRequests.id, id)).returning();
+      const recipients = new Set([u.id, ...(await this.resetRecipients(tx, u))]);
+      for (const recipient of recipients) await this.notifications.notify(tx, recipient, 'account.reset_decided', `Account reset ${approve ? 'approved' : 'rejected'}`, `${u.username}: ${actor.role === 'BROKER' ? 'the assigned broker' : 'a Super Admin'} ${approve ? 'approved' : 'rejected'} the request.${approve && u.role === 'TRADER' ? ' The trader is disabled and can be re-enabled with a fresh zero balance. Historical records remain available to staff.' : ''}`);
+      await this.audit.record(tx, { actor, action: approve ? 'account.reset_approved' : 'account.reset_rejected', entityType: 'account_reset', entityId: id, outcome: 'SUCCESS', ip, metadata: { userId: u.id } });
+      return decided;
     });
-    await this.notifications.notify(this.dbs.db, u.id, 'account.wiped', 'Fresh start', `Your account was wiped out. Balance: ₹${out.balance}. Your earlier history is hidden; an administrator can still see it.`);
-    return out;
+    if (!result) throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
+    if (signedOut.length) await this.auth.announceSignedOut(signedOut, 'Your account was disabled after an approved reset. Contact your broker or a Super Admin to re-enable it.');
+    return result;
   }
 
   /** Super Admin: a user's wipes, with what was cleared. */
-  listForUser(userId: string) {
+  async listForUser(userId: string, actor: Actor) {
+    if (actor.role !== 'SUPER_ADMIN') {
+      const [u] = await this.dbs.db.select().from(users).where(eq(users.id, userId));
+      if (actor.role !== 'BROKER' || !u || u.brokerId !== actor.userId) throw notFound('Account');
+    }
     return this.dbs.db.select().from(accountWipes).where(eq(accountWipes.userId, userId)).orderBy(desc(accountWipes.createdAt)).limit(50);
   }
 
@@ -227,10 +272,12 @@ export class WipeService {
   }
 
   async requestPlatform(actor: Actor, reason: string, confirm: string, ip: string) {
+    if (actor.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN', 'Super Admin access required.');
     if (confirm.trim() !== PLATFORM_WIPE_CONFIRM) throw badInput(`Type ${PLATFORM_WIPE_CONFIRM} to confirm.`);
     const why = reason.trim();
     if (why.length < 10 || why.length > 300) throw badInput('Give a reason (10–300 characters).');
-    return this.dbs.db.transaction(async (tx) => {
+    return this.dbs.serializable(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('platform-wipe'))`);
       await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(and(eq(platformWipes.status, 'PENDING'), sql`${platformWipes.expiresAt} < now()`));
       const [open] = await tx.select({ id: platformWipes.id }).from(platformWipes).where(and(eq(platformWipes.status, 'PENDING'), isNull(platformWipes.targetUserId))).limit(1);
       if (open) throw new AppError('CONFLICT', 'A wipe request is already waiting for approval.');
@@ -250,16 +297,18 @@ export class WipeService {
   }
 
   async approvePlatform(actor: Actor, id: string, confirm: string, ip: string) {
+    if (actor.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN', 'Super Admin access required.');
     if (confirm.trim() !== PLATFORM_WIPE_CONFIRM) throw badInput(`Type ${PLATFORM_WIPE_CONFIRM} to confirm.`);
     const signedOut: string[] = [];
-    const result = await this.dbs.db.transaction(async (tx) => {
+    const result = await this.dbs.serializable(async (tx) => {
+      signedOut.length = 0;
       const [r] = await tx.select().from(platformWipes).where(and(eq(platformWipes.id, id), isNull(platformWipes.targetUserId))).for('update');
       if (!r || r.status !== 'PENDING') throw notFound('Wipe request');
-      if (r.expiresAt < new Date()) {
+      if (r.expiresAt <= new Date()) {
         await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
-        throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
+        return null;
       }
-      if (r.requestedById === actor.userId && !(await soleAdminMayApprove(tx))) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
+      if (r.requestedById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
 
       // The one place append-only ledger and consent rows may be deleted (see migration 0013). Never the audit log.
       await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
@@ -268,8 +317,11 @@ export class WipeService {
       Object.assign(counts, await clearPlatformData(tx));
       await tx.update(platformWipes).set({ status: 'EXECUTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date(), summary: counts }).where(eq(platformWipes.id, id));
       await this.audit.record(tx, { actor, action: 'platform.wiped', entityType: 'platform_wipe', entityId: id, outcome: 'SUCCESS', ip, metadata: { requestedBy: r.requestedById, reason: r.reason, ...counts } });
+      const admins = await tx.select({ id: users.id }).from(users).where(eq(users.role, 'SUPER_ADMIN'));
+      for (const admin of admins) await this.notifications.notify(tx, admin.id, 'platform.wipe_completed', 'Full wipe approved and completed', `A different Super Admin approved the request. ${counts.accounts} broker/trader accounts were permanently deleted.`);
       return counts;
     });
+    if (!result) throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');
     // Tell the deleted accounts' open devices to leave now, and drop cached settings and market data.
     await this.auth.announceSignedOut(signedOut, 'Your account no longer exists.');
     this.config.invalidate();

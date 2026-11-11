@@ -77,6 +77,7 @@ export const users = pgTable(
     signupSource: varchar('signup_source', { length: 20 }),
     /** "Wipe out": history before this time is hidden from the user (and their broker); Super Admin still sees it. */
     dataSince: ts('data_since'),
+    resetDisabledAt: ts('reset_disabled_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
@@ -321,6 +322,7 @@ export const watchlistItems = pgTable(
     instrumentId: uuid('instrument_id').notNull().references(() => instruments.id, { onDelete: 'cascade' }),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: ts('created_at').notNull().defaultNow(),
+    archivedAt: ts('archived_at'),
   },
   (t) => [uniqueIndex('watchlist_uq').on(t.userId, t.listIndex, t.instrumentId)],
 );
@@ -705,3 +707,18 @@ export const feePaymentProofs = pgTable('fee_payment_proofs', {
   data: text('data').notNull(),
   createdAt: ts('created_at').notNull().defaultNow(),
 });
+
+
+/** Approval requests for owner-only soft resets; separate from irreversible platform wipes. */
+export const accountResetRequests = pgTable('account_reset_requests', {
+  id: id(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  requestedById: uuid('requested_by_id').notNull(),
+  brokerId: uuid('broker_id'),
+  status: varchar('status', { length: 16 }).notNull().default('PENDING'),
+  reason: varchar('reason', { length: 300 }).notNull(),
+  decidedById: uuid('decided_by_id'),
+  decidedAt: ts('decided_at'),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [index('account_reset_user_idx').on(t.userId, t.status), uniqueIndex('account_reset_pending_uq').on(t.userId).where(sql`${t.status} = 'PENDING'`)]);

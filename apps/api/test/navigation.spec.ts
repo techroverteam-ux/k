@@ -49,8 +49,8 @@ describe('navigation count scope', () => {
     const { db, service } = fixture();
     expect(await service.navigationCounts(actor('BROKER'))).toContainEqual({ href: '/broker/traders', count: 2 });
     const query = dialect.sqlToQuery(db.execute.mock.calls[0][0]);
-    expect(query.params).toEqual(['viewer-id', 'viewer-id']);
-    expect(query.sql.match(/broker_id/g)).toHaveLength(2);
+    expect(query.params).toEqual(['viewer-id', 'viewer-id', 'viewer-id', 'viewer-id']);
+    expect(query.sql.match(/broker_id/g)).toHaveLength(3);
   });
   it('includes pending account deletions and excludes expired platform wipes', async () => {
     const { db, service } = fixture(); await service.navigationCounts(actor('SUPER_ADMIN'));
