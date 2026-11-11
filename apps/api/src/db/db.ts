@@ -1,4 +1,4 @@
-import { Global, Injectable, Module, OnModuleDestroy } from '@nestjs/common';
+import { Global, Injectable, Module, OnApplicationShutdown } from '@nestjs/common';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { env } from '../config/env';
@@ -36,7 +36,7 @@ export function createPool(url = databaseUrl({ DATABASE_URL: env().DATABASE_URL,
 }
 
 @Injectable()
-export class DbService implements OnModuleDestroy {
+export class DbService implements OnApplicationShutdown {
   readonly pool: Pool;
   readonly db: Database;
 
@@ -68,7 +68,8 @@ export class DbService implements OnModuleDestroy {
     throw lastErr;
   }
 
-  async onModuleDestroy() {
+  // Close after all providers have drained their work in onModuleDestroy.
+  async onApplicationShutdown() {
     await this.pool.end();
   }
 }

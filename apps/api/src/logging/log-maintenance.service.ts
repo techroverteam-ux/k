@@ -23,6 +23,9 @@ export const quietOps = { set: new Set<string>(ALWAYS_QUIET) };
 export class LogMaintenanceService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('LogMaintenance');
   private timer?: NodeJS.Timeout;
+  private startupTimer?: NodeJS.Timeout;
+  private stopped = false;
+  private readonly pending = new Set<Promise<unknown>>();
 
   constructor(
     private readonly dbs: DbService,
@@ -31,20 +34,42 @@ export class LogMaintenanceService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    void this.refreshQuiet();
+    this.stopped = false;
+    this.track(this.refreshQuiet());
     if (env().LOG_MAINTENANCE === 'off') return;
-    this.timer = setInterval(() => void this.run(), 15 * 60_000);
-    setTimeout(() => void this.run(), 30_000);
+    this.timer = setInterval(() => this.schedule(), 15 * 60_000);
+    this.startupTimer = setTimeout(() => this.schedule(), 30_000);
   }
-  onModuleDestroy() {
+
+  async onModuleDestroy() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.startupTimer) clearTimeout(this.startupTimer);
+    await Promise.allSettled([...this.pending]);
+  }
+
+  private track(task: Promise<unknown>) {
+    this.pending.add(task);
+    void task.catch((e) => this.log.error(`log maintenance failed: ${(e as Error).message}`))
+      .finally(() => this.pending.delete(task));
+  }
+
+  private schedule() {
+    if (!this.stopped) void this.run();
   }
 
   async refreshQuiet() {
     quietOps.set = new Set([...ALWAYS_QUIET, ...(await this.config.get('logs.quietOperations'))]);
   }
 
-  async run(now = new Date()) {
+  run(now = new Date()) {
+    if (this.stopped) return Promise.resolve({ skipped: 'maintenance is stopping' });
+    const task = this.execute(now);
+    this.track(task);
+    return task;
+  }
+
+  private async execute(now: Date) {
     const client = await this.dbs.pool.connect();
     try {
       const { rows } = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext('td_log_maintenance')) AS ok`);

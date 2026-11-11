@@ -47,7 +47,7 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
       await ledger.post(tx, { idempotencyKey: 'test-fee', kind: 'FEE', mode: 'SIMULATED', memo: 'Fee', refType: 'order', refId: orderId, postings: [{ accountId: cash, amountMinor: -100n }, { accountId: fees, amountMinor: 100n }] });
     });
   });
-  afterAll(async () => { await db?.onModuleDestroy(); });
+  afterAll(async () => { await db?.onApplicationShutdown(); });
   it.each(['broker.reset', 'trader.reset'])('locks %s after exactly five failures and resets after a one-hour cooldown', async (username) => {
     for (let n = 1; n <= 5; n++) {
       const error = await auth.login(username, 'wrong', meta).catch((e) => e);
