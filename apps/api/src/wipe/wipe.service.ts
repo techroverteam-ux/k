@@ -8,7 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
 import { DbService, type DbOrTx, type Tx } from '../db/db';
 import {
-  accountResetRequests, accountWipes, candles1d, candles1m, configVersions, deviceCredentials, feePayments, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders,
+  accountResetRequests, accountWipes, configVersions, deviceCredentials, feePayments, instruments, journalEntries, ledgerAccounts, ledgerPostings, notifications, orders,
   otpChallenges, payeeAccounts, paymentRequests, platformWipes, positions, reconciliationRuns, sessions, strategies, strategyEvents, strategyRuns, tradingConsents, users, watchlistItems,
 } from '../db/schema';
 import { LedgerService } from '../ledger/ledger.service';
@@ -87,7 +87,7 @@ export async function clearPlatformData(tx: Tx): Promise<Record<string, number>>
   c.feePayments = n(await tx.delete(feePayments).returning({ id: feePayments.id }));
   c.payeeAccounts = n(await tx.delete(payeeAccounts).returning({ id: payeeAccounts.id }));
   c.settings = n(await tx.delete(configVersions).returning({ id: configVersions.id }));
-  c.candles = n(await tx.delete(candles1m).returning({ t: candles1m.instrumentId })) + n(await tx.delete(candles1d).returning({ t: candles1d.instrumentId }));
+  c.candles = 0; // Candles are transient, never persisted.
   c.instruments = n(await tx.delete(instruments).returning({ id: instruments.id }));
   c.reconciliationRuns = n(await tx.delete(reconciliationRuns).returning({ id: reconciliationRuns.id }));
   await tx.delete(ledgerPostings);

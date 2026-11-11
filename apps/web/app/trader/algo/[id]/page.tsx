@@ -324,7 +324,7 @@ function Backtest({ s, draft, dirty, save }: { s: Strategy | null; draft: Draft;
           {runs.map((r) => <option key={r.id} value={r.id}>{new Date(r.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · v{r.version} · {INTERVALS.find((i) => i.v === r.interval)?.label}</option>)}
         </select>
       )}</div>
-      <p className="t2 sm">Replays the rules on stored candles: signals on a candle’s close fill at the next candle’s open; stop-loss and take-profit fill inside the candle; brokerage included.</p>
+      <p className="t2 sm">Replays the rules on available chart history: signals on a candle’s close fill at the next candle’s open; stop-loss and take-profit fill inside the candle; brokerage included. Available history resets when the market-data server restarts.</p>
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
         <Chips label="Backtest period" value={String(days)} onChange={(v) => setDays(Number(v))} items={periods.map((p) => ({ v: String(p.days), label: p.label }))} />
         <button className="btn btn-primary" disabled={busy || !draft.instrument} onClick={() => void run()}>{busy ? 'Running…' : dirty || !s ? 'Save & run backtest' : 'Run backtest'}</button>

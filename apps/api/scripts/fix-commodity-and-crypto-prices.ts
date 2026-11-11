@@ -105,25 +105,6 @@ async function run() {
     WHERE exchange = 'MCX' AND (symbol LIKE 'COTTON%' OR symbol LIKE 'COTTONCNDY%')
   `);
 
-  // Remove the old flat 1,000.00 candles for MCX instruments and BTC so fresh candles are generated
-  const delMins = await pool.query(`
-    DELETE FROM candles_1m
-    WHERE instrument_id IN (
-      SELECT id FROM instruments
-      WHERE exchange = 'MCX' OR symbol LIKE '%BTC%'
-    )
-  `);
-  console.log(`Deleted ${delMins.rowCount} old minute candles for MCX and BTC.`);
-
-  const delDays = await pool.query(`
-    DELETE FROM candles_1d
-    WHERE instrument_id IN (
-      SELECT id FROM instruments
-      WHERE exchange = 'MCX' OR symbol LIKE '%BTC%'
-    )
-  `);
-  console.log(`Deleted ${delDays.rowCount} old daily candles for MCX and BTC.`);
-
   const btcRow = await pool.query("SELECT symbol, name, ref_price_minor, tick_minor FROM instruments WHERE symbol LIKE '%BTC%'");
   console.log('Updated BTC:', btcRow.rows);
 

@@ -324,7 +324,7 @@ function Backtest({ s }: { s: Strategy }) {
   const equity: [number, number][] = useMemo(() => (run ? JSON.parse(run.equity) : []), [run]);
   return (
     <View style={{ gap: S[4] }}>
-      <T v="sm" c="text2">Replays the rules on stored candles: signals fill at the next candle’s open; stop-loss and take-profit fill inside the candle; brokerage included.</T>
+      <T v="sm" c="text2">Replays the rules on available chart history: signals fill at the next candle’s open; stop-loss and take-profit fill inside the candle; brokerage included. Available history resets when the market-data server restarts.</T>
       <Chips value={days} onChange={setDays} items={periods.map((p) => ({ k: String(p.days), label: p.label }))} />
       <Button kind="primary" title={busy ? 'Running…' : 'Run backtest'} busy={busy} onPress={go} />
       {err && <Notice tone="err">{err}</Notice>}

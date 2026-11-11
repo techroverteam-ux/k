@@ -1,21 +1,8 @@
 /**
- * OHLC candle history for the SIMULATED feed: an in-memory window of recent candles, backed by Postgres.
- *
- * - Live ticks are folded into 1-minute bars as they happen. MarketDataService saves changed bars to
- *   Postgres every minute (candles_1m for minutes, candles_1d for whole days) and restores them at start-up,
- *   so history and the last price survive restarts. Minutes older than the memory window are read from Postgres.
- * - The first time an instrument has no stored history, it gets a synthetic back-history so charts aren't empty:
- *     · daily bars for the past year, ending at the previous close;
- *     · 1-minute bars for the last 5 days, one day at a time between those daily closes, then today from the
- *       previous close to the current price.
- *   It is generated from a per-instrument seed, so it is the same wherever it is generated.
- * - 5m / 15m / 1h candles are aggregated from 1-minute bars. 1D uses daily bars for days before the memory
- *   window and the 1-minute bars for the days inside it, so intraday and daily views agree.
- * - The simulated feed runs every day, so the history has no weekend gaps either.
- *
- * Buckets are aligned to India Standard Time (UTC+05:30), so hourly candles start on the hour IST and
- * daily candles start at IST midnight. Prices are integer paise, like the rest of the money model.
- * Everything here is simulated and is labelled that way in the API and the UI.
+ * Bounded, process-local OHLC history. Live ticks form minute candles; larger
+ * intervals are aggregated in memory. Nothing is persisted or restored on restart.
+ * Simulated mode can seed deterministic synthetic chart/backtest history.
+ * Buckets align to IST and prices use integer paise.
  */
 
 export type CandleInterval = '1m' | '5m' | '15m' | '1h' | '1D';
@@ -32,7 +19,7 @@ export interface Bar {
 export const MIN = 60_000;
 export const DAY = 86_400_000;
 const IST = 330 * MIN;
-/** Days of 1-minute bars kept in memory (older ones are read from Postgres). */
+/** Days of 1-minute bars kept in memory. */
 export const MEMORY_DAYS = 3;
 const MINUTE_BARS = MEMORY_DAYS * 24 * 60;
 const BACKFILL_MINUTE_DAYS = 5;
@@ -113,8 +100,8 @@ export class CandleStore {
   }
 
   /**
-   * Create the synthetic back-history for one instrument (once). Returns every generated 1-minute bar
-   * (more than the memory window keeps) so the caller can store them.
+   * Create synthetic back-history for simulated instruments. Returned bars can update
+   * quote ranges; all history stays in memory.
    */
   seed(id: string, ltpMinor: number, prevCloseMinor: number, tickMinor: number, now = Date.now(), force = false): Bar[] {
     const existing = this.minutes.get(id);
@@ -158,7 +145,7 @@ export class CandleStore {
   /** Load stored history (both lists oldest first). Minutes should start at an IST midnight. */
   restore(id: string, minutes: Bar[], daily: Bar[]) {
     this.minutes.set(id, minutes);
-    this.daily.set(id, daily);
+    this.daily.set(id, daily.slice(-BACKFILL_DAYS));
     this.trim(id);
   }
 
@@ -198,7 +185,7 @@ export class CandleStore {
       if (!last || d.t > last.t) daily.push(d);
       else if (last.t === d.t) daily[daily.length - 1] = d;
     }
-    this.daily.set(id, daily);
+    this.daily.set(id, daily.slice(-BACKFILL_DAYS));
   }
 
 
@@ -223,15 +210,7 @@ export class CandleStore {
    * the client pages back through history with it. Returned objects are copies.
    */
   candles(id: string, interval: CandleInterval, limit: number, before?: number): Bar[] {
-    let mins = this.minutes.get(id) ?? [];
-    if (interval !== '1D' && mins.length < 120 && this.daily.get(id)?.length) {
-      const daily = this.daily.get(id)!;
-      const last = daily[daily.length - 1];
-      if (last) {
-        this.seed(id, last.c, last.c, 100);
-        mins = this.minutes.get(id) ?? [];
-      }
-    }
+    const mins = this.minutes.get(id) ?? [];
     let out: Bar[];
     if (interval === '1D') {
       // Days before the minute window come from daily bars; days inside it are built from minutes. If the

@@ -1,6 +1,5 @@
 import { Pool } from 'pg';
 import WebSocket from 'ws';
-import { CandleStore } from '../src/market/candles';
 
 const clientId = '1114583141';
 const token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzkzOTA3MDAyLCJpYXQiOjE3OTM4MjA2MDIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTE0NTgzMTQxIn0.ufKpDLY1I7NolS6SgDWEKRTkrFOaGUHklI3AIBpwkswxLpK2RFXD8JJYZN79nS81LJmTGiCATvgG0ovCkcwsuQ';
@@ -98,7 +97,6 @@ async function main() {
 
   console.log(`Received real Dhan quotes for ${quotes.size} instruments.`);
 
-  const candleStore = new CandleStore();
 
   for (const row of res.rows) {
     const q = quotes.get(row.dhan_security_id);
@@ -108,55 +106,12 @@ async function main() {
     if (realPrice <= 0) continue;
 
     const refPriceMinor = BigInt(Math.round(realPrice * 100));
-    const prevCloseMinor = q.close > 0 ? Math.round(q.close * 100) : Math.round(realPrice * 100);
 
     // Update reference price in instruments table
     await pool.query(
       `UPDATE instruments SET ref_price_minor = $1 WHERE id = $2`,
       [refPriceMinor.toString(), row.id]
     );
-
-    // Delete old candles for this instrument
-    await pool.query(`DELETE FROM candles_1m WHERE instrument_id = $1`, [row.id]);
-    await pool.query(`DELETE FROM candles_1d WHERE instrument_id = $1`, [row.id]);
-
-    // Seed fresh, accurate candles
-    const tick = Math.max(1, row.tick_minor || 1);
-    const generated = candleStore.seed(row.id, Number(refPriceMinor), prevCloseMinor, tick, Date.now(), true);
-    const daily = candleStore.allDaily(row.id);
-
-    // Batch insert minutes
-    for (let i = 0; i < generated.length; i += 1000) {
-      const batch = generated.slice(i, i + 1000);
-      const values: any[] = [];
-      const placeholders: string[] = [];
-      let idx = 1;
-      for (const b of batch) {
-        placeholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5})`);
-        values.push(row.id, new Date(b.t), b.o.toString(), b.h.toString(), b.l.toString(), b.c.toString());
-        idx += 6;
-      }
-      await pool.query(
-        `INSERT INTO candles_1m (instrument_id, t, o, h, l, c) VALUES ${placeholders.join(', ')} ON CONFLICT DO NOTHING`,
-        values
-      );
-    }
-
-    // Batch insert daily
-    if (daily.length) {
-      const values: any[] = [];
-      const placeholders: string[] = [];
-      let idx = 1;
-      for (const b of daily) {
-        placeholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5})`);
-        values.push(row.id, new Date(b.t), b.o.toString(), b.h.toString(), b.l.toString(), b.c.toString());
-        idx += 6;
-      }
-      await pool.query(
-        `INSERT INTO candles_1d (instrument_id, t, o, h, l, c) VALUES ${placeholders.join(', ')} ON CONFLICT DO NOTHING`,
-        values
-      );
-    }
 
     if (row.symbol.includes('GOLD') || row.symbol.includes('NIFTY')) {
       console.log(`Synced ${row.symbol.padEnd(25)} -> LTP: ${realPrice}, PrevClose: ${q.close}`);

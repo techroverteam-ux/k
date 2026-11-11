@@ -150,7 +150,7 @@ export class AlgoResolver {
     return this.algo.remove(a, id, c.ip);
   }
 
-  @Mutation(() => StrategyRun, { description: 'Backtest the saved rules on stored candles for the last `days` days.' })
+  @Mutation(() => StrategyRun, { description: 'Backtest the saved rules on available in-memory candles for the last `days` days.' })
   async backtestStrategy(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Args('days', { type: () => Float }) days: number) {
     return toRun(await this.algo.runBacktest(a, id, days));
   }

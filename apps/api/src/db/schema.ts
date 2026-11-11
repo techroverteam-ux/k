@@ -298,21 +298,6 @@ export const instruments = pgTable(
   (t) => [index('instruments_exchange_idx').on(t.exchange, t.segment), index('instruments_dhan_idx').on(t.dhanSegment, t.dhanSecurityId)],
 );
 
-// ---------------- Price history (candles) ----------------
-// OHLC candles from the price feed (simulated in this build), prices in paise like everything else.
-// candles_1m keeps a rolling window of 1-minute candles; candles_1d keeps one row per IST day for good.
-// Both are written by MarketDataService in batches; nothing financial depends on them.
-const candleColumns = () => ({
-  instrumentId: uuid('instrument_id').notNull().references(() => instruments.id, { onDelete: 'cascade' }),
-  t: ts('t').notNull(),
-  o: money('o').notNull(),
-  h: money('h').notNull(),
-  l: money('l').notNull(),
-  c: money('c').notNull(),
-});
-export const candles1m = pgTable('candles_1m', candleColumns(), (t) => [primaryKey({ name: 'candles_1m_pk', columns: [t.instrumentId, t.t] })]);
-export const candles1d = pgTable('candles_1d', candleColumns(), (t) => [primaryKey({ name: 'candles_1d_pk', columns: [t.instrumentId, t.t] })]);
-
 export const watchlistItems = pgTable(
   'watchlist_items',
   {
@@ -526,7 +511,7 @@ export type ConsentRow = typeof tradingConsents.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
 
 // ---------------- Automated trading (paper) ----------------
-// Rule-based strategies that a trader builds, backtests on stored candles, and runs on the simulated feed.
+// Rule-based strategies that a trader builds, backtests on available in-memory candles, and runs on the simulated feed.
 // Orders they place go through OrdersService like any other order and carry orders.strategy_id.
 export const strategyStatusEnum = pgEnum('strategy_status', ['DRAFT', 'RUNNING', 'STOPPED']);
 

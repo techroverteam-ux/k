@@ -989,7 +989,7 @@ describe('automated trading (paper)', () => {
     expect(code(peek)).toBe('NOT_FOUND');
   });
 
-  it('backtests on stored candles and saves the run', async () => {
+  it('backtests on in-memory candles and saves the run', async () => {
     const t = await login('trader.one');
     const rules = { side: 'LONG', entry: [{ left: { type: 'ema', period: 9 }, op: 'crossesAbove', right: { type: 'ema', period: 21 } }], exit: [{ left: { type: 'ema', period: 9 }, op: 'crossesBelow', right: { type: 'ema', period: 21 } }], stopLossPct: 1 };
     const s = (await gql(SAVE, { i: input(rules, { interval: 'M15' }) }, { token: t.accessToken })).data.saveStrategy;
@@ -1435,7 +1435,7 @@ describe('wipe out', () => {
     const left = await pg.query(`SELECT role, count(*)::int n FROM users GROUP BY role`);
     expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 2 }]);
     for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries',
-      'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'candles_1m', 'candles_1d', 'account_wipes']) {
+      'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'account_wipes']) {
       expect((await pg.query(`SELECT count(*)::int n FROM ${tbl}`)).rows[0].n).toBe(0);
     }
     expect((await pg.query(`SELECT count(*)::int n FROM notifications WHERE kind = 'platform.wipe_completed'`)).rows[0].n).toBe(2);
