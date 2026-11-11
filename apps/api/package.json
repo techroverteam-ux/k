@@ -46,7 +46,7 @@
     "@nestjs/core": "11.2.8",
     "@nestjs/graphql": "13.4.5",
     "@nestjs/jwt": "11.0.2",
-    "@nestjs/platform-express": "11.2.8",
+    "@nestjs/platform-express": "11.2.9",
     "@nestjs/throttler": "6.7.1",
     "argon2": "0.45.1",
     "class-transformer": "0.5.1",
@@ -68,5 +68,10 @@
     "rxjs": "7.8.2",
     "ws": "8.22.0",
     "zod": "4.6.7"
+  },
+  "overrides": {
+    "@nestjs/graphql": {
+      "@graphql-tools/utils": "12.0.2"
+    }
   }
 }
