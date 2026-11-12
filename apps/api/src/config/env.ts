@@ -35,17 +35,8 @@ const schema = z
     /** MSG91 (SMS_PROVIDER=msg91): account auth key and the DLT-approved OTP template id. Secrets: never in config tables. */
     MSG91_AUTH_KEY: z.string().min(8).optional(),
     MSG91_OTP_TEMPLATE_ID: z.string().min(4).optional(),
-    /**
-     * Single-admin mode (on unless set to "false"): while there is only one active Super Admin, that admin may approve their own
-     * requests (accounts, payments, settings, payment details, deletes). Step-up and the audit log still apply.
-     * As soon as a second Super Admin is active, maker-checker is enforced again.
-     */
     /** API console (GraphiQL) at "/" and schema introspection. Default: on unless NODE_ENV=production. */
     API_CONSOLE: z.enum(['true', 'false']).optional().transform((v) => (v === undefined ? undefined : v === 'true')),
-    SINGLE_ADMIN_MODE: z
-      .string()
-      .default('true')
-      .transform((v) => v === 'true'),
     COOKIE_SECURE: z
       .string()
       .default('false')
@@ -63,6 +54,12 @@ const schema = z
     MARKET_FEED: z.enum(['simulated', 'dhan']).default('simulated'),
     DHAN_CLIENT_ID: z.string().optional(),
     DHAN_ACCESS_TOKEN: z.string().optional(),
+    DHAN_API_KEY: z.preprocess(v=>v===''?undefined:v,z.string().min(1).optional()),
+    DHAN_API_SECRET: z.preprocess(v=>v===''?undefined:v,z.string().min(1).optional()),
+    DHAN_REDIRECT_URL: z.preprocess(v=>v===''?undefined:v,z.string().url().optional()),
+    WEB_APP_URL: z.string().url().default('http://localhost:3000'),
+    DHAN_CATALOG_SYNC: z.enum(['on','off']).default('on'),
+
     /** 'config' = use trading.marketHours; 'always_open' = ignore sessions (development/testing only). */
     MARKET_HOURS: z.enum(['config', 'always_open']).default('config'),
     THROTTLE_SCALE: z.coerce.number().int().min(1).max(100).default(1),
@@ -87,6 +84,10 @@ const schema = z
       if (!env.COOKIE_SECURE) ctx.addIssue({ code: 'custom', message: 'COOKIE_SECURE must be true in production' });
       if (env.JWT_ACCESS_SECRET === env.JWT_STEPUP_SECRET)
         ctx.addIssue({ code: 'custom', message: 'JWT secrets must differ' });
+    }
+    if(env.DHAN_API_KEY || env.DHAN_API_SECRET){
+      if(!env.DHAN_API_KEY || !env.DHAN_API_SECRET || !env.DHAN_CLIENT_ID || !env.DHAN_REDIRECT_URL)ctx.addIssue({code:'custom',message:'Dhan API-key mode requires DHAN_CLIENT_ID, DHAN_API_KEY, DHAN_API_SECRET and DHAN_REDIRECT_URL together.'});
+      if(env.DHAN_REDIRECT_URL && new URL(env.DHAN_REDIRECT_URL).pathname.replace(/\/$/,'')!=='/integrations/dhan/callback')ctx.addIssue({code:'custom',message:'DHAN_REDIRECT_URL must point to the backend /integrations/dhan/callback route.'});
     }
     if (env.LIVE_TRADING_ENABLED) {
       ctx.addIssue({

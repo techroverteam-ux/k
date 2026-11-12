@@ -308,7 +308,6 @@ export class WipeService {
         await tx.update(platformWipes).set({ status: 'EXPIRED' }).where(eq(platformWipes.id, id));
         return null;
       }
-      if (r.requestedById === actor.userId) throw new AppError('FORBIDDEN', 'A different Super Admin has to approve this.');
 
       // The one place append-only ledger and consent rows may be deleted (see migration 0013). Never the audit log.
       await tx.execute(sql`SET LOCAL td.platform_wipe = 'on'`);
@@ -317,8 +316,8 @@ export class WipeService {
       Object.assign(counts, await clearPlatformData(tx));
       await tx.update(platformWipes).set({ status: 'EXECUTED', decidedById: actor.userId, decidedIp: ip, decidedAt: new Date(), summary: counts }).where(eq(platformWipes.id, id));
       await this.audit.record(tx, { actor, action: 'platform.wiped', entityType: 'platform_wipe', entityId: id, outcome: 'SUCCESS', ip, metadata: { requestedBy: r.requestedById, reason: r.reason, ...counts } });
-      const admins = await tx.select({ id: users.id }).from(users).where(eq(users.role, 'SUPER_ADMIN'));
-      for (const admin of admins) await this.notifications.notify(tx, admin.id, 'platform.wipe_completed', 'Full wipe approved and completed', `A different Super Admin approved the request. ${counts.accounts} broker/trader accounts were permanently deleted.`);
+      const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
+      for (const admin of admins) await this.notifications.notify(tx, admin.id, 'platform.wipe_completed', 'Full wipe approved and completed', `The Super Admin confirmed the wipe. ${counts.accounts} broker/trader accounts were permanently deleted.`);
       return counts;
     });
     if (!result) throw new AppError('CONFLICT', 'This request expired. Ask for a new one.');

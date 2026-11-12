@@ -52,7 +52,7 @@ export function AccountWipes({ userId }: { userId: string }) {
 
 /* ================================================================== Super Admin: wipe all trading data */
 interface PlatformWipe { id: string; status: string; requestedById: string; reason: string; decidedById?: string; decidedAt?: string; expiresAt: string; summary?: string; createdAt: string }
-const STATUS: Record<string, string> = { PENDING: 'Waiting for a second Super Admin', EXECUTED: 'Done', REJECTED: 'Rejected', EXPIRED: 'Expired' };
+const STATUS: Record<string, string> = { PENDING: 'Awaiting confirmation', EXECUTED: 'Done', REJECTED: 'Rejected', EXPIRED: 'Expired' };
 
 export function PlatformWipePanel({ meId }: { meId: string }) {
   const { data, loading, error, refetch } = useQuery<{ platformWipes: PlatformWipe[] }>(`{ platformWipes { id status requestedById reason decidedById decidedAt expiresAt summary createdAt } }`, undefined, { pollMs: 15_000 });
@@ -65,25 +65,21 @@ export function PlatformWipePanel({ meId }: { meId: string }) {
       <div className="notice err" style={{ alignItems: 'flex-start' }}>
         <Icon name="alert" size={18} />
         <span>
-          <b>Wipe all data</b> permanently deletes everything except the Super Admin accounts: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
-          <>One Super Admin asks; a <b>different</b> Super Admin must approve within 30 minutes. Both confirm their decision.</>
+          <b>Wipe all data</b> permanently deletes everything except the Super Admin account: every trader and broker with their orders, positions, ledger, fund and fee requests, strategies, watchlists and notifications, plus bank &amp; UPI details, instruments and price history. Settings go back to their defaults. Only Super Admin logins and the audit log are kept.
+          <>The Super Admin can execute this immediately after confirming.</>
         </span>
       </div>
       {loading && !data ? <SkeletonRows rows={2} pad={false} /> : error && !data ? <ErrorState error={error} retry={refetch} /> : pending ? (
         <div className="panel panel-pad stack" style={{ gap: 10 }}>
           <div className="w6">Pending request · expires {when(pending.expiresAt)}</div>
           <div className="t2 sm">Reason: {pending.reason}</div>
-          {pending.requestedById === meId ? (
-            <div className="row"><span className="t3 sm grow">Waiting for another Super Admin to approve.</span><button className="btn" onClick={async () => { try { await gql(`mutation($id:ID!){ rejectPlatformWipe(id:$id){ id } }`, { id: pending.id }); toast('Request cancelled'); void refetch(); } catch (e) { toast((e as Error).message, true); } }}>Cancel request</button></div>
-          ) : (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <button className="btn" onClick={async () => { try { await gql(`mutation($id:ID!){ rejectPlatformWipe(id:$id){ id } }`, { id: pending.id }); toast('Request rejected'); void refetch(); } catch (e) { toast((e as Error).message, true); } }}>Reject</button>
               <button className="btn btn-sell" onClick={() => setDlg({ kind: 'approve', w: pending })}>Approve and wipe</button>
             </div>
-          )}
         </div>
       ) : (
-        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />Request a full wipe</button></div>
+        <div><button className="btn btn-sell" onClick={() => setDlg({ kind: 'request' })}><Icon name="alert" size={16} />Wipe all data</button></div>
       )}
       <section className="section">
         <SectionHead title="History" />
@@ -121,7 +117,7 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
     try {
       if (mode.kind === 'request') {
         const d = await gql<{ requestPlatformWipe: { status: string } }>(`mutation($r:String!,$w:String!){ requestPlatformWipe(reason:$r, confirm:$w){ id status } }`, { r: reason, w: typed });
-        toast(d.requestPlatformWipe.status === 'EXECUTED' ? 'All data wiped. Only Super Admin accounts are left.' : 'Request sent. Another Super Admin has 30 minutes to approve it.');
+        toast(d.requestPlatformWipe.status === 'EXECUTED' ? 'All data wiped. Only Super Admin account are left.' : 'Wipe recorded.');
       } else {
         const d = await gql<{ approvePlatformWipe: string }>(`mutation($id:ID!,$w:String!){ approvePlatformWipe(id:$id, confirm:$w) }`, { id: mode.w.id, w: typed });
         const c = JSON.parse(d.approvePlatformWipe) as Record<string, number>;
@@ -132,8 +128,8 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
   };
   return (
     <Dialog
-      title={mode.kind === 'approve' ? 'Approve the full wipe?' : 'Request a full wipe'}
-      sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : 'Another Super Admin will have to approve it.'}
+      title={mode.kind === 'approve' ? 'Approve the full wipe?' : 'Wipe all data'}
+      sub={mode.kind === 'approve' ? `Reason given: ${mode.w.reason}` : 'This executes immediately after confirmation.'}
       onClose={onClose}>
       <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void go(); }}>
         {mode.kind === 'request' && (
@@ -144,7 +140,7 @@ function PlatformWipeDialog({ mode, onClose, onDone }: { mode: { kind: 'request'
         {err && <div className="notice err">{err}</div>}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? 'Send request' : 'Approve and wipe'}</button>
+          <button type="submit" className="btn btn-sell" disabled={busy || typed.trim() !== PHRASE || (mode.kind === 'request' && reason.trim().length < 10)}>{mode.kind === 'request' ? 'Wipe now' : 'Approve and wipe'}</button>
         </div>
       </form>
     </Dialog>

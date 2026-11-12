@@ -1,5 +1,5 @@
 /**
- * Development seed: two Super Admins (maker + checker), two brokers, three traders,
+ * Development seed: one Super Admin, two brokers, three traders,
  * instruments, and virtual opening balances. Passwords come from env, never hard-coded.
  *
  *   SEED_PASSWORD="Dev-Only-Passw0rd!" npm run db:seed
@@ -63,8 +63,7 @@ async function main() {
       const [u] = await tx.insert(users).values({ username, displayName, role, status: 'ACTIVE', passwordHash: hash, brokerId, termsAcceptedAt: role === 'TRADER' ? null : new Date() }).returning();
       return u;
     };
-    await mk('admin', 'Platform Admin', 'SUPER_ADMIN');
-    await mk('checker', 'Second Admin (checker)', 'SUPER_ADMIN');
+    if (!(await tx.select({ id: users.id }).from(users).where(eq(users.role, 'SUPER_ADMIN'))).length) await mk('admin', 'Platform Admin', 'SUPER_ADMIN');
     const b1 = await mk('broker.one', 'Broker One', 'BROKER');
     const b2 = await mk('broker.two', 'Broker Two', 'BROKER');
     const traders = [await mk('trader.one', 'Trader One', 'TRADER', b1.id), await mk('trader.two', 'Trader Two', 'TRADER', b1.id), await mk('trader.three', 'Trader Three', 'TRADER', b2.id)];
@@ -87,7 +86,7 @@ async function main() {
     }
   });
   await pool.end();
-  console.log('Seeded: admin, checker (SUPER_ADMIN) · broker.one, broker.two · trader.one, trader.two (broker.one), trader.three (broker.two)');
+  console.log('Seeded: admin (SUPER_ADMIN) · broker.one, broker.two · trader.one, trader.two (broker.one), trader.three (broker.two)');
   console.log('All use the password from SEED_PASSWORD. Super Admins must enrol TOTP MFA on first sign-in.');
 }
 

@@ -138,15 +138,16 @@ export class WipeResolver {
 
   @Roles('SUPER_ADMIN')
   @RequireStepUp()
-  @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete every trader and broker account and all trading data. Another Super Admin must approve within 30 minutes. confirm = "WIPE ALL DATA".' })
+  @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete every trader and broker account and all trading data. Executes immediately after confirmation. confirm = "WIPE ALL DATA".' })
   async requestPlatformWipe(@CurrentActor() a: Actor, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     const r = await this.wipe.requestPlatform(a, reason, confirm, c.ip);
-    return toPlatform(r);
+    await this.wipe.approvePlatform(a, r.id, confirm, c.ip);
+    return toPlatform(await this.wipe.getWipe(r.id));
   }
 
   @Roles('SUPER_ADMIN')
   @RequireStepUp()
-  @Mutation(() => String, { description: 'A different Super Admin approves and runs the wipe. Returns JSON counts. confirm = "WIPE ALL DATA".' })
+  @Mutation(() => String, { description: 'The Super Admin confirms and runs the wipe. Returns JSON counts. confirm = "WIPE ALL DATA".' })
   async approvePlatformWipe(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     return JSON.stringify(await this.wipe.approvePlatform(a, id, confirm, c.ip));
   }
@@ -166,7 +167,7 @@ export class WipeResolver {
 
   @Roles('SUPER_ADMIN')
   @RequireStepUp()
-  @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete one trader or broker and all their data. confirm = their username. Another Super Admin must approve within 30 minutes.' })
+  @Mutation(() => PlatformWipe, { description: 'Ask to permanently delete one trader or broker and all their data. confirm = their username. Executes immediately after confirmation.' })
   async requestUserDeletion(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) userId: string, @Args('reason') reason: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     const r = await this.wipe.requestUserDeletion(a, userId, reason, confirm, c.ip);
     // Only one Super Admin (single-admin mode): the account is deleted now.
@@ -176,7 +177,7 @@ export class WipeResolver {
 
   @Roles('SUPER_ADMIN')
   @RequireStepUp()
-  @Mutation(() => String, { description: 'A different Super Admin approves and the account is deleted. Returns JSON counts. confirm = the username.' })
+  @Mutation(() => String, { description: 'The Super Admin confirms and the account is deleted. Returns JSON counts. confirm = the username.' })
   async approveUserDeletion(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Args('confirm') confirm: string, @Ctx() c: GqlContext) {
     return JSON.stringify(await this.wipe.approveUserDeletion(a, id, confirm, c.ip));
   }

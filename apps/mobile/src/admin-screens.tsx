@@ -4,7 +4,9 @@
  * commissions report. Sensitive actions ask for step-up verification through the API, like on the web.
  * Configuration changes and log archives stay on the web portal.
  */
-import { AccountResetPanel, ReenableResetTrader } from './resets';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import { AccountResetPanel, PlatformResetPanel, ReenableResetTrader } from './resets';
 import { useSoleAdmin } from './sole-admin';
 import { router } from 'expo-router';
 import { memo, useCallback, useMemo, useState } from 'react';
@@ -259,7 +261,7 @@ export function AdminSecurityScreen() {
   const consents = useQuery<{ consentLog: ConsentRecord[] }>(`query($n:Int){ consentLog(limit:$n){ ${CONSENT_FIELDS} } }`, { n: 200 }, undefined, !me?.mfaEnabled || tab !== 'consents');
   if (!me?.mfaEnabled) return <AdminMfaGate title="Security" />;
   const tabs = <Tabs value={tab} onChange={setTab} items={[{ k: 'logins', label: 'Sign-ins' }, { k: 'consents', label: 'Consents' }, { k: 'checks', label: 'Checks' }, { k: 'resets', label: 'Resets' }]} />;
-  if (tab === 'resets') return <Screen title="Account resets" right={<BellButton />}>{tabs}<AccountResetPanel /></Screen>;
+  if (tab === 'resets') return <Screen title="Account resets" right={<BellButton />}>{tabs}<AccountResetPanel /><PlatformResetPanel /></Screen>;
   if (tab === 'checks') return <Screen title="Security" right={<BellButton />}>{tabs}<Checks /></Screen>;
   if (tab === 'consents') {
     const list = consents.data?.consentLog ?? [];
@@ -324,19 +326,34 @@ function Checks() {
 
 /* ============================================================== broker commissions */
 export function CommissionsScreen() {
+  const { me } = useAuth();
+  const admin = me?.role === 'SUPER_ADMIN';
+  const [downloading, setDownloading] = useState(false);
+  const download = async (format: 'PDF' | 'XLSX') => {
+    setDownloading(true);
+    try {
+      const month = `${m.y}-${String(m.m + 1).padStart(2, '0')}`;
+      const { commissionDownload: file } = await gql<{ commissionDownload: { fileName: string; mimeType: string; base64: string } }>(`query($m:String!,$f:String!){ commissionDownload(month:$m,format:$f){ fileName mimeType base64 } }`, { m: month, f: format });
+      if (!await Sharing.isAvailableAsync()) throw new Error('File sharing is unavailable on this device.');
+      const path = FileSystem.cacheDirectory + file.fileName;
+      await FileSystem.writeAsStringAsync(path, file.base64, { encoding: FileSystem.EncodingType.Base64 });
+      try { await Sharing.shareAsync(path, { mimeType: file.mimeType }); } finally { await FileSystem.deleteAsync(path, { idempotent: true }); }
+    } catch (e) { toast((e as Error).message, true); } finally { setDownloading(false); }
+  };
   const t = useTheme();
-  const [m, setM] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
-  const range = useMemo(() => ({ f: new Date(m.y, m.m, 1).toISOString(), t: new Date(m.y, m.m + 1, 1).toISOString() }), [m]);
+  const [m, setM] = useState(() => { const d = new Date(Date.now() + 19_800_000); return { y: d.getUTCFullYear(), m: d.getUTCMonth() }; });
+  const range = useMemo(() => ({ f: new Date(Date.UTC(m.y, m.m, 1) - 19_800_000).toISOString(), t: new Date(Date.UTC(m.y, m.m + 1, 1) - 19_800_000).toISOString() }), [m]);
   const q = useQuery<{ commissionReport: { perMiniLot: string; perMegaLot: string; total: string; lines: { userId: string; username: string; miniLots: number; megaLots: number; commission: string }[] } }>(
     `query($f:DateTime!,$t:DateTime!){ commissionReport(from:$f,to:$t){ perMiniLot perMegaLot total lines{ userId username miniLots megaLots commission } } }`, range);
   const r = q.data?.commissionReport;
-  const now = new Date();
-  const isCurrent = m.y === now.getFullYear() && m.m === now.getMonth();
+  const now = new Date(Date.now() + 19_800_000);
+  const isCurrent = m.y === now.getUTCFullYear() && m.m === now.getUTCMonth();
   const label = new Date(m.y, m.m, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
   const shift = (n: number) => setM((c) => { const d = new Date(c.y, c.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   return (
     <Screen back title="Commissions">
-      <T v="sm" c="text2">You earn a fixed amount for every lot your traders open or cut.</T>
+      <T v="sm" c="text2">{admin ? 'Platform brokerage after broker commissions.' : 'You earn a fixed amount for every lot your traders open or cut.'}</T>
+      <Row><Button title="PDF" disabled={!r || downloading} onPress={() => void download('PDF')} /><Button title="Excel" disabled={!r || downloading} onPress={() => void download('XLSX')} /></Row>
       <Spread>
         <Pressable onPress={() => shift(-1)} accessibilityRole="button" accessibilityLabel="Previous month" hitSlop={8} style={{ padding: S[2] }}><Icon name="chevronLeft" size={20} color={t.text} /></Pressable>
         <T v="h3">{label}</T>
@@ -344,7 +361,7 @@ export function CommissionsScreen() {
       </Spread>
       {q.error && !r ? <ErrorState error={q.error} retry={q.refetch} /> : !r ? <Skeleton /> : (
         <>
-          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: 'Per lot', v: `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` }, { k: 'Traders with trades', v: r.lines.length }]} />
+          <Metrics items={[{ k: 'Your commission', v: `₹${inr(r.total)}`, tone: Number(r.total) > 0 ? 'pos' : 'flat' }, { k: admin ? 'Calculation' : 'Per lot', v: admin ? 'Brokerage minus broker earnings' : `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` }, { k: 'Traders with trades', v: r.lines.length }]} />
           <Section title="By trader">
             {!r.lines.length ? <Empty icon="users" title="No trades this month" /> : r.lines.map((l) => (
               <ListRow key={l.userId} onPress={() => router.push(`/trader-detail/${l.userId}`)} label={`${l.username} commission`} title={l.username} sub={`${l.miniLots} mini · ${l.megaLots} mega lots`} right={<T v="num" c="pos">₹{inr(l.commission)}</T>} />

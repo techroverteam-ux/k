@@ -556,6 +556,8 @@ export function ProfileView() {
         <View style={{ flex: 1 }}><T v="h2">{me?.displayName}</T><T v="sm" c="text2">{me?.username} · {role}{me?.isDemo ? ' · demo' : ''}</T></View>
       </Row>
       <View>
+        {me?.role === 'SUPER_ADMIN' && <Item icon="activity" label="Market data" onPress={() => router.push('/(admin)/market-data')} />}
+        {me?.role === 'SUPER_ADMIN' && <Item icon="download" label="Commissions" onPress={() => router.push('/(admin)/commissions')} />}
         <Item icon="shield" label="Two-step verification" sub={me?.mfaEnabled ? 'On. Your authenticator can recover a forgotten password' : 'Off. Tap to set it up'} onPress={me?.mfaEnabled || me?.isDemo ? undefined : () => setMfa(true)} />
         {!me?.isDemo && <Item icon="key" label="Change password" onPress={() => setPw(true)} />}
         {!me?.isDemo && me?.role !== 'SUPER_ADMIN' && <Item icon="fingerprint" label="MPIN & fingerprint" sub={quick?.owner.userId === me?.id ? (quick?.owner.biometric ? 'On: MPIN and fingerprint' : 'On: MPIN') : 'Off. Unlock without your password'} onPress={() => router.push('/quick-settings')} />}

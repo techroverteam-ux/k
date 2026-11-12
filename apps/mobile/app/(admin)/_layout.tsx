@@ -15,6 +15,8 @@ export default function AdminTabs() {
   if (me.role !== 'SUPER_ADMIN') return <Redirect href={homeFor(me.role)} />;
   return (
     <Tabs screenOptions={opts}>
+      <Tabs.Screen name="market-data" options={{ href: null }} />
+      <Tabs.Screen name="commissions" options={{ href: null }} />
       <Tabs.Screen name="index" options={{ title: 'Overview', tabBarIcon: ico('grid') }} />
       <Tabs.Screen name="users" options={{ title: 'Accounts', tabBarIcon: ico('users') }} />
       <Tabs.Screen name="payments" options={{ title: 'Approvals', tabBarIcon: ico('rupee') }} />

@@ -1,3 +1,4 @@
+import { DhanIntegrationResolver, DhanIntegrationController } from './market/dhan-integration.resolver';
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import { ConsoleController } from './console/console.controller';
 import { Controller, Get, Injectable, Module, type ExecutionContext } from '@nestjs/common';
@@ -200,7 +201,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     }),
     AuthGuardDeps,
   ],
-  controllers: [HealthController, StatementController, ConsoleController],
+  controllers: [DhanIntegrationController, HealthController, StatementController, ConsoleController],
   providers: [
     { provide: APP_GUARD, useClass: GqlThrottlerGuard },
     { provide: APP_GUARD, useClass: GqlAuthGuard },
@@ -210,6 +211,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     StatementResolver,
     ConsentResolver,
     MarketResolver,
+    DhanIntegrationResolver,
     AlgoService,
     AlgoRunnerService,
     RiskService,

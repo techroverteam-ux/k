@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { DhanCredentialsService } from './dhan-credentials.service';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import WebSocket from 'ws';
 import { env } from '../config/env';
 
@@ -10,8 +11,12 @@ export interface DhanTick {
   high?: number;
   low?: number;
   close?: number;
+  prevClose?: number;
   volume?: number;
+  bid?: number;
+  ask?: number;
   timestamp: Date;
+  lastTradeAt?: Date;
 }
 
 export const DHAN_SEGMENT_MAP: Record<number, string> = {
@@ -40,12 +45,22 @@ export const REVERSE_DHAN_SEGMENT_MAP: Record<string, number> = {
 export class DhanFeedService implements OnModuleDestroy {
   private readonly log = new Logger('DhanFeed');
   private ws?: WebSocket;
+  private connecting=false;
   private reconnectTimer?: NodeJS.Timeout;
   private isDestroyed = false;
   private tickListener?: (tick: DhanTick) => void;
   private subscribedInstruments: Array<{ exchangeSegment: string; securityId: string }> = [];
 
-  constructor() {}
+  constructor(@Optional() private readonly credentials?:DhanCredentialsService) {
+    this.credentials?.onChange(()=>this.reconnect());
+  }
+
+  reconnect() {
+    if(this.isDestroyed)return;
+    if(this.reconnectTimer){clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined;}
+    if(this.ws){this.ws.removeAllListeners();this.ws.terminate();this.ws=undefined;}
+    if(this.subscribedInstruments.length)void this.connect();
+  }
 
   onTick(listener: (tick: DhanTick) => void) {
     this.tickListener = listener;
@@ -54,16 +69,23 @@ export class DhanFeedService implements OnModuleDestroy {
   setSubscriptions(instruments: Array<{ exchangeSegment: string; securityId: string }>) {
     this.subscribedInstruments = instruments;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscriptionRequest();
+      this.reconnect();
     }
   }
 
-  connect() {
+  async connect() {
+    if(this.connecting||!this.subscribedInstruments.length)return;
+    this.connecting=true;
+    try{await this.openConnection();}finally{this.connecting=false;}
+  }
+
+  private async openConnection() {
+    if(this.ws && (this.ws.readyState===WebSocket.OPEN || this.ws.readyState===WebSocket.CONNECTING))return;
     const clientId = env().DHAN_CLIENT_ID;
-    const token = env().DHAN_ACCESS_TOKEN;
+    const token = this.credentials ? await this.credentials.token().catch(()=>undefined) : env().DHAN_ACCESS_TOKEN;
 
     if (!clientId || !token) {
-      this.log.warn('DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN not set. Dhan live feed disabled.');
+      this.log.warn('Dhan authorization unavailable. Use Connect Dhan in the Super Admin market-data panel.');
       return;
     }
 
@@ -109,7 +131,7 @@ export class DhanFeedService implements OnModuleDestroy {
     for (let i = 0; i < this.subscribedInstruments.length; i += CHUNK_SIZE) {
       const chunk = this.subscribedInstruments.slice(i, i + CHUNK_SIZE);
       const req = {
-        RequestCode: 17, // 17 = Quote Packet (LTP, OHLC, Volume)
+        RequestCode: 21, // Full data: includes exchange bid/ask depth.
         InstrumentCount: chunk.length,
         InstrumentList: chunk.map((item) => ({
           ExchangeSegment: item.exchangeSegment,
@@ -127,6 +149,16 @@ export class DhanFeedService implements OnModuleDestroy {
   }
 
   private parseBinaryMessage(buf: Buffer) {
+    let offset = 0;
+    while (offset + 8 <= buf.length) {
+      const length = buf.readUInt16LE(offset + 1);
+      if (length < 8 || offset + length > buf.length) return;
+      this.parsePacket(buf.subarray(offset, offset + length));
+      offset += length;
+    }
+  }
+
+  private parsePacket(buf: Buffer) {
     if (buf.length < 8) return;
 
     try {
@@ -142,13 +174,14 @@ export class DhanFeedService implements OnModuleDestroy {
       }
 
       // Response Code 2 = Ticker Packet (8 bytes header + 8 bytes payload = 16 bytes)
-      if (responseCode === 2 && buf.length >= 12) {
+      if (responseCode === 2 && buf.length >= 16) {
         const ltp = buf.readFloatLE(8);
         const tick: DhanTick = {
           securityId,
           segmentCode,
           ltp,
           timestamp: new Date(),
+          lastTradeAt: new Date(buf.readUInt32LE(12) * 1000),
         };
         this.tickListener?.(tick);
         return;
@@ -161,7 +194,7 @@ export class DhanFeedService implements OnModuleDestroy {
           securityId,
           segmentCode,
           ltp: 0,
-          close,
+          prevClose: close,
           timestamp: new Date(),
         };
         this.tickListener?.(tick);
@@ -170,13 +203,14 @@ export class DhanFeedService implements OnModuleDestroy {
 
       // Response Code 4 = Quote Packet (8 bytes header + 42 bytes payload = 50 bytes)
       // Response Code 8 = Full Packet (Quote + Depth, starts with same 50 bytes header + quote)
-      if ((responseCode === 4 || responseCode === 8) && buf.length >= 50) {
+      if ((responseCode === 4 && buf.length >= 50) || (responseCode === 8 && buf.length >= 162)) {
         const ltp = buf.readFloatLE(8);
         const volume = buf.readUInt32LE(22);
-        const open = buf.readFloatLE(34);
-        const close = buf.readFloatLE(38);
-        const high = buf.readFloatLE(42);
-        const low = buf.readFloatLE(46);
+        const base = responseCode === 8 ? 46 : 34;
+        const open = buf.readFloatLE(base);
+        const close = buf.readFloatLE(base + 4);
+        const high = buf.readFloatLE(base + 8);
+        const low = buf.readFloatLE(base + 12);
 
         const tick: DhanTick = {
           securityId,
@@ -187,7 +221,10 @@ export class DhanFeedService implements OnModuleDestroy {
           low,
           close,
           volume,
+          bid: responseCode === 8 ? buf.readFloatLE(74) : undefined,
+          ask: responseCode === 8 ? buf.readFloatLE(78) : undefined,
           timestamp: new Date(),
+          lastTradeAt: new Date(buf.readUInt32LE(14) * 1000),
         };
         this.tickListener?.(tick);
         return;
@@ -201,7 +238,7 @@ export class DhanFeedService implements OnModuleDestroy {
     if (this.isDestroyed || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.connect();
+      void this.connect();
     }, 5000);
   }
 

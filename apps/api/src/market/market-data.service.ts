@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { DhanCatalogService } from './dhan-catalog.service';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { roundToTick } from '../common/money';
 import { DbService } from '../db/db';
@@ -46,21 +47,25 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
     private readonly dbs: DbService,
     private readonly dhanFeed: DhanFeedService,
     private readonly dhanGlobalFeed: DhanGlobalFeedService,
+    @Optional() private readonly catalog?:DhanCatalogService,
   ) {}
 
   async onModuleInit() {
+    if(process.env.NODE_ENV!=='test' && env().MARKET_FEED==='dhan' && env().DHAN_CATALOG_SYNC==='on') await this.catalog?.sync();
+    this.catalog?.onChange(async()=>{await this.reload();if(env().MARKET_FEED==='dhan')await this.startDhanFeed();});
     await this.reload();
     if (process.env.NODE_ENV !== 'test') {
       const feedMode = env().MARKET_FEED;
       if (feedMode === 'dhan') {
-        this.startDhanFeed();
+        await this.startDhanFeed();
       }
       this.timer = setInterval(() => this.tick(), 1000);
     }
 
   }
 
-  private startDhanFeed() {
+  private async startDhanFeed() {
+    if(this.catalog && !await this.catalog.usable()){this.log.warn('Waiting for a verified Dhan catalog before subscribing.');return;}
     this.log.log(`Starting Dhan Live Market Feeds (Domestic + Global) for ${this.quotes.size} instruments`);
     const secToId = new Map<string, string>();
     const domesticSubs: Array<{ exchangeSegment: string; securityId: string }> = [];
@@ -69,7 +74,6 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
     for (const [id, r] of this.meta.entries()) {
       if (r.dhanSecurityId && r.dhanSegment) {
         secToId.set(`${r.dhanSegment}:${r.dhanSecurityId}`, id);
-        secToId.set(r.dhanSecurityId, id);
 
         if (r.dhanSegment === 'INX_EQ') {
           globalSubs.push({ exchangeSegment: 'INX_EQ', securityId: r.dhanSecurityId });
@@ -81,34 +85,33 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
 
     const onIncomingTick = (tick: import('./dhan-feed.service').DhanTick, segmentOverride?: string) => {
       const segmentStr = segmentOverride || DHAN_SEGMENT_MAP[tick.segmentCode] || '';
-      const instId = secToId.get(`${segmentStr}:${tick.securityId}`) || secToId.get(tick.securityId);
+      const instId = secToId.get(`${segmentStr}:${tick.securityId}`);
       if (!instId) return;
 
       const q = this.quotes.get(instId);
       const m = this.meta.get(instId);
       if (!q || !m) return;
 
-      if (tick.close && tick.close > 0) {
-        q.prevCloseMinor = BigInt(Math.round(tick.close * 100));
-      }
+      if (tick.prevClose && tick.prevClose > 0) q.prevCloseMinor = BigInt(Math.round(tick.prevClose * 100));
       if (tick.open && tick.open > 0) {
         q.openMinor = BigInt(Math.round(tick.open * 100));
       }
-      if (tick.volume) {
+      if (tick.high && tick.high > 0) q.highMinor = BigInt(Math.round(tick.high * 100));
+      if (tick.low && tick.low > 0) q.lowMinor = BigInt(Math.round(tick.low * 100));
+      if (tick.volume !== undefined) {
         q.volume = tick.volume;
       }
 
-      let ltpMinor = BigInt(Math.round(tick.ltp * 100));
-      // If untraded today (LTP is 0), use previous close as current trading price
-      if (ltpMinor <= 0n && q.prevCloseMinor > 0n) {
-        ltpMinor = q.prevCloseMinor;
+      // Previous-close/OHLC packets must not overwrite the latest traded price.
+      if (!Number.isFinite(tick.ltp) || tick.ltp <= 0) {
+        void pubsub.publish(TOPIC.quotes, { quotes: [q] });
+        return;
       }
-      if (ltpMinor <= 0n) return;
+      const ltpMinor = BigInt(Math.round(tick.ltp * 100));
 
-      const spread = BigInt(m.tickMinor);
       q.ltpMinor = ltpMinor;
-      q.bidMinor = ltpMinor - spread;
-      q.askMinor = ltpMinor + spread;
+      q.bidMinor = tick.bid && tick.bid > 0 ? BigInt(Math.round(tick.bid * 100)) : ltpMinor;
+      q.askMinor = tick.ask && tick.ask > 0 ? BigInt(Math.round(tick.ask * 100)) : ltpMinor;
 
       if (tick.high && tick.high > 0) {
         q.highMinor = BigInt(Math.round(tick.high * 100));
@@ -159,6 +162,8 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   async reload() {
     const rows = await this.dbs.db.select().from(instruments).where(eq(instruments.active, true));
     const now = Date.now();
+    const liveIds=new Set(rows.map(r=>r.id));
+    for(const id of this.meta.keys())if(!liveIds.has(id)){this.meta.delete(id);this.quotes.delete(id);this.history.forget(id);}
     for (const r of rows) {
       this.meta.set(r.id, r);
       if (this.quotes.has(r.id)) continue;
@@ -201,12 +206,11 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
 
   private tick() {
     const changed: Quote[] = [];
-    const isDhan = env().MARKET_FEED === 'dhan';
+    if (env().MARKET_FEED === 'dhan') return; // Never substitute synthetic ticks for missing live instruments.
     for (const q of this.quotes.values()) {
       const m = this.meta.get(q.instrumentId);
       if (!m) continue;
       // Skip simulated tick for real exchange instruments subscribed to Dhan feed
-      if (isDhan && m.dhanSecurityId) continue;
       if (Math.random() < 0.5) continue;
       const drift = (Math.random() - 0.5) * 0.0016; // ±0.08%
       const next = roundToTick(q.ltpMinor + BigInt(Math.round(Number(q.ltpMinor) * drift)), m.tickMinor);
@@ -239,11 +243,16 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   }
 
   quote(instrumentId: string) {
-    return this.quotes.get(instrumentId);
+    const q=this.quotes.get(instrumentId);
+    return env().MARKET_FEED==='dhan' && q?.source!=='DHAN'?undefined:q;
   }
 
+  hasVerifiedCatalog(){return this.catalog?.isFresh()??true;}
+
+  instrumentCount(){return this.meta.size;}
+
   all() {
-    return [...this.quotes.values()];
+    return [...this.quotes.values()].filter(q=>env().MARKET_FEED!=='dhan'||q.source==='DHAN');
   }
 
   /** Recent, process-local OHLC candles. No database reads or writes. */

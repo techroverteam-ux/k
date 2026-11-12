@@ -81,7 +81,7 @@ export const users = pgTable(
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
-  (t) => [index('users_role_status_idx').on(t.role, t.status), index('users_broker_idx').on(t.brokerId)],
+  (t) => [index('users_role_status_idx').on(t.role, t.status), index('users_broker_idx').on(t.brokerId), uniqueIndex('users_one_active_super_admin').on(t.role).where(sql`${t.role} = 'SUPER_ADMIN' AND ${t.status} = 'ACTIVE'`)],
 );
 
 export const sessions = pgTable(
@@ -330,6 +330,8 @@ export const orders = pgTable(
     triggerPriceMinor: money('trigger_price_minor'),
     triggeredAt: ts('triggered_at'),
     fillPriceMinor: money('fill_price_minor'),
+    brokerIdAtFill: uuid('broker_id_at_fill'),
+    brokerCommissionMinor: money('broker_commission_minor'),
     status: orderStatusEnum('status').notNull(),
     mode: accountModeEnum('mode').notNull(),
     /** "SIMULATED" for paper fills. Never presented as an exchange execution. */
@@ -707,3 +709,18 @@ export const accountResetRequests = pgTable('account_reset_requests', {
   expiresAt: ts('expires_at').notNull(),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [index('account_reset_user_idx').on(t.userId, t.status), uniqueIndex('account_reset_pending_uq').on(t.userId).where(sql`${t.status} = 'PENDING'`)]);
+
+/** Backend-only integration status and encrypted issued credentials. No API secrets. */
+export const integrationState = pgTable('integration_state', {
+  name: varchar('name', {length:80}).primaryKey(),
+  value: jsonb('value').$type<Record<string, any>>().notNull(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+export const dhanConnections = pgTable('dhan_connections', {
+  ticketHash: char('ticket_hash',{length:64}).primaryKey(),
+  browserHash: char('browser_hash',{length:64}),
+  actorId: uuid('actor_id').notNull().references(()=>users.id,{onDelete:'cascade'}),
+  status: varchar('status',{length:20}).notNull().default('CREATED'),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: ts('created_at').notNull().defaultNow(),
+});

@@ -71,10 +71,10 @@ export const ITEMS: SeedItem[] = [
   { symbol: 'NG-COMEX', name: 'Natural Gas COMEX Futures', exchange: 'COMEX', segment: 'FUT', expiry: nearMonthExpiry, lotSize: 10000, tickMinor: 1, refPriceMinor: 2_82n, lotClass: 'MEGA', lotLabel: '10,000 mmBtu' },
 
   // US INDEX
-  { symbol: 'SPX', name: 'S&P 500 Index (SPY ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 585_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10009619', dhanSegment: 'INX_EQ' },
-  { symbol: 'NDX', name: 'Nasdaq 100 Index (QQQ ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 502_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10008402', dhanSegment: 'INX_EQ' },
-  { symbol: 'DJI', name: 'Dow Jones Index (DIA ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 435_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10002663', dhanSegment: 'INX_EQ' },
-  { symbol: 'RUT', name: 'Russell 2000 Index (IWM ETF)', exchange: 'US_INDEX', segment: 'INDEX', lotSize: 1, tickMinor: 10, refPriceMinor: 225_00n, lotClass: 'MINI', lotLabel: '1 unit', dhanSecurityId: '10005457', dhanSegment: 'INX_EQ' },
+  { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'NYSE', segment: 'US_STOCK', lotSize: 1, tickMinor: 10, refPriceMinor: 585_00n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10009619', dhanSegment: 'INX_EQ' },
+  { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ', segment: 'US_STOCK', lotSize: 1, tickMinor: 10, refPriceMinor: 502_00n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10008402', dhanSegment: 'INX_EQ' },
+  { symbol: 'DIA', name: 'SPDR Dow Jones Industrial Average ETF Trust', exchange: 'NYSE', segment: 'US_STOCK', lotSize: 1, tickMinor: 10, refPriceMinor: 435_00n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10002663', dhanSegment: 'INX_EQ' },
+  { symbol: 'IWM', name: 'iShares Russell 2000 ETF', exchange: 'NYSE', segment: 'US_STOCK', lotSize: 1, tickMinor: 10, refPriceMinor: 225_00n, lotClass: 'MINI', lotLabel: '1 share', dhanSecurityId: '10005457', dhanSegment: 'INX_EQ' },
 ];
 
 export async function seedCategories(db: any): Promise<{ inserted: number; updated: number }> {
@@ -105,6 +105,8 @@ export async function seedCategories(db: any): Promise<{ inserted: number; updat
       });
       inserted++;
     } else {
+      // Demo defaults must never overwrite metadata or mappings imported from a live catalog.
+      if (existing[0].dhanSecurityId) continue;
       await db
         .update(instruments)
         .set({

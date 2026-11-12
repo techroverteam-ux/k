@@ -35,3 +35,19 @@ export function ReenableResetTrader({ user, onDone }: { user: { id: string; rese
   if (!user.resetDisabledAt) return null;
   return <><Button kind="primary" title="Re-enable trader" onPress={() => setOpen(true)} /><Sheet visible={open} title="Re-enable trader?" onClose={() => setOpen(false)}><Lines lines={[["Balance", "Starts at zero"], ["History", "Fresh trader view; staff retain history"]]} />{err && <Notice tone="err">{err}</Notice>}<Button kind="primary" title="Re-enable trader" busy={busy} onPress={() => { setBusy(true); void gql(`mutation($id:ID!){ setUserStatus(userId:$id,status:ACTIVE,reason:"Re-enabled after approved account reset"){ id } }`, { id: user.id }).then(() => { toast('Trader re-enabled with a fresh zero balance.'); setOpen(false); onDone(); }).catch((e) => setErr(e.message)).finally(() => setBusy(false)); }} /></Sheet></>;
 }
+
+/** Full reset is immediate, with explicit typed confirmation and an audit reason. */
+export function PlatformResetPanel() {
+  const [open,setOpen] = useState(false);
+  const [reason,setReason] = useState(''); const [confirm,setConfirm] = useState(''); const [busy,setBusy] = useState(false);
+  return <Section title="Wipe all data"><Notice tone="err">Permanently deletes all broker and trader accounts and operational data. Keeps the Super Admin and audit history.</Notice>
+    <Button title="Wipe all data" kind="sell" onPress={() => setOpen(true)} />
+    {open && <Sheet visible title="Wipe all data" onClose={() => setOpen(false)}>
+      <Field label="Reason" value={reason} onChangeText={setReason} maxLength={300} />
+      <Field label="Type WIPE ALL DATA" value={confirm} onChangeText={setConfirm} />
+      <Button title="Wipe now" kind="sell" busy={busy} disabled={confirm.trim() !== 'WIPE ALL DATA' || reason.trim().length < 10} onPress={async () => {
+        setBusy(true); try { await gql(`mutation($r:String!,$c:String!){ requestPlatformWipe(reason:$r,confirm:$c){ status } }`, {r:reason,c:confirm}); toast('All trading data wiped'); setOpen(false); } catch(e) { toast((e as Error).message,true); } finally {setBusy(false);}
+      }} />
+    </Sheet>}
+  </Section>;
+}

@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { useAuth } from '@/lib/auth';
 import { gql } from '@/lib/api';
 import { useToast } from '@/components/ui';
 import { Empty, ErrorState, Metrics, PageHead, SkeletonRows } from '@/components/ui';
@@ -7,6 +8,8 @@ import { inr } from '@/lib/format';
 import { useQuery } from '@/lib/hooks';
 
 export default function Commissions() {
+  const { me } = useAuth();
+  const admin = me?.role === 'SUPER_ADMIN';
   const [month, setMonth] = useState(() => new Date(Date.now() + 19_800_000).toISOString().slice(0, 7));
   const range = useMemo(() => { const [y, m] = month.split('-').map(Number); return { f: new Date(Date.UTC(y, m - 1, 1) - 19_800_000).toISOString(), t: new Date(Date.UTC(y, m, 1) - 19_800_000).toISOString() }; }, [month]);
   const { data, loading, error, refetch } = useQuery<{ commissionReport: { perMiniLot: string; perMegaLot: string; total: string; lines: { userId: string; username: string; miniLots: number; megaLots: number; commission: string }[] } }>(
@@ -24,13 +27,13 @@ export default function Commissions() {
   };
   return (
     <div className="stack" style={{ gap: 32 }}>
-      <PageHead title="Commissions" sub="You earn a fixed amount for every lot your traders open or cut.">
+      <PageHead title="Commissions" sub={admin ? "Platform brokerage after broker commissions." : "You earn a fixed amount for every lot your traders open or cut."}>
         <input type="month" className="input" style={{ width: 180 }} aria-label="Month" value={month} max={new Date(Date.now() + 19_800_000).toISOString().slice(0, 7)} onChange={(e) => { if (e.target.value) setMonth(e.target.value); }} />
         <button className="btn" disabled={downloading || !r} onClick={() => void download('PDF')}>Download PDF</button>
         <button className="btn" disabled={downloading || !r} onClick={() => void download('XLSX')}>Download Excel</button>
       </PageHead>
       {error && !data ? <ErrorState error={error} retry={refetch} /> : <>
-        <Metrics items={[{ k: 'Your commission', v: r ? `₹${inr(r.total)}` : '…' }, { k: 'You earn per lot', v: r ? `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` : '…' }]} />
+        <Metrics items={[{ k: 'Your commission', v: r ? `₹${inr(r.total)}` : '…' }, { k: admin ? 'Calculation' : 'You earn per lot', v: admin ? 'Brokerage minus broker earnings' : r ? `₹${inr(r.perMiniLot)} mini · ₹${inr(r.perMegaLot)} mega` : '…' }]} />
         <section className="panel">
           {loading && !data ? <SkeletonRows /> : !r?.lines.length ? <Empty icon="percent" title="No commission this month">Commission appears once your traders’ orders are executed.</Empty> : (
             <table className="t resp">

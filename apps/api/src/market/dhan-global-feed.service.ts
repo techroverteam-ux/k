@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { DhanCredentialsService } from './dhan-credentials.service';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import WebSocket from 'ws';
 import { env } from '../config/env';
 import type { DhanTick } from './dhan-feed.service';
@@ -12,6 +13,7 @@ export interface GlobalStockSubscription {
 export class DhanGlobalFeedService implements OnModuleDestroy {
   private readonly log = new Logger('DhanGlobalFeed');
   private ws?: WebSocket;
+  private connecting=false;
   private reconnectTimer?: NodeJS.Timeout;
   private reconnectDelayMs = 5000;
   private isDestroyed = false;
@@ -25,7 +27,16 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     fetchedAt: number;
   };
 
-  constructor() {}
+  constructor(@Optional() private readonly credentials?:DhanCredentialsService) {
+    this.credentials?.onChange(()=>this.reconnect());
+  }
+
+  reconnect() {
+    if(this.isDestroyed)return;
+    if(this.reconnectTimer){clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined;}
+    if(this.ws){this.ws.removeAllListeners();this.ws.terminate();this.ws=undefined;}
+    if(this.subscribedInstruments.length)void this.connect();
+  }
 
   async getMarketStatus(): Promise<{ isOpen: boolean; open: string; close: string } | null> {
     const now = Date.now();
@@ -34,7 +45,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     }
 
     const clientId = env().DHAN_CLIENT_ID;
-    const token = env().DHAN_ACCESS_TOKEN;
+    const token = this.credentials ? await this.credentials.token().catch(()=>undefined) : env().DHAN_ACCESS_TOKEN;
     if (!clientId || !token) return null;
 
     try {
@@ -71,16 +82,23 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
   setSubscriptions(instruments: GlobalStockSubscription[]) {
     this.subscribedInstruments = instruments;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscriptionRequest();
+      this.reconnect();
     }
   }
 
-  connect() {
+  async connect() {
+    if(this.connecting||!this.subscribedInstruments.length)return;
+    this.connecting=true;
+    try{await this.openConnection();}finally{this.connecting=false;}
+  }
+
+  private async openConnection() {
+    if(this.ws && (this.ws.readyState===WebSocket.OPEN || this.ws.readyState===WebSocket.CONNECTING))return;
     const clientId = env().DHAN_CLIENT_ID;
-    const token = env().DHAN_ACCESS_TOKEN;
+    const token = this.credentials ? await this.credentials.token().catch(()=>undefined) : env().DHAN_ACCESS_TOKEN;
 
     if (!clientId || !token) {
-      this.log.warn('DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN not set. Dhan Global Stocks feed disabled.');
+      this.log.warn('Dhan authorization unavailable. Global feed is waiting for Connect Dhan.');
       return;
     }
 
@@ -164,8 +182,9 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
 
     while (offset + 11 <= total) {
       const msgCode = buf.readUInt8(offset + 10);
-      const msgLen = buf.readUInt8(offset + 9) || 11;
-      if (offset + msgLen > total) break;
+      const expected = ({ 1:27, 3:27, 29:18, 32:15, 33:19, 36:19, 50:13 } as Record<number,number>)[msgCode] ?? 11;
+      const msgLen = buf.readUInt8(offset + 9) || expected;
+      if (msgLen < expected || offset + msgLen > total) break;
 
       const packet = buf.subarray(offset, offset + msgLen);
       const exchSeg = packet.readUInt8(0);
@@ -181,6 +200,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
             segmentCode: exchSeg,
             ltp,
             volume,
+            lastTradeAt: new Date(packet.readUInt32LE(19) * 1000),
             timestamp: new Date(),
           };
           this.tickListener?.(tick);
@@ -208,7 +228,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
             securityId: scripId,
             segmentCode: exchSeg,
             ltp: 0,
-            close,
+            prevClose: close,
             timestamp: new Date(),
           };
           this.tickListener?.(tick);
@@ -235,7 +255,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     this.log.log(`Scheduling Dhan Global Stocks reconnect in ${this.reconnectDelayMs / 1000}s...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.connect();
+      void this.connect();
     }, this.reconnectDelayMs);
   }
 

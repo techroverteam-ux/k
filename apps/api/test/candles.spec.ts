@@ -26,8 +26,14 @@ describe('transient candle history', () => {
       await service.onModuleInit();
       expect(await service.candles(row.id, '1m', 50)).toEqual([]);
       const timestamp = new Date();
+      incoming({ segmentCode: 0, securityId: '1', ltp: 999, timestamp });
+      expect(await service.candles(row.id, '1m', 50)).toEqual([]); // ID collision in another segment
+
       incoming({ segmentCode: 1, securityId: '1', ltp: 101, timestamp });
       expect(await service.candles(row.id, '1m', 50)).toEqual([{ t: Math.floor(timestamp.getTime() / MIN) * MIN, o: 10100, h: 10100, l: 10100, c: 10100 }]);
+      incoming({ segmentCode: 1, securityId: '1', ltp: 0, prevClose: 95, timestamp });
+      incoming({ segmentCode: 1, securityId: '1', ltp: 0, open: 98, close: 99, high: 104, low: 94, timestamp });
+      expect(service.quote(row.id)).toMatchObject({ltpMinor:10100n,prevCloseMinor:9500n,highMinor:10400n,lowMinor:9400n});
       await jest.advanceTimersByTimeAsync(61_000);
       service.onModuleDestroy();
       expect(query).not.toHaveBeenCalled();

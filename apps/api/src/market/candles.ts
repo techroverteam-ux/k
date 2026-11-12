@@ -95,6 +95,8 @@ export class CandleStore {
     this.daily.clear();
   }
 
+  forget(id:string){this.minutes.delete(id);this.daily.delete(id);}
+
   has(id: string) {
     return this.minutes.has(id);
   }

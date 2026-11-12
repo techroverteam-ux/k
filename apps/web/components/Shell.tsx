@@ -30,6 +30,8 @@ const NAV: Record<Role, Item[]> = {
   ],
   SUPER_ADMIN: [
     { href: '/admin', label: 'Overview', icon: 'grid', exact: true },
+    { href: '/admin/market-data', label: 'Market data', icon: 'activity' },
+    { href: '/admin/commissions', label: 'Commissions', icon: 'percent' },
     { href: '/admin/users', label: 'Accounts', icon: 'users' },
     { href: '/admin/payments', label: 'Transactions', icon: 'rupee' },
     { href: '/admin/config', label: 'Configuration', icon: 'sliders' },

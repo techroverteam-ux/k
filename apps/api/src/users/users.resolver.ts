@@ -198,7 +198,7 @@ export class UsersResolver {
     return rows[0];
   }
 
-  @Roles('BROKER')
+  @Roles('SUPER_ADMIN', 'BROKER')
   @Query(() => CommissionDownload)
   async commissionDownload(@CurrentActor() a: Actor, @Args('month') month: string, @Args('format') format: string) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month < '2000-01' || month > new Date(Date.now() + 19_800_000).toISOString().slice(0, 7)) throw badInput('Choose a valid month.');
@@ -206,8 +206,8 @@ export class UsersResolver {
     const [year, m] = month.split('-').map(Number);
     const from = new Date(`${month}-01T00:00:00+05:30`);
     const to = new Date(Date.UTC(year, m, 1) - 19_800_000);
-    const report = await this.users.brokerCommission(a, a.userId, from, to);
-    return renderCommission(report, month, format);
+    const report = a.role === 'SUPER_ADMIN' ? await this.users.adminCommission(a, from, to) : await this.users.brokerCommission(a, a.userId, from, to);
+    return renderCommission(report, month, format, a.role === 'SUPER_ADMIN');
   }
 
   @Roles('SUPER_ADMIN', 'BROKER')
@@ -218,7 +218,8 @@ export class UsersResolver {
     @Args('to') to: Date,
     @Args('brokerId', { type: () => ID, nullable: true }) brokerId?: string,
   ): Promise<CommissionReport> {
-    const r = await this.users.brokerCommission(a, brokerId ?? a.userId, from, to);
+    if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) throw badInput('Choose a start date before the end date.');
+    const r = a.role === 'SUPER_ADMIN' && !brokerId ? await this.users.adminCommission(a, from, to) : await this.users.brokerCommission(a, brokerId ?? a.userId, from, to);
     return {
       shareBps: r.shareBps,
       perMiniLot: formatMoney(r.perMiniLotMinor),

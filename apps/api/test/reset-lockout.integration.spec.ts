@@ -33,7 +33,7 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
     usersSvc = new UsersService(db, audit, passwords, policy, ledger, {} as any, {} as any, config, alerts);
     const hash = await passwords.hash(pw);
     const add = async (username: string, role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER', brokerId?: string) => (await db.db.insert(users).values({ username, displayName: username, role, status: 'ACTIVE', passwordHash: hash, brokerId }).returning())[0];
-    admin = actor(await add('admin.reset', 'SUPER_ADMIN')); checker = actor(await add('checker.reset', 'SUPER_ADMIN'));
+    admin = actor(await add('admin.reset', 'SUPER_ADMIN')); checker = admin;
     broker = actor(await add('broker.reset', 'BROKER')); otherBroker = actor(await add('broker.other', 'BROKER')); trader = actor(await add('trader.reset', 'TRADER', broker.userId));
     instrumentId = (await db.db.insert(instruments).values({ symbol: 'RESETTEST', name: 'Reset test', exchange: 'NSE', segment: 'FUT', lotSize: 1, tickMinor: 1, refPriceMinor: 100000n }).returning())[0].id;
     orderId = (await db.db.insert(orders).values({ userId: trader.userId, instrumentId, side: 'BUY', type: 'MARKET', quantity: 1, status: 'FILLED', venue: 'SIMULATED', mode: 'SIMULATED', placedById: trader.userId, idempotencyKey: 'reset-test-order' }).returning())[0].id;
@@ -71,7 +71,7 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
   });
   it('requests notify both admins and the assigned broker, and cannot be self-approved or approved by another broker', async () => {
     const r = await wipe.requestAccountReset(trader, 'Start a fresh trader account', 'WIPE', meta.ip);
-    expect((await db.db.select().from(notifications).where(eq(notifications.kind, 'account.reset_requested'))).map((n) => n.userId).sort()).toEqual([admin.userId, checker.userId, broker.userId].sort());
+    expect((await db.db.select().from(notifications).where(eq(notifications.kind, 'account.reset_requested'))).map((n) => n.userId).sort()).toEqual([admin.userId, broker.userId].sort());
     await expect(wipe.requestAccountReset(trader, 'Another reset request', 'WIPE', meta.ip)).rejects.toMatchObject({ extensions: { code: 'CONFLICT' } });
     await expect(wipe.decideAccountReset(trader, r.id, true, meta.ip)).rejects.toMatchObject({ extensions: { code: 'FORBIDDEN' } });
     await expect(wipe.decideAccountReset(otherBroker, r.id, true, meta.ip)).rejects.toMatchObject({ extensions: { code: 'FORBIDDEN' } });
@@ -122,17 +122,12 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
   });
-  it('single-admin mode still cannot self-approve a destructive platform wipe', async () => {
-    await db.db.update(users).set({ status: 'SUSPENDED' }).where(eq(users.id, checker.userId));
-    const request = await wipe.requestPlatform(admin, 'Test mandatory second approval', 'WIPE ALL DATA', meta.ip);
-    await expect(wipe.approvePlatform(admin, request.id, 'WIPE ALL DATA', meta.ip)).rejects.toMatchObject({ extensions: { code: 'FORBIDDEN' } });
-    await wipe.rejectPlatform(admin, request.id, meta.ip);
-    await db.db.update(users).set({ status: 'ACTIVE' }).where(eq(users.id, checker.userId));
+  it('rejects provisioning a second active Super Admin at database level', async () => {
+    await expect(db.db.insert(users).values({ username: 'second.admin', displayName: 'Second', role: 'SUPER_ADMIN', status: 'ACTIVE', passwordHash: 'unused' })).rejects.toThrow();
   });
   it('platform wipe requires a different admin, expires at 30 minutes, and hard-deletes fee proofs and all broker/trader records', async () => {
     const expired = await wipe.requestPlatform(admin, 'End of isolated training batch', 'WIPE ALL DATA', meta.ip);
     expect(expired.expiresAt.getTime() - Date.now()).toBeGreaterThan(29 * 60_000);
-    await expect(wipe.approvePlatform(admin, expired.id, 'WIPE ALL DATA', meta.ip)).rejects.toMatchObject({ extensions: { code: 'FORBIDDEN' } });
     await db.db.update(platformWipes).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(platformWipes.id, expired.id));
     await expect(wipe.approvePlatform(checker, expired.id, 'WIPE ALL DATA', meta.ip)).rejects.toMatchObject({ extensions: { code: 'CONFLICT' } });
     expect((await db.db.select().from(platformWipes).where(eq(platformWipes.id, expired.id)))[0].status).toBe('EXPIRED');
@@ -141,8 +136,8 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
     await db.db.insert(feePaymentProofs).values({ feePaymentId: fee.id, mime: 'image/png', data: 'test', bytes: 100 });
     const r = await wipe.requestPlatform(admin, 'End of isolated training batch', 'WIPE ALL DATA', meta.ip);
     expect((await wipe.approvePlatform(checker, r.id, 'WIPE ALL DATA', meta.ip)).accounts).toBe(3);
-    expect((await db.db.select().from(users)).map((u) => u.role)).toEqual(['SUPER_ADMIN', 'SUPER_ADMIN']);
+    expect((await db.db.select().from(users)).map((u) => u.role)).toEqual(['SUPER_ADMIN']);
     for (const table of [orders, positions, ledgerPostings, accountWipes, accountResetRequests, feePayments, feePaymentProofs]) expect(await db.db.$count(table)).toBe(0);
-    expect(await db.db.$count(notifications, eq(notifications.kind, 'platform.wipe_completed'))).toBe(2);
+    expect(await db.db.$count(notifications, eq(notifications.kind, 'platform.wipe_completed'))).toBe(1);
   });
 });

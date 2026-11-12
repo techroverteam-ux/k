@@ -19,7 +19,8 @@
     "test": "dotenv -e .env.test -- jest --runInBand",
     "logs:archive": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts archive",
     "keys:rotate": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/rotate-keys.ts",
-    "logs:verify": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts verify"
+    "logs:verify": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts verify",
+    "instruments:audit-dhan": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/audit-dhan-instruments.ts"
   },
   "devDependencies": {
     "@types/cookie-parser": "1.4.10",

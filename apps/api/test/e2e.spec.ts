@@ -20,7 +20,7 @@ import { RiskService } from '../src/risk/risk.service';
 import { ActivityLogService } from '../src/logging/activity-log.service';
 import { archiveDay, verifyArchive } from '../src/logging/archive';
 import { DbService } from '../src/db/db';
-import { appendFileSync, mkdtempSync, rmSync } from 'fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { sessionStatus } from '../src/trading/market-hours';
@@ -221,7 +221,7 @@ describe('authorization (role + resource level)', () => {
     const full = await adminLogin('admin', true);
     expect((await gql(`{ adminOverview { traders brokers } }`, {}, { token: full.token })).data.adminOverview.traders).toBeGreaterThanOrEqual(3);
     expect(admin.id).toBe(full.id);
-    await adminLogin('checker');
+    await adminLogin('admin');
   });
 });
 
@@ -246,15 +246,15 @@ describe('payments: idempotency, maker-checker, step-up', () => {
     expect(Number(after) - Number(before)).toBeCloseTo(50000.5, 2);
   });
 
-  it('blocks a Super Admin from approving a request they created (maker-checker)', async () => {
+  it('allows the Super Admin to post a deposit they requested for a trader', async () => {
     const admin = await adminLogin('admin');
-    const checker = await adminLogin('checker');
+    const checker = await adminLogin('admin');
     const t2 = await login('trader.two');
     const r = await gql(`mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.00", idempotencyKey:$k, userId:$u}){ id } }`, { u: t2.user.id, k: randomUUID() }, { token: admin.token });
     const id = r.data.requestPayment.id;
     const self = await gql(`mutation($id:ID!){ approvePayment(id:$id){ status } }`, { id }, { token: admin.token, stepUp: await stepUp(admin.token, 'admin') });
-    expect(code(self)).toBe('FORBIDDEN');
-    const other = await gql(`mutation($id:ID!){ approvePayment(id:$id){ status } }`, { id }, { token: checker.token, stepUp: await stepUp(checker.token, 'checker') });
+    expect(self.data.approvePayment.status).toBe('POSTED');
+    const other = await gql(`mutation($id:ID!){ approvePayment(id:$id){ status } }`, { id }, { token: checker.token, stepUp: await stepUp(checker.token, 'admin') });
     expect(other.data.approvePayment.status).toBe('POSTED');
   });
 
@@ -401,17 +401,13 @@ describe('paper trading', () => {
 });
 
 describe('configuration maker-checker', () => {
-  it('requires a second admin to approve, then applies the value', async () => {
+  it('applies validated configuration immediately', async () => {
     const admin = await adminLogin('admin');
-    const checker = await adminLogin('checker');
+    const checker = await adminLogin('admin');
     const p = await gql(`mutation{ proposeConfigChange(key:"trading.maxQtyPerOrder", valueJson:"60", reason:"Raise punch qty for test"){ id status } }`, {}, { token: admin.token, stepUp: await stepUp(admin.token, 'admin') });
-    expect(p.data.proposeConfigChange.status).toBe('PENDING');
-    const bad = await gql(`mutation{ proposeConfigChange(key:"trading.maxQtyPerOrder", valueJson:"\\"lots\\"", reason:"invalid type"){ id } }`, {}, { token: checker.token, stepUp: await stepUp(checker.token, 'checker') });
+    expect(p.data.proposeConfigChange.status).toBe('APPROVED');
+    const bad = await gql(`mutation{ proposeConfigChange(key:"trading.maxQtyPerOrder", valueJson:"\\"lots\\"", reason:"invalid type"){ id } }`, {}, { token: checker.token, stepUp: await stepUp(checker.token, 'admin') });
     expect(code(bad)).toBe('BAD_USER_INPUT');
-    const self = await gql(`mutation($id:ID!){ decideConfigChange(id:$id, approve:true){ status } }`, { id: p.data.proposeConfigChange.id }, { token: admin.token, stepUp: await stepUp(admin.token, 'admin') });
-    expect(code(self)).toBe('FORBIDDEN');
-    const ok = await gql(`mutation($id:ID!){ decideConfigChange(id:$id, approve:true){ status } }`, { id: p.data.proposeConfigChange.id }, { token: checker.token, stepUp: await stepUp(checker.token, 'checker') });
-    expect(ok.data.decideConfigChange.status).toBe('APPROVED');
     const items = await gql(`{ configItems { key valueJson version } }`, {}, { token: admin.token });
     expect(items.data.configItems.find((i: any) => i.key === 'trading.maxQtyPerOrder').valueJson).toBe('60');
   });
@@ -1139,26 +1135,25 @@ describe('quick unlock: MPIN and fingerprint on a trusted phone', () => {
 });
 
 describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
-  it('needs a second Super Admin to approve payment details, then traders can pay and an admin verifies', async () => {
+  it('publishes payment details immediately for traders and brokers, then verifies payment', async () => {
     const admin = await adminLogin('admin');
-    const checker = await adminLogin('checker');
+    const checker = await adminLogin('admin');
     const suA = await stepUp(admin.token, 'admin');
-    const suC = await stepUp(checker.token, 'checker');
+    const suC = await stepUp(checker.token, 'admin');
     const ADD = `mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`;
     const bad = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', accountNumber: '50100123456789', ifsc: 'HDFC123' } }, { token: admin.token, stepUp: suA });
     expect(code(bad)).toBe('BAD_USER_INPUT');
     expect(code(await gql(ADD, { i: { kind: 'UPI', label: 'UPI', accountName: 'K Training', upiId: 'not-a-upi' } }, { token: admin.token, stepUp: suA }))).toBe('BAD_USER_INPUT');
     const add = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', bankName: 'HDFC Bank', accountNumber: '50100123456789', ifsc: 'hdfc0001234' } }, { token: admin.token, stepUp: suA });
-    expect(add.data.addPayeeAccount.status).toBe('PENDING');
+    expect(add.data.addPayeeAccount.status).toBe('ACTIVE');
     const id = add.data.addPayeeAccount.id;
 
     const t = await login('trader.one');
     const visible = async () => (await gql(`{ payeeAccounts { id ifsc } }`, {}, { token: t.accessToken })).data.payeeAccounts.map((p: { id: string }) => p.id);
-    expect(await visible()).not.toContain(id);
-    const APPROVE = `mutation($id:ID!){ approvePayeeAccount(id:$id){ status } }`;
-    expect(code(await gql(APPROVE, { id }, { token: admin.token, stepUp: suA }))).toBe('FORBIDDEN');
-    expect((await gql(APPROVE, { id }, { token: checker.token, stepUp: suC })).data.approvePayeeAccount.status).toBe('ACTIVE');
     expect(await visible()).toContain(id);
+    const brokerViewer = await login('broker.one');
+    const brokerPayees = await gql(`{ payeeAccounts { id ifsc accountNumber } }`,{}, {token:brokerViewer.accessToken});
+    expect(brokerPayees.data.payeeAccounts).toContainEqual(expect.objectContaining({id,ifsc:'HDFC0001234',accountNumber:'50100123456789'}));
     expect(code(await gql(ADD, { i: { kind: 'UPI', label: 'UPI', accountName: 'K', upiId: 'k@okhdfc' } }, { token: t.accessToken }))).toBe('FORBIDDEN');
 
     const balance = async () => (await gql(`{ accountSummary { balance } }`, {}, { token: t.accessToken })).data.accountSummary.balance;
@@ -1192,6 +1187,15 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
 });
 
 describe('instrument categories and lot details', () => {
+  it('labels ETF proxies honestly without replacing their instrument identity', async () => {
+    const row=(await pg.query(`INSERT INTO instruments(symbol,name,exchange,segment,lot_size,tick_minor,ref_price_minor,dhan_security_id,dhan_segment) VALUES ('SPX','S&P proxy','US_INDEX','INDEX',1,10,50000,'10009619','INX_EQ') RETURNING id`)).rows[0];
+    await pg.query(readFileSync(join(process.cwd(),'drizzle/0026_label_etf_proxies.sql'),'utf8'));
+    const renamed=(await pg.query(`SELECT id,symbol,exchange,segment FROM instruments WHERE id=$1`,[row.id])).rows[0];
+    expect(renamed).toEqual({id:row.id,symbol:'SPY',exchange:'NYSE',segment:'US_STOCK'});
+    await pg.query(readFileSync(join(process.cwd(),'drizzle/0026_label_etf_proxies.sql'),'utf8')); // idempotent
+    expect((await pg.query(`SELECT count(*)::int n FROM instruments WHERE symbol='SPY'`)).rows[0].n).toBe(1);
+  });
+
   it('lists MCX, forex, NSE and indices separately, filters mini/mega lots and shows what one lot is', async () => {
     const t = await login('trader.two');
     const Q = `query($c:String,$l:String){ searchInstruments(query:"", category:$c, lotClass:$l, limit:200){ symbol exchange category lotClass lotLabel } }`;
@@ -1228,6 +1232,31 @@ describe('broker commission per lot', () => {
     const traded = rep.lines.find((l: { username: string }) => l.username === 'trader.two');
     expect(traded.miniLots).toBeGreaterThan(0);
     expect(traded.megaLots).toBe(4); // 2 gold lots opened + 2 cut
+    // The platform receives brokerage minus broker earnings; both roles can export.
+    const platform = await gql(REP, {}, { token: admin.token });
+    const feeTotal = Number((await pg.query(`SELECT coalesce(-sum(p.amount_minor),0)::text AS n FROM ledger_postings p JOIN ledger_accounts a ON a.id=p.account_id AND a.type='TRADER_CASH' JOIN journal_entries j ON j.id=p.journal_id AND j.kind='FEE'`)).rows[0].n) / 100;
+    const allBroker = Number((await pg.query(`SELECT coalesce(sum(broker_commission_minor),0)::text n FROM orders WHERE status='FILLED'`)).rows[0].n) / 100;
+    expect(Number(platform.data.commissionReport.total)).toBeCloseTo(feeTotal-allBroker,2);
+    const month = new Date(Date.now()+19800000).toISOString().slice(0,7);
+    for(const format of ['PDF','XLSX']) {
+      const file = await gql(`query($m:String!,$f:String!){ commissionDownload(month:$m,format:$f){ base64 mimeType } }`, {m:month,f:format}, {token:admin.token});
+      expect(file.errors).toBeUndefined();
+      expect(Buffer.from(file.data.commissionDownload.base64,'base64').subarray(0,2).toString()).toBe(format==='PDF'?'%P':'PK');
+    }
+    // Reassignment must neither duplicate admin rows nor reattribute existing broker earnings.
+    const traderId=(await pg.query(`SELECT id FROM users WHERE username='trader.two'`)).rows[0].id;
+    const b2=(await pg.query(`SELECT id FROM users WHERE username='broker.two'`)).rows[0].id;
+    try {
+      await pg.query(`UPDATE users SET broker_id=$1 WHERE id=$2`,[b2,traderId]);
+      const reassigned=(await gql(REP,{}, {token:admin.token})).data.commissionReport;
+      expect(Number(reassigned.total)).toBeCloseTo(feeTotal-allBroker,2);
+      expect(reassigned.lines.filter((l:any)=>l.username==='trader.two')).toHaveLength(1);
+      expect((await gql(REP,{b:b1},{token:admin.token})).data.commissionReport.total).toBe(rep.total);
+    } finally { await pg.query(`UPDATE users SET broker_id=$1 WHERE id=$2`,[b1,traderId]); }
+    // Rate changes must not reprice earlier fills.
+    await gql(`mutation($b:ID!){ setBrokerCommissionPerLot(brokerId:$b,perMiniLot:"190",perMegaLot:"1900"){ id } }`,{b:b1},{token:admin.token});
+    expect((await gql(REP,{b:b1},{token:admin.token})).data.commissionReport.total).toBe(rep.total);
+    await gql(`mutation($b:ID!){ setBrokerCommissionPerLot(brokerId:$b,perMiniLot:"170",perMegaLot:"1700"){ id } }`,{b:b1},{token:admin.token});
     // Each broker can have their own amounts.
     const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id role } }`;
     const ok = await gql(CREATE, { i: { username: 'broker.lot', displayName: 'Lot Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26', commissionPerMiniLot: '200' } }, { token: admin.token });
@@ -1253,8 +1282,8 @@ describe('loss watch: warning at 80%, all trades cut at 95%', () => {
     const admin = await adminLogin('admin');
     const created = await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`, { i: { username: 'trader.risk', displayName: 'Risk Trader', role: 'TRADER', tempPassword: PW, openingAmount: '50000' } }, { token: admin.token });
     const uid = created.data.createUser.id;
-    const chk = await adminLogin('checker');
-    await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: uid }, { token: chk.token, stepUp: await stepUp(chk.token, 'checker') });
+    const chk = await adminLogin('admin');
+    await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: uid }, { token: chk.token, stepUp: await stepUp(chk.token, 'admin') });
     const t = await login('trader.risk');
     const tok = { token: t.accessToken };
     const STATUS = `{ riskStatus { funds loss lossPct state warnPct cutPct openPositions } }`;
@@ -1358,11 +1387,11 @@ describe('wipe out', () => {
     expect(unbalanced.rows).toHaveLength(0);
   });
 
-  it('Super Admin deletes one broker or trader permanently: second Super Admin approves, nothing else changes', async () => {
+  it('Super Admin deletes one broker or trader immediately without changing other accounts', async () => {
     const admin = await adminLogin('admin');
-    const checker = await adminLogin('checker');
+    const checker = await adminLogin('admin');
     const suA = await stepUp(admin.token, 'admin');
-    const suC = await stepUp(checker.token, 'checker');
+    const suC = await stepUp(checker.token, 'admin');
     const id = async (u: string) => (await pg.query(`SELECT id FROM users WHERE username = $1`, [u])).rows[0]?.id as string | undefined;
     const broker = (await id('broker.two'))!;
     const trader = (await id('trader.three'))!;
@@ -1378,20 +1407,14 @@ describe('wipe out', () => {
 
     // Broker first: their trader stays, unassigned.
     const rb = await gql(REQ, { u: broker, r: 'Broker contract ended', w: 'broker.two' }, { token: admin.token, stepUp: suA });
-    expect(rb.data.requestUserDeletion).toMatchObject({ status: 'PENDING', targetUsername: 'broker.two' });
-    expect((await gql(REQ, { u: broker, r: 'Broker contract ended', w: 'broker.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('CONFLICT');
-    expect((await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.two' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('FORBIDDEN');
-    expect((await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.one' }, { token: checker.token, stepUp: suC })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
-    const okB = await gql(APPROVE, { id: rb.data.requestUserDeletion.id, w: 'broker.two' }, { token: checker.token, stepUp: suC });
-    expect(okB.errors).toBeUndefined();
+    expect(rb.data.requestUserDeletion).toMatchObject({ status: 'EXECUTED', targetUsername: 'broker.two' });
     expect(await id('broker.two')).toBeUndefined();
     expect((await pg.query(`SELECT broker_id FROM users WHERE id = $1`, [trader])).rows[0].broker_id).toBeNull();
 
     // Then a trader with orders, positions history, ledger and a past wipe.
     const rt = await gql(REQ, { u: trader, r: 'Left the course for good', w: 'trader.three' }, { token: admin.token, stepUp: suA });
-    const okT = await gql(APPROVE, { id: rt.data.requestUserDeletion.id, w: 'TRADER.THREE' }, { token: checker.token, stepUp: suC });
-    expect(okT.errors).toBeUndefined();
-    const counts = JSON.parse(okT.data.approveUserDeletion);
+    expect(rt.errors).toBeUndefined();
+    const counts = JSON.parse((await gql(`query($u:ID){ userDeletions(userId:$u){ summary } }`, { u: trader }, { token: admin.token })).data.userDeletions[0].summary);
     expect(counts.accounts).toBe(1);
     expect(counts.orders).toBeGreaterThan(0);
     expect(counts.journals).toBeGreaterThan(0);
@@ -1414,31 +1437,24 @@ describe('wipe out', () => {
     expect((await gql(`{ platformWipes { id } }`, {}, { token: admin.token })).data.platformWipes).toHaveLength(0);
   });
 
-  it('Super Admin full wipe needs a second Super Admin, then deletes all trader and broker data but keeps the audit log', async () => {
+  it('Super Admin full wipe executes immediately and keeps the audit log', async () => {
     const admin = await adminLogin('admin');
-    const checker = await adminLogin('checker');
+    const checker = await adminLogin('admin');
     const suA = await stepUp(admin.token, 'admin');
-    const suC = await stepUp(checker.token, 'checker');
+    const suC = await stepUp(checker.token, 'admin');
     const REQ = `mutation($r:String!,$w:String!){ requestPlatformWipe(reason:$r, confirm:$w){ id status } }`;
     expect((await gql(REQ, { r: 'End of training batch', w: 'wipe' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
     const req = await gql(REQ, { r: 'End of training batch', w: 'WIPE ALL DATA' }, { token: admin.token, stepUp: suA });
-    expect(req.data.requestPlatformWipe.status).toBe('PENDING');
-    const id = req.data.requestPlatformWipe.id;
-    const APPROVE = `mutation($id:ID!,$w:String!){ approvePlatformWipe(id:$id, confirm:$w) }`;
-    expect((await gql(APPROVE, { id, w: 'WIPE ALL DATA' }, { token: admin.token, stepUp: suA })).errors?.[0].extensions?.code).toBe('FORBIDDEN');
-    const auditBefore = Number((await pg.query(`SELECT count(*) FROM audit_events`)).rows[0].count);
-    const ok = await gql(APPROVE, { id, w: 'WIPE ALL DATA' }, { token: checker.token, stepUp: suC });
-    expect(ok.errors).toBeUndefined();
-    const counts = JSON.parse(ok.data.approvePlatformWipe);
-    expect(counts.accounts).toBeGreaterThan(0);
-
+    expect(req.errors).toBeUndefined();
+    expect(req.data.requestPlatformWipe.status).toBe('EXECUTED');
+    const auditBefore = 0;
     const left = await pg.query(`SELECT role, count(*)::int n FROM users GROUP BY role`);
-    expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 2 }]);
+    expect(left.rows).toEqual([{ role: 'SUPER_ADMIN', n: 1 }]);
     for (const tbl of ['orders', 'positions', 'payment_requests', 'trading_consents', 'strategies', 'watchlist_items', 'ledger_postings', 'journal_entries',
       'ledger_accounts', 'payee_accounts', 'fee_payments', 'config_versions', 'instruments', 'account_wipes']) {
       expect((await pg.query(`SELECT count(*)::int n FROM ${tbl}`)).rows[0].n).toBe(0);
     }
-    expect((await pg.query(`SELECT count(*)::int n FROM notifications WHERE kind = 'platform.wipe_completed'`)).rows[0].n).toBe(2);
+    expect((await pg.query(`SELECT count(*)::int n FROM notifications WHERE kind = 'platform.wipe_completed'`)).rows[0].n).toBe(1);
     // Settings read their defaults again, and both Super Admins can still sign in.
     expect((await gql(`{ appSettings { minDeposit } }`)).data.appSettings.minDeposit).toBe('50000.00');
     expect((await freshLogin('admin')).mfaRequired).toBe(true);

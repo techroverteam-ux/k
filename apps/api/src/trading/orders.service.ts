@@ -112,7 +112,9 @@ export class OrdersService implements OnModuleInit {
 
   /** Quote a would-be order (for the trade ticket): value and margins. Read-only. */
   async preview(instrumentId: string, side: Side, quantity: number, limitPriceMinor?: bigint, triggerPriceMinor?: bigint) {
+    if(env().MARKET_FEED==='dhan'&&!this.market.hasVerifiedCatalog())throw badInput('Instrument catalog is unavailable or out of date. Wait for a successful refresh.');
     const q = this.market.quote(instrumentId);
+    if(env().MARKET_FEED==='dhan' && (!q || q.source!=='DHAN' || Date.now()-q.ts.getTime()>60000))throw badInput('Wait for a fresh live quote before previewing this order.');
     if (!q) throw notFound('Instrument');
     const price = limitPriceMinor ?? triggerPriceMinor ?? this.venue.marketFillPrice(side, q);
     const value = price * BigInt(quantity);
@@ -169,7 +171,10 @@ export class OrdersService implements OnModuleInit {
       const cash = await this.ledger.cashAccount(tx, u.id, 'SIMULATED');
       await this.ledger.lock(tx, cash); // serialize this user's order flow
 
+      if(!inst.active || (inst.expiry && inst.expiry <= new Date())) throw badInput('This contract is inactive or expired. Choose an available instrument.');
+      if(env().MARKET_FEED==='dhan'&&!this.market.hasVerifiedCatalog())throw badInput('Instrument catalog is unavailable or out of date. Wait for a successful refresh.');
       const q = this.market.quote(inst.id)!;
+      if (env().MARKET_FEED === 'dhan' && (!q || q.source !== 'DHAN' || Date.now() - q.ts.getTime() > 60_000)) throw badInput('Live market data is unavailable or stale. Wait for a fresh quote and try again.');
       const [pos] = await tx
         .select()
         .from(positions)
@@ -262,9 +267,15 @@ export class OrdersService implements OnModuleInit {
 
   /** Apply a simulated fill: update the order and position, post P&L and fees to the ledger. */
   private async fill(tx: Tx, o: OrderRow, price: bigint, fees: FeeRule, triggered = false): Promise<OrderRow> {
+    const [owner] = await tx.select({ brokerId: users.brokerId }).from(users).where(eq(users.id, o.userId));
+    const [broker] = owner?.brokerId ? await tx.select().from(users).where(eq(users.id, owner.brokerId)) : [];
+    const mega = this.market.instrument(o.instrumentId)?.lotClass === 'MEGA';
+    const defaultRate = await this.config.get(mega ? 'broker.commissionPerMegaLot' : 'broker.commissionPerMiniLot');
+    const rate = broker ? (mega ? broker.commissionMegaMinor : broker.commissionMiniMinor) ?? BigInt(Math.round(defaultRate * 100)) : 0n;
+    const brokerCommissionMinor = rate * BigInt(o.quantity);
     const [filled] = await tx
       .update(orders)
-      .set({ status: 'FILLED', fillPriceMinor: price, filledAt: new Date(), updatedAt: new Date(), ...(triggered ? { triggeredAt: new Date() } : {}) })
+      .set({ status: 'FILLED', brokerIdAtFill: owner?.brokerId ?? null, brokerCommissionMinor, fillPriceMinor: price, filledAt: new Date(), updatedAt: new Date(), ...(triggered ? { triggeredAt: new Date() } : {}) })
       .where(and(eq(orders.id, o.id), eq(orders.status, 'OPEN')))
       .returning();
     if (!filled) return o; // someone else filled/cancelled it
@@ -353,7 +364,9 @@ export class OrdersService implements OnModuleInit {
       const fees = await feeRule(this.config);
       const sessions = await this.sessions();
       for (const o of open) {
+        if(env().MARKET_FEED==='dhan'&&!this.market.hasVerifiedCatalog())continue;
         const q = this.market.quote(o.instrumentId);
+        if (env().MARKET_FEED === 'dhan' && (!q || q.source !== 'DHAN' || Date.now() - q.ts.getTime() > 60_000)) continue;
         if (!q) continue;
         const inst = this.market.instrument(o.instrumentId);
         if (inst && sessions.list.find((x) => x.exchange === inst.exchange)?.isOpen === false) continue; // no fills while the market is closed

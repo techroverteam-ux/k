@@ -61,7 +61,7 @@ export class UsersService {
   }
 
   async list(actor: Actor, f: { role?: Role; status?: string; search?: string; brokerId?: string; limit: number; offset: number }) {
-    const where: (SQL | undefined)[] = [this.policy.userScope(actor)];
+    const where: (SQL | undefined)[] = [this.policy.userScope(actor), sql`NOT (${users.role} = 'SUPER_ADMIN' AND ${users.status} <> 'ACTIVE')`];
     if (f.role) where.push(eq(users.role, f.role));
     if (f.status) where.push(eq(users.status, f.status as any));
     if (f.brokerId) where.push(eq(users.brokerId, f.brokerId));
@@ -170,7 +170,7 @@ export class UsersService {
         await tx.update(orders).set({ status: 'CANCELLED', updatedAt: new Date() }).where(and(eq(orders.userId, userId), eq(orders.status, 'OPEN')));
       }
       if (status === 'ACTIVE' && u.resetDisabledAt) {
-        const admins = await tx.select({ id: users.id }).from(users).where(eq(users.role, 'SUPER_ADMIN'));
+        const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
         for (const id of new Set([u.id, ...(u.brokerId ? [u.brokerId] : []), ...admins.map((a) => a.id)])) await this.notifications.notify(tx, id, 'account.reenabled', 'Trader account re-enabled', `${u.username} has been re-enabled with a fresh view and zero starting balance. Historical records remain available to staff.`);
       }
       await this.audit.record(tx, { actor, action: `user.${status.toLowerCase()}`, entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { from: u.status, reason } });
@@ -303,13 +303,36 @@ export class UsersService {
    * opening 3 mini lots earns 3 × ₹170 and cutting them another 3 × ₹170. Counted from the brokerage actually charged
    * (one FEE entry per filled order), so cancelled or rejected orders earn nothing.
    */
+  /** Platform earnings are collected brokerage less the assigned broker's entitlement. */
+  async adminCommission(actor: Actor, from: Date, to: Date) {
+    if (actor.role !== 'SUPER_ADMIN') throw forbidden();
+    const [mini, mega] = await Promise.all([this.config.get('broker.commissionPerMiniLot'), this.config.get('broker.commissionPerMegaLot')]);
+    const result = await this.dbs.db.execute<{ user_id: string; username: string; fees: string; commission: string; mini: string; mega: string }>(sql`
+      SELECT u.id AS user_id, u.username, (-SUM(p.amount_minor))::text AS fees,
+        COALESCE(SUM(COALESCE(o.broker_commission_minor,
+          CASE WHEN b.id IS NULL THEN 0 ELSE o.quantity * CASE WHEN i.lot_class = 'MEGA'
+          THEN COALESCE(b.commission_mega_minor, ${Math.round(mega*100)}::bigint)
+          ELSE COALESCE(b.commission_mini_minor, ${Math.round(mini*100)}::bigint) END END)),0)::text AS commission,
+        COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class <> 'MEGA'),0)::text AS mini,
+        COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class = 'MEGA'),0)::text AS mega
+      FROM users u JOIN ledger_accounts a ON a.owner_id=u.id AND a.type='TRADER_CASH'
+      JOIN ledger_postings p ON p.account_id=a.id JOIN journal_entries j ON j.id=p.journal_id AND j.kind='FEE'
+      LEFT JOIN orders o ON j.ref_type='order' AND o.id=j.ref_id LEFT JOIN instruments i ON i.id=o.instrument_id
+      LEFT JOIN users b ON b.id=u.broker_id AND b.role='BROKER'
+      WHERE p.created_at >= ${from} AND p.created_at < ${to} GROUP BY u.id,u.username ORDER BY u.username`);
+    const lines = result.rows.map((x) => ({ userId:x.user_id, username:x.username, brokerageMinor:BigInt(x.fees),
+      miniLots:Number(x.mini), megaLots:Number(x.mega), commissionMinor:BigInt(x.fees)-BigInt(x.commission) }));
+    return { shareBps: 0, perMiniLotMinor: 0n, perMegaLotMinor: 0n, lines, totalMinor: lines.reduce((sum,l) => sum+l.commissionMinor,0n) };
+  }
+
   async brokerCommission(actor: Actor, brokerId: string, from: Date, to: Date) {
     if (actor.role === 'BROKER' && actor.userId !== brokerId) throw notFound('Account');
     const [b] = await this.dbs.db.select().from(users).where(and(eq(users.id, brokerId), eq(users.role, 'BROKER')));
     if (!b) throw notFound('Broker');
     const rate = await this.commissionPerLot(b);
-    const r = await this.dbs.db.execute<{ user_id: string; username: string; fees: string; mini: string; mega: string }>(sql`
+    const r = await this.dbs.db.execute<{ user_id: string; username: string; fees: string; mini: string; mega: string; commission: string }>(sql`
       SELECT u.id AS user_id, u.username,
+             COALESCE(SUM(COALESCE(o.broker_commission_minor, o.quantity * CASE WHEN i.lot_class = 'MEGA' THEN ${rate.megaMinor}::bigint ELSE ${rate.miniMinor}::bigint END)),0)::text AS commission,
              COALESCE(-SUM(p.amount_minor), 0)::text AS fees,
              COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class <> 'MEGA'), 0)::text AS mini,
              COALESCE(SUM(o.quantity) FILTER (WHERE i.lot_class = 'MEGA'), 0)::text AS mega
@@ -319,12 +342,12 @@ export class UsersService {
         JOIN journal_entries j ON j.id = p.journal_id AND j.kind = 'FEE'
         LEFT JOIN orders o ON j.ref_type = 'order' AND o.id = j.ref_id
         LEFT JOIN instruments i ON i.id = o.instrument_id
-       WHERE u.broker_id = ${brokerId} AND p.created_at >= ${from} AND (${actor.role} = 'SUPER_ADMIN' OR p.created_at >= coalesce((SELECT data_since FROM users WHERE id = ${actor.userId}), '-infinity'::timestamptz)) AND p.created_at < ${to}
+       WHERE (o.broker_id_at_fill = ${brokerId} OR (o.broker_commission_minor IS NULL AND u.broker_id = ${brokerId})) AND p.created_at >= ${from} AND (${actor.role} = 'SUPER_ADMIN' OR p.created_at >= coalesce((SELECT data_since FROM users WHERE id = ${actor.userId}), '-infinity'::timestamptz)) AND p.created_at < ${to}
        GROUP BY u.id, u.username
        ORDER BY u.username`);
     const lines = r.rows.map((x) => {
       const miniLots = Number(x.mini), megaLots = Number(x.mega);
-      return { userId: x.user_id, username: x.username, brokerageMinor: BigInt(x.fees), miniLots, megaLots, commissionMinor: rate.miniMinor * BigInt(miniLots) + rate.megaMinor * BigInt(megaLots) };
+      return { userId: x.user_id, username: x.username, brokerageMinor: BigInt(x.fees), miniLots, megaLots, commissionMinor: BigInt(x.commission) };
     });
     return { shareBps: 0, perMiniLotMinor: rate.miniMinor, perMegaLotMinor: rate.megaMinor, lines, totalMinor: lines.reduce((s, l) => s + l.commissionMinor, 0n) };
   }
