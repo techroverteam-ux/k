@@ -2,7 +2,7 @@ import { DhanCredentialsService } from './dhan-credentials.service';
 import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import WebSocket from 'ws';
 import { env } from '../config/env';
-import type { DhanTick } from './dhan-feed.service';
+import { dhanDisconnectMessage, type DhanTick } from './dhan-feed.service';
 
 export interface GlobalStockSubscription {
   exchangeSegment: string;
@@ -17,6 +17,8 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
   private reconnectTimer?: NodeJS.Timeout;
   private reconnectDelayMs = 5000;
   private isDestroyed = false;
+  private feedError?: string;
+  private lastTickAt?: string;
   private tickListener?: (tick: DhanTick) => void;
   private subscribedInstruments: GlobalStockSubscription[] = [];
 
@@ -34,7 +36,13 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
   reconnect() {
     if(this.isDestroyed)return;
     if(this.reconnectTimer){clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined;}
-    if(this.ws){this.ws.removeAllListeners();this.ws.terminate();this.ws=undefined;}
+    if(this.ws){
+      this.ws.removeAllListeners();
+      // Terminating a CONNECTING socket emits an asynchronous error in ws.
+      this.ws.once('error', () => undefined);
+      this.ws.terminate();
+      this.ws=undefined;
+    }
     if(this.subscribedInstruments.length)void this.connect();
   }
 
@@ -79,6 +87,15 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     this.tickListener = listener;
   }
 
+  status() {
+    return {
+      connected: this.ws?.readyState === WebSocket.OPEN,
+      subscriptions: this.subscribedInstruments.length,
+      lastTickAt: this.lastTickAt,
+      error: this.feedError,
+    };
+  }
+
   setSubscriptions(instruments: GlobalStockSubscription[]) {
     this.subscribedInstruments = instruments;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -98,6 +115,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
     const token = this.credentials ? await this.credentials.token().catch(()=>undefined) : env().DHAN_ACCESS_TOKEN;
 
     if (!clientId || !token) {
+      this.feedError = 'Dhan authorization unavailable. Use Connect Dhan.';
       this.log.warn('Dhan authorization unavailable. Global feed is waiting for Connect Dhan.');
       return;
     }
@@ -112,6 +130,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
 
       let is429 = false;
       this.ws.on('open', () => {
+        this.feedError = undefined;
         this.reconnectDelayMs = 5000;
         this.log.log('Connected to Dhan Global Stocks Feed WebSocket.');
         this.sendSubscriptionRequest();
@@ -122,6 +141,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
       });
 
       this.ws.on('error', (err) => {
+        this.feedError = 'Could not connect to the Dhan global feed. Retrying automatically; check the API service logs.';
         if (err.message && err.message.includes('429')) is429 = true;
         this.log.error(`Dhan Global Stocks WebSocket error: ${err.message}`);
       });
@@ -203,6 +223,7 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
             lastTradeAt: new Date(packet.readUInt32LE(19) * 1000),
             timestamp: new Date(),
           };
+          if (Number.isFinite(ltp) && ltp > 0) {this.lastTickAt = tick.timestamp.toISOString();this.feedError = undefined;}
           this.tickListener?.(tick);
         } else if (msgCode === 3 && packet.length >= 27) {
           // OHLC Packet
@@ -234,7 +255,8 @@ export class DhanGlobalFeedService implements OnModuleDestroy {
           this.tickListener?.(tick);
         } else if (msgCode === 50 && packet.length >= 13) {
           const errCode = packet.readInt16LE(11);
-          this.log.warn(`Dhan Global Stocks Feed returned error code ${errCode} for scripId ${scripId}`);
+          this.feedError = dhanDisconnectMessage(errCode);
+          this.log.warn(this.feedError);
         }
       } catch (err) {
         this.log.error(`Error processing Global Stocks packet (code ${msgCode}): ${(err as Error).message}`);

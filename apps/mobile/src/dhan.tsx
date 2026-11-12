@@ -26,7 +26,16 @@ export function DhanScreen() {
       } else {
         const d = await gql<{ syncDhanCatalog: string }>(`mutation{syncDhanCatalog}`);
         const r = JSON.parse(d.syncDhanCatalog);
-        toast(r.status === 'HEALTHY' ? 'Catalog updated' : r.error, r.status !== 'HEALTHY');
+        toast(
+          r.status === 'SYNCING'
+            ? 'Instrument sync started. Progress updates automatically.'
+            : r.status === 'HEALTHY'
+              ? 'Catalog updated'
+              : r.status === 'ATTENTION'
+                ? 'Catalog updated. Some existing contracts need review.'
+                : (r.error ?? 'Instrument sync could not start. Try again shortly.'),
+          !['SYNCING', 'HEALTHY'].includes(r.status),
+        );
       }
       await q.refetch();
     } catch (e) {
@@ -40,7 +49,7 @@ export function DhanScreen() {
       {q.error && <ErrorState error={q.error} retry={q.refetch} />}
       <Section title="Dhan connection">
         <T>
-          {s?.connected ? 'Authorized' : 'Not authorized'} ? {s?.mode ?? 'Loading'}
+          {s?.connected ? 'Authorized' : 'Not authorized'} · {s?.mode ?? 'Loading'}
         </T>
         {s?.expiresAt && <T>Expires: {new Date(s.expiresAt).toLocaleString()}</T>}
         {!s?.configured && <Notice>Add Dhan credentials to the backend environment.</Notice>}
@@ -54,10 +63,27 @@ export function DhanScreen() {
       </Section>
       <Section title="Instrument catalog">
         <T>Status: {c.status ?? 'Loading'}</T>
+        {c.status === 'SYNCING' && (
+          <Notice>
+            Sync is running in the background. You can keep using the app; progress updates automatically.
+          </Notice>
+        )}
         <T>Last success: {c.lastSuccessAt ? new Date(c.lastSuccessAt).toLocaleString() : 'Not yet synced'}</T>
         <T>
           Fresh quotes: {f.freshQuotes ?? 0} / {f.instruments ?? 0}
         </T>
+        {(['domestic', 'global'] as const).map(
+          (key) =>
+            f[key] && (
+              <Section key={key} title={`${key === 'domestic' ? 'Domestic' : 'Global'} feed`}>
+                <T>
+                  {f[key].connected ? 'Connected' : 'Waiting for connection'} · {f[key].subscriptions} instruments
+                </T>
+                {f[key].lastTickAt && <T>Last price received: {new Date(f[key].lastTickAt).toLocaleString()}</T>}
+                {f[key].error && <Notice tone="err">{f[key].error}</Notice>}
+              </Section>
+            ),
+        )}
         {!!c.conflicts?.length && (
           <Notice tone="err">
             Contract identities requiring review: {c.conflicts.join(', ')}. Existing history is retained.
@@ -66,7 +92,12 @@ export function DhanScreen() {
         {c.error && <Notice tone="err">{c.error}</Notice>}
         {c.precisionNotice && <T>{c.precisionNotice}</T>}
         <T>Refreshes on startup and hourly. The last verified catalog is retained if a download fails.</T>
-        <Button title="Sync instruments now" busy={busy} onPress={() => void action(false)} />
+        <Button
+          title={c.status === 'SYNCING' ? 'Syncing instruments…' : 'Sync instruments now'}
+          busy={busy}
+          disabled={c.status === 'SYNCING' || !s}
+          onPress={() => void action(false)}
+        />
       </Section>
     </Screen>
   );

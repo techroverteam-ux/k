@@ -18,6 +18,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PolicyService } from '../policy/policy.service';
 import { OrdersService } from '../trading/orders.service';
 import { afterWipeFor } from '../wipe/visibility';
+import { PaymentEvidenceService } from '../payments/payment-evidence.service';
+import type { PaymentEvidenceInput } from '../payments/payment-evidence.types';
 
 /** Stored lower-case; sign-in ignores case. Letters, digits and _ . - @ #, starting with a letter. */
 /** "40" or "37.5" (percent, 0–100, up to 2 decimals) → basis points. Required for brokers. */
@@ -51,6 +53,7 @@ export class UsersService {
     private readonly market: MarketDataService,
     private readonly config: ConfigService,
     private readonly notifications: NotificationsService,
+    private readonly evidence: PaymentEvidenceService,
   ) {}
 
   async get(actor: Actor, userId: string, ip?: string) {
@@ -81,17 +84,20 @@ export class UsersService {
    * Maker step. Super Admin can create brokers and traders; a broker can create traders under itself.
    * New accounts start PENDING and must be approved by a (different) Super Admin.
    */
-  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; openingAmountMinor?: bigint | null }, ip: string) {
+  async create(actor: Actor, input: { username: string; displayName: string; role: Role; phone?: string; email?: string; brokerId?: string; tempPassword: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; openingAmountMinor?: bigint | null; payment?: PaymentEvidenceInput }, ip: string) {
     const username = input.username.trim().toLowerCase();
     if (!USERNAME_RE.test(username)) throw badInput('Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.');
     if (input.role === 'SUPER_ADMIN') throw forbidden('Super Admin accounts are provisioned by operations, not via the API.');
     if (actor.role === 'BROKER' && input.role !== 'TRADER') throw forbidden('Brokers can only create trader accounts.');
+    if (actor.role === 'BROKER' && !input.payment) throw badInput('Enter the trader’s payment details before sending the account for approval.');
+    if (input.payment && (input.role !== 'TRADER' || !input.openingAmountMinor || input.openingAmountMinor <= 0n)) throw badInput('Payment details require a trader opening amount.');
     const brokerId = actor.role === 'BROKER' ? actor.userId : input.role === 'TRADER' ? input.brokerId : undefined;
     const commissionShareBps = input.role === 'BROKER' && input.commissionPct?.trim() ? parseCommissionPct(input.commissionPct) : null;
     const commissionMiniMinor = input.role === 'BROKER' && input.commissionPerMiniLot?.trim() ? parseRupees(input.commissionPerMiniLot, 'Mini lot') : null;
     const commissionMegaMinor = input.role === 'BROKER' && input.commissionPerMegaLot?.trim() ? parseRupees(input.commissionPerMegaLot, 'Mega lot') : null;
     this.passwords.assertStrong(input.tempPassword, username);
-    const phone = input.phone ? normalizePhone(input.phone) : null;
+    if (actor.role === 'SUPER_ADMIN' && !input.phone?.trim()) throw badInput('Mobile number is required when creating an account.');
+    const phone = input.phone?.trim() ? normalizePhone(input.phone.trim()) : null;
     const email = input.email ? normalizeEmail(input.email) : null;
     const hash = await this.passwords.hash(input.tempPassword);
     return this.dbs.serializable(async (tx) => {
@@ -126,6 +132,7 @@ export class UsersService {
         })
         .returning();
       await this.ledger.cashAccount(tx, u.id, 'SIMULATED');
+      if (input.payment) await this.evidence.record(tx, actor, u.id, u.openingAmountMinor!, input.payment);
       await this.audit.record(tx, { actor, action: 'user.created', entityType: 'user', entityId: u.id, outcome: 'SUCCESS', ip, metadata: { username, role: input.role, brokerId, ...(commissionShareBps !== null ? { commissionShareBps } : {}), ...(u.openingAmountMinor ? { openingAmount: u.openingAmountMinor } : {}) } });
       if (actor.role === 'BROKER') {
         // The broker's request goes to the Super Admins: the new account, and the opening amount if one was asked for.
@@ -154,6 +161,23 @@ export class UsersService {
     });
   }
 
+  async reject(actor: Actor, userId: string, reason: string, ip: string) {
+    if (actor.role !== 'SUPER_ADMIN') throw forbidden();
+    const note = reason.trim();
+    if (note.length < 5 || note.length > 300) throw badInput('Give a rejection reason of 5–300 characters.');
+    return this.dbs.serializable(async (tx) => {
+      const [u] = await tx.select().from(users).where(eq(users.id, userId)).for('update');
+      if (!u || u.role !== 'TRADER') throw notFound('Trader');
+      if (u.status !== 'PENDING') throw conflict('Only a pending trader request can be rejected.');
+      const [r] = await tx.update(users).set({ status: 'REJECTED', rejectionReason: note, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
+      await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: 'account_rejected' }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+      await this.audit.record(tx, { actor, action: 'user.rejected', entityType: 'user', entityId: userId, outcome: 'SUCCESS', ip, metadata: { reason: note, createdBy: u.createdById } });
+      for (const id of new Set([u.brokerId, u.createdById].filter((id): id is string => !!id && id !== actor.userId)))
+        await this.notifications.notify(tx, id, 'user.rejected', 'Trader request rejected', `${u.username}: ${note}`);
+      return r;
+    });
+  }
+
   async setStatus(actor: Actor, userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED', reason: string, ip: string) {
     if (userId === actor.userId) throw forbidden('You cannot change your own status.');
     if (!reason || reason.trim().length < 5) throw badInput('Give a reason (min 5 characters).');
@@ -162,7 +186,7 @@ export class UsersService {
       if (!u) throw notFound('Account');
       if (u.role === 'SUPER_ADMIN') throw forbidden('Super Admin status is managed by operations.');
       if (actor.role !== 'SUPER_ADMIN' && !(actor.role === 'BROKER' && u.role === 'TRADER' && u.brokerId === actor.userId && u.resetDisabledAt && status === 'ACTIVE')) throw forbidden('Only the assigned broker can re-enable a reset-disabled trader.');
-      if (u.status === 'PENDING') throw badInput('Approve the account first.');
+      if (u.status === 'PENDING' || u.status === 'REJECTED') throw badInput('Only approved accounts can be enabled or disabled.');
       const [r] = await tx.update(users).set({ status, updatedAt: new Date(), ...(status === 'ACTIVE' && u.resetDisabledAt ? { resetDisabledAt: null, dataSince: sql`now()`, riskState: 'OK' } : {}) }).where(eq(users.id, userId)).returning();
       if (status !== 'ACTIVE') {
         await tx.update(sessions).set({ revokedAt: new Date(), revokedReason: `account_${status.toLowerCase()}` }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));

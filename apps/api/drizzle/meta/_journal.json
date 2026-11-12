@@ -197,6 +197,20 @@
       "when": 1794479694207,
       "tag": "0027_dhan_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1794497000000,
+      "tag": "0028_trader_rejection",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1794497000001,
+      "tag": "0029_payment_evidence",
+      "breakpoints": true
     }
   ]
 }

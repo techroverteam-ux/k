@@ -9,7 +9,7 @@ import {
   CatalogInstrument,
   DOMESTIC_MASTER,
   GLOBAL_MASTER,
-  parseCatalog,
+  readCatalog,
   sameContract,
   supportedTick,
 } from './dhan-catalog';
@@ -26,6 +26,7 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private lastVerifiedAt = 0;
   private pending?: Promise<any>;
+  private startedAt?: string;
   private stopped = false;
   private listeners: Array<() => Promise<void>> = [];
   private readonly log = new Logger('DhanCatalog');
@@ -33,7 +34,9 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
     private readonly dbs: DbService,
     @Optional() private readonly audit?: AuditService,
   ) {}
-  onModuleInit() {
+  async onModuleInit() {
+    const previous = await this.savedStatus();
+    this.lastVerifiedAt = previous.lastSuccessAt ? new Date(previous.lastSuccessAt).getTime() : 0;
     if (process.env.NODE_ENV !== 'test' && env().MARKET_FEED === 'dhan' && env().DHAN_CATALOG_SYNC === 'on')
       this.timer = setInterval(() => void this.sync().catch(() => undefined), 60 * 60_000);
   }
@@ -46,6 +49,10 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
     await this.pending?.catch(() => undefined);
   }
   async status() {
+    const saved = await this.savedStatus();
+    return this.pending ? { ...saved, status: 'SYNCING', startedAt: this.startedAt, error: undefined } : saved;
+  }
+  private async savedStatus() {
     return (
       (await this.dbs.db.select().from(integrationState).where(eq(integrationState.name, 'dhan.catalog')))[0]
         ?.value ?? { status: 'NOT_SYNCED' }
@@ -61,23 +68,53 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
   sync() {
     if (this.stopped) return Promise.resolve({ status: 'STOPPED' });
     if (this.pending) return this.pending;
-    this.pending = this.perform().finally(() => {
-      this.pending = undefined;
-    });
+    this.startedAt = new Date().toISOString();
+    this.pending = Promise.resolve()
+      .then(() => this.perform())
+      .finally(() => {
+        this.pending = undefined;
+        this.startedAt = undefined;
+      });
     return this.pending;
+  }
+  startSync() {
+    if (this.stopped) return { status: 'STOPPED' };
+    void this.sync().catch(() =>
+      this.log.error('Could not save the catalog refresh result. Check database availability.'),
+    );
+    return { status: 'SYNCING', startedAt: this.startedAt };
   }
   private async perform() {
     try {
-      const download = async (url: string) => {
-        const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
-        if (!r.ok) throw Error('Official catalog unavailable');
-        return r.text();
-      };
-      const [domestic, global] = await Promise.all([download(DOMESTIC_MASTER), download(GLOBAL_MASTER)]);
-      const d = parseCatalog(domestic),
-        g = parseCatalog(global, true);
-      if (d.length < 1000 || g.length < 100) throw Error('Incomplete catalog rejected; previous catalog retained');
+      this.log.log('Refreshing official Dhan instrument catalogs.');
       const now = new Date();
+      const wanted = (r: CatalogInstrument) =>
+        supportedTick(r.tickMinor) &&
+        (!r.expiry || r.expiry > now) &&
+        (r.dhanSegment === 'INX_EQ'
+          ? GLOBAL.has(r.symbol)
+          : r.dhanSegment === 'MCX_COMM'
+            ? r.segment === 'COMM' && !!r.expiry
+            : r.dhanSegment === 'IDX_I'
+              ? ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].includes(r.symbol)
+              : r.dhanSegment === 'NSE_EQ'
+                ? STOCKS.has(r.symbol)
+                : r.dhanSegment === 'NSE_FNO'
+                  ? (r.segment === 'FUT' && STOCKS.has(base(r.symbol))) ||
+                    (r.segment === 'OPT' && ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].includes(base(r.symbol)))
+                  : r.dhanSegment === 'NSE_CURRENCY'
+                    ? ['USDINR', 'EURINR', 'GBPINR', 'JPYINR'].includes(base(r.symbol))
+                    : false);
+      const download = async (url: string, global: boolean) => {
+        const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+        return readCatalog(r, global, wanted);
+      };
+      const domestic = await download(DOMESTIC_MASTER, false);
+      const global = await download(GLOBAL_MASTER, true);
+      const d = domestic.rows,
+        g = global.rows;
+      if (domestic.count < 1000 || global.count < 100)
+        throw Error('Incomplete catalog rejected; previous catalog retained');
       const optionExpiry = new Map<string, number>();
       for (const r of d)
         if (
@@ -89,25 +126,9 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
         )
           optionExpiry.set(base(r.symbol), Math.min(optionExpiry.get(base(r.symbol)) ?? Infinity, r.expiry.getTime()));
       const candidates = [...d, ...g].filter(
-        (r) =>
-          supportedTick(r.tickMinor) &&
-          (!r.expiry || r.expiry > now) &&
-          (r.dhanSegment === 'INX_EQ'
-            ? GLOBAL.has(r.symbol)
-            : r.dhanSegment === 'MCX_COMM'
-              ? r.segment === 'COMM' && !!r.expiry
-              : r.dhanSegment === 'IDX_I'
-                ? ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].includes(r.symbol)
-                : r.dhanSegment === 'NSE_EQ'
-                  ? STOCKS.has(r.symbol)
-                  : r.dhanSegment === 'NSE_FNO'
-                    ? (r.segment === 'FUT' && STOCKS.has(base(r.symbol))) ||
-                      (r.segment === 'OPT' && r.expiry?.getTime() === optionExpiry.get(base(r.symbol)))
-                    : r.dhanSegment === 'NSE_CURRENCY'
-                      ? ['USDINR', 'EURINR', 'GBPINR', 'JPYINR'].includes(base(r.symbol))
-                      : false),
+        (r) => r.segment !== 'OPT' || r.expiry?.getTime() === optionExpiry.get(base(r.symbol)),
       );
-      const previous = await this.status();
+      const previous = await this.savedStatus();
       if (candidates.length > 4500) throw Error('Catalog exceeds the single-feed subscription budget');
       if (previous.supported && candidates.length < Number(previous.supported) * 0.75)
         throw Error('Unexpected catalog shrink rejected');
@@ -245,12 +266,15 @@ export class DhanCatalogService implements OnModuleInit, OnModuleDestroy {
       });
       this.lastVerifiedAt = now.getTime();
       for (const fn of this.listeners) await fn();
+      this.log.log(
+        `Dhan catalog refreshed: ${report.available} available, ${report.inserted} inserted, ${report.updated} updated, ${report.retired} retired.`,
+      );
       return report;
     } catch (e) {
       this.log.warn(
         `Catalog refresh failed (${(e as any)?.cause?.code ?? (e as Error)?.message?.slice(0, 140)}); keeping the last catalog.`,
       );
-      const previous = await this.status();
+      const previous = await this.savedStatus();
       this.lastVerifiedAt = previous.lastSuccessAt ? new Date(previous.lastSuccessAt).getTime() : 0;
       const result = {
         ...previous,

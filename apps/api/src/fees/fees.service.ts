@@ -18,7 +18,7 @@ const MAX_FEE_MINOR = 10_000_000n * 100n; // ₹1 crore
 const A_ACC = 'payee_accounts.account_number', A_UPI = 'payee_accounts.upi_id', A_UTR = 'fee_payments.utr';
 const tail = (v?: string | null) => (v ? `…${v.slice(-4)}` : undefined);
 /** Payee row with account number / UPI ID decrypted (stored encrypted at rest). */
-const openPayee = <P extends { accountNumber: string | null; upiId: string | null }>(p: P): P => ({ ...p, accountNumber: openOpt(p.accountNumber, A_ACC), upiId: openOpt(p.upiId, A_UPI) });
+export const openPayee = <P extends { accountNumber: string | null; upiId: string | null }>(p: P): P => ({ ...p, accountNumber: openOpt(p.accountNumber, A_ACC), upiId: openOpt(p.upiId, A_UPI) });
 const openFee = <F extends { utr: string }>(f: F): F => ({ ...f, utr: openOpt(f.utr, A_UTR) ?? '' });
 
 const A_PROOF = 'fee_payment_proofs.data';
@@ -75,14 +75,15 @@ export class FeesService {
       if (!ACCOUNT_RE.test(accountNumber)) throw badInput('Account number: 9–18 digits.');
       if (!IFSC_RE.test(ifsc)) throw badInput('IFSC: 11 characters, like HDFC0001234.');
       const bankName = clean(i.bankName), branch = clean(i.branch);
-      if (bankName && (bankName.length < 2 || bankName.length > 120 || !name.test(bankName))) throw badInput('Bank name: 2-120 characters, with no numbers.');
-      if (branch && (branch.length < 2 || branch.length > 60 || !name.test(branch))) throw badInput('Branch: 2-60 characters, with no numbers.');
+      if (bankName.length < 2 || bankName.length > 120 || !name.test(bankName)) throw badInput('Bank name: 2-120 characters, with no numbers.');
+      if (branch.length < 2 || branch.length > 60 || !name.test(branch)) throw badInput('Branch: 2-60 characters, with no numbers.');
       Object.assign(row, { accountNumber: sealOpt(accountNumber, A_ACC), ifsc, bankName: clean(i.bankName).slice(0, 120) || null, branch: branch || null });
-    } else if (i.kind === 'UPI') {
+    } else if (i.kind !== 'UPI') throw badInput('Choose bank account or UPI.');
+    if (i.kind === 'UPI' || clean(i.upiId)) {
       const upiId = clean(i.upiId).toLowerCase();
       if (!UPI_RE.test(upiId)) throw badInput('UPI ID looks like name@bank.');
       row.upiId = sealOpt(upiId, A_UPI);
-    } else throw badInput('Choose bank account or UPI.');
+    }
     return this.dbs.db.transaction(async (tx) => {
       const p = openPayee((await tx.insert(payeeAccounts).values(row).returning())[0]);
       await this.audit.record(tx, { actor, action: 'fees.payee_added', entityType: 'payee_account', entityId: p.id, outcome: 'SUCCESS', ip, metadata: { kind: p.kind, label: p.label, accountTail: tail(p.accountNumber), ifsc: p.ifsc, upiTail: tail(p.upiId) } });

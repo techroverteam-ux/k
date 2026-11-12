@@ -1,5 +1,6 @@
 import { Field, Float, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import { formatMoney } from './money';
+import { PaymentEvidence } from '../payments/payment-evidence.types';
 
 /**
  * Money is exposed as a decimal STRING in rupees (e.g. "6364.50") — never a float.
@@ -210,6 +211,7 @@ export class LedgerLine {
 
 @ObjectType()
 export class PaymentRequest {
+  @Field(() => PaymentEvidence, { nullable: true }) paymentEvidence?: PaymentEvidence;
   @Field({ nullable: true }) requestedByName?: string;
   @Field({ nullable: true }) reviewedByName?: string;
   @Field({ nullable: true }) externalRef?: string;

@@ -26,15 +26,16 @@ export default function Fees() {
         <View key={p.id} style={{ borderWidth: 1, borderColor: t.line, borderRadius: 16, padding: S[4], gap: S[2] }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><T w="700">{p.label}</T><Badge text={p.kind === 'UPI' ? 'UPI' : 'Bank transfer'} /></View>
           <Line k="Name" v={p.accountName} />
-          {p.kind === 'BANK' ? (<><Line k="Account number" v={p.accountNumber} /><Line k="IFSC" v={p.ifsc} /><Line k="Bank" v={[p.bankName, p.branch].filter(Boolean).join(', ') || undefined} /></>) : <Line k="UPI ID" v={p.upiId} />}
-          {p.kind === 'UPI' && p.upiId && (
+          {p.accountNumber && <><Line k="Account number" v={p.accountNumber} /><Line k="IFSC" v={p.ifsc} /><Line k="Bank" v={p.bankName} /><Line k="Branch" v={p.branch} /></>}
+          {p.upiId && <Line k="UPI ID" v={p.upiId} />}
+          {p.upiId && (
             <View style={{ alignItems: 'center', gap: S[2], paddingVertical: S[2] }}>
               <View style={{ padding: 8, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: t.line }}><QR value={upiLink(p.upiId, p.accountName)} size={200} /></View>
               <T v="sm" c="text2">Scan with any UPI app: GPay, PhonePe, Paytm, BHIM</T>
             </View>
           )}
           <View style={{ flexDirection: 'row', gap: S[2], marginTop: S[2] }}>
-            {p.kind === 'UPI' && <View style={{ flex: 1 }}><Button block title="Pay with UPI app" onPress={() => { void Linking.openURL(upiLink(p.upiId!, p.accountName)).catch(() => toast('No UPI app found on this phone', true)); }} /></View>}
+            {p.upiId && <View style={{ flex: 1 }}><Button block title="Pay with UPI app" onPress={() => { void Linking.openURL(upiLink(p.upiId!, p.accountName)).catch(() => toast('No UPI app found on this phone', true)); }} /></View>}
             <View style={{ flex: 1 }}><Button block kind="primary" title="I’ve paid" onPress={() => setForm(p)} /></View>
           </View>
         </View>

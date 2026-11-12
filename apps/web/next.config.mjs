@@ -20,6 +20,8 @@ const csp = [
 
 export default {
   reactStrictMode: true,
+  // Bound build workers on laptops and small hosted builders.
+  experimental: { cpus: 2 },
   poweredByHeader: false,
   env: { NEXT_PUBLIC_APP_VERSION: pkg.version },
   async headers() {

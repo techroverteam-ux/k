@@ -21,5 +21,5 @@ export function QR({ value, size = 200 }: { value: string; size?: number }) {
 }
 
 /** Standard UPI payment link (NPCI): any UPI app can open or scan it. */
-export const upiLink = (upiId: string, name: string, note = 'Course fee') =>
+export const upiLink = (upiId: string, name: string, note = 'Payment') =>
   `upi://pay?pa=${encodeURIComponent(upiId).replace(/%40/g, '@')}&pn=${encodeURIComponent(name)}&cu=INR&tn=${encodeURIComponent(note)}`;

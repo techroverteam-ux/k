@@ -9,6 +9,7 @@ import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
 import { Private, usePrefs } from '@/lib/prefs';
 import { Change, Confirm, Dialog, Empty, ErrorState, Mark, Metrics, SkeletonRows, Status, useToast } from './ui';
+import { EVIDENCE_FIELDS, newPaymentDraft, paymentError, paymentInput, PaymentReferenceFields, ReceivingAccountPicker, PaymentEvidenceDetails, type PaymentEvidence } from './payment-details';
 
 export interface DepthLevel {
   bidQty: number;
@@ -193,10 +194,11 @@ export function useSummary(userId?: string) {
 }
 
 /** Portfolio header: one big number, supporting metrics in a divided strip. */
-export function PortfolioSummary({ userId, actions, title = 'Available to trade', compact, detail }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean }) {
+export function PortfolioSummary({ userId, actions, title = 'Available to trade', compact, detail, addScript }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean; addScript?: boolean }) {
   const { data, loading, error, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const showFees = useAuth().me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
+  const scriptAction = addScript || (!showFees && !userId);
   if (compact) {
     if (loading && !data) return <div className="panel bal-card"><div className="skeleton" style={{ width: 120, height: 12 }} /><div className="skeleton" style={{ width: 180, height: 26, marginTop: 8 }} /></div>;
     if (error && !data) return <ErrorState error={error} retry={refetch} />;
@@ -221,9 +223,10 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
           )}
         </div>
         {actions && (
-          <div className="row" style={{ gap: 8 }}>
+          <div className={scriptAction ? 'trader-actions' : 'row'} style={{ gap: 8 }}>
             <button className="btn btn-sm" onClick={() => setPay('WITHDRAWAL')}>Withdraw</button>
-            <button className="btn btn-sm btn-primary" onClick={() => setPay('DEPOSIT')}><Icon name="plus" size={16} />Add funds</button>
+            {scriptAction && <Link className="btn btn-sm" href="/trader/add-script">Add script</Link>}
+            <button className="btn btn-sm btn-primary" onClick={() => setPay('DEPOSIT')}>{!scriptAction && <Icon name="plus" size={16} />}Add funds</button>
           </div>
         )}
         {pay && <PaymentDialog type={pay} userId={userId} onClose={() => setPay(null)} onDone={refetch} available={c.available} />}
@@ -247,9 +250,10 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
           {actions && <div className="sub t3">Deposits <span className="num pos"><Private>₹{inr(s.deposits)}</Private></span> · Withdrawals <span className="num neg"><Private>₹{inr(s.withdrawals)}</Private></span></div>}
         </div>
         {actions && (
-          <div className="row">
+          <div className={scriptAction ? 'trader-actions' : 'row'}>
             <button className="btn" onClick={() => setPay('WITHDRAWAL')}>Withdraw</button>
-            <button className="btn btn-primary" onClick={() => setPay('DEPOSIT')}><Icon name="plus" size={18} />Add funds</button>
+            {scriptAction && <Link className="btn" href="/trader/add-script">Add script</Link>}
+            <button className="btn btn-primary" onClick={() => setPay('DEPOSIT')}>{!scriptAction && <Icon name="plus" size={18} />}Add funds</button>
           </div>
         )}
       </div>
@@ -270,24 +274,32 @@ export function PortfolioSummary({ userId, actions, title = 'Available to trade'
 export function PaymentDialog({ type, userId, onClose, onDone, available }: { type: 'DEPOSIT' | 'WITHDRAWAL'; userId?: string; onClose: () => void; onDone?: () => void; available?: string }) {
   const [amount, setAmount] = useState('');
   const [touched, setTouched] = useState(false);
-  const [review, setReview] = useState(false);
-  const key = useMemo(newKey, [amount]);
+  const [step, setStep] = useState(0);
+  const [payment, setPayment] = useState(newPaymentDraft);
+  const [proofBusy, setProofBusy] = useState(false);
+  const [paymentErr, setPaymentErr] = useState('');
+  const key = useMemo(newKey, [amount, payment.utr, payment.payeeAccountId]);
   const toast = useToast();
   const m = useMutation(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id status } }`);
   const { settings, me } = useAuth();
   const sole = useSoleAdmin() && me?.role === 'SUPER_ADMIN';
+  const needsPayment = type === 'DEPOSIT' && me?.role !== 'SUPER_ADMIN';
+  const review = step === (needsPayment ? 3 : 1);
   const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
   const minLabel = `₹${inr(String(min), { decimals: false })}`;
   const fmtOk = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
   const under = type === 'DEPOSIT' && fmtOk && Number(amount) < min;
   const over = type === 'WITHDRAWAL' && available !== undefined && fmtOk && Number(amount) > Number(available);
   const invalid = touched && (!fmtOk || over || under);
-  return <Dialog title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={review ? 'Review your request' : 'Enter the amount you want to request.'} className="funds-dialog" onClose={onClose}>
+  return <Dialog title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={review ? 'Review your request' : needsPayment ? `Step ${step + 1} of 4 · ${['Amount', 'Super Admin receiving account', 'Payment reference'][step]}` : 'Enter the amount you want to request.'} className="funds-dialog" onClose={onClose}>
     <form className="funds-form" onSubmit={async (e) => {
       e.preventDefault(); setTouched(true);
       if (!fmtOk || over || under) return;
-      if (!review) { setReview(true); return; }
-      const r = await m.run({ i: { type, amount, idempotencyKey: key, userId } }) as { requestPayment: { id: string } } | null;
+      setPaymentErr('');
+      if (needsPayment && step === 1 && !payment.payeeAccountId) {setPaymentErr('Choose a receiving account.');return;}
+      if (needsPayment && step >= 2) {const err = paymentError(payment);if (err) {setPaymentErr(err);return;}}
+      if (!review) { if (!payment.payerName && me?.role === 'TRADER') setPayment({ ...payment, payerName: me.displayName });setStep(step + 1); return; }
+      const r = await m.run({ i: { type, amount, idempotencyKey: key, userId, payment: needsPayment ? paymentInput(payment) : undefined } }) as { requestPayment: { id: string } } | null;
       if (!r) return;
       if (sole) {
         try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: r.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
@@ -295,16 +307,20 @@ export function PaymentDialog({ type, userId, onClose, onDone, available }: { ty
       } else toast('Request sent for review');
       onDone?.(); onClose();
     }}>
-      {!review ? <>
+      {step === 0 && <>
         <div className="field"><label htmlFor="amt">Amount (INR)</label>
           <div className="funds-amount"><span aria-hidden>₹</span><input id="amt" className="input num" inputMode="decimal" autoComplete="off" maxLength={15} value={amount} aria-invalid={invalid} aria-describedby="amt-h" onBlur={() => setTouched(true)} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" /></div>
           <span id="amt-h" className={invalid ? 'err' : 'hint'}>{invalid ? over ? `You can withdraw up to ₹${inr(available)}` : under ? `Minimum to add is ${minLabel}` : 'Enter an amount with up to 2 decimals' : type === 'DEPOSIT' ? `Minimum ${minLabel}` : available ? `Available: ₹${inr(available)}` : 'Up to 2 decimal places'}</span>
         </div>
         {type === 'DEPOSIT' && <div className="funds-quick" aria-label="Quick amounts">{[min, min * 2, min * 4, min * 10].map(String).map((v) => <button type="button" className="chip" key={v} aria-pressed={amount === v} onClick={() => { setAmount(v); setTouched(true); }}>₹{inr(v, { decimals: false })}</button>)}</div>}
-      </> : <div className="funds-review"><span className="t2">{type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw'}</span><strong className="num">₹{inr(amount)}</strong><span className="badge">{sole ? 'Posts immediately' : 'Pending administrator approval'}</span></div>}
-      <p className="funds-note">{sole ? 'The amount posts to the ledger when you confirm.' : 'An administrator reviews your request before your trading balance changes.'}</p>
+      </>}
+      {needsPayment && step === 1 && <ReceivingAccountPicker value={payment.payeeAccountId} onChange={(id) => setPayment((p) => ({ ...p, payeeAccountId: id }))} />}
+      {needsPayment && step === 2 && <PaymentReferenceFields value={payment} onChange={setPayment} onBusyChange={setProofBusy} />}
+      {review && <div className="funds-review"><span className="t2">{type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw'}</span><strong className="num">₹{inr(amount)}</strong>{needsPayment && <><span>Payer: {payment.payerName}</span><span className="num">UTR: {payment.utr}</span><span>Paid on: {payment.paidOn}</span></>}<span className="badge">{sole ? 'Posts immediately' : 'Pending administrator approval'}</span></div>}
+      {(step === 0 || review) && <p className="funds-note">{sole ? 'The amount posts to the ledger when you confirm.' : 'An administrator reviews your request before your trading balance changes.'}</p>}
       {m.error && <div className="notice err" role="alert"><Icon name="alert" size={18} />{m.error}</div>}
-      <div className="actions"><button type="button" className="btn" disabled={m.pending} onClick={() => review ? setReview(false) : onClose()}>{review ? 'Back' : 'Cancel'}</button><button type="submit" className="btn btn-primary" disabled={m.pending}>{m.pending ? 'Sending...' : review ? 'Send request' : 'Review request'}</button></div>
+      {paymentErr && <div className="notice err" role="alert">{paymentErr}</div>}
+      <div className="actions"><button type="button" className="btn" disabled={m.pending || proofBusy} onClick={() => step ? setStep(step - 1) : onClose()}>{step ? 'Back' : 'Cancel'}</button><button type="submit" className="btn btn-primary" disabled={m.pending || proofBusy}>{m.pending ? 'Sending...' : review ? 'Send request' : needsPayment && step < 2 ? 'Next' : 'Review request'}</button></div>
     </form>
   </Dialog>;
 }
@@ -354,7 +370,7 @@ function groupByCategory<T extends { instrument: Instrument }>(items: T[]) {
  * mode "list" (dashboard / Watchlist page): the trader's scripts with an "Add script" button.
  * mode "add" (/trader/add-script): full-page search with market filters; add or remove scripts.
  */
-export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?: 'list' | 'add' }) {
+export function Watchlist({ compact, mode = 'list', showAddButton = true }: { compact?: boolean; mode?: 'list' | 'add'; showAddButton?: boolean }) {
   const { prefs } = usePrefs();
   const { data, loading, error, refetch } = useQuery<{ watchlist: WEntry[] }>(WL_Q, { l: 0 });
   const { data: countsData } = useQuery<{ instrumentCategoryCounts: { category: string; count: number }[] }>(CAT_COUNTS_Q);
@@ -431,6 +447,7 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
 
   const totalDisplayed = searching ? (hits?.length ?? 0) : entries.length;
 
+  if (!adding && data && !entries.length && !showAddButton) return null;
   if (!adding && data && !entries.length) return (
     <div className="wl-empty"><Link className="btn btn-primary" href="/trader/add-script"><Icon name="plus" size={18} />Add script</Link></div>
   );
@@ -440,7 +457,7 @@ export function Watchlist({ compact, mode = 'list' }: { compact?: boolean; mode?
       {!adding && (
         <div className="wl-head">
           <span className="w6">Watchlist <span className="t3 sm num">{entries.length}/50</span></span>
-          <Link className={`btn btn-sm btn-primary${entries.length >= 50 ? ' disabled' : ''}`} aria-disabled={entries.length >= 50} href="/trader/add-script"><Icon name="plus" size={16} />Add script</Link>
+          {showAddButton && <Link className={`btn btn-sm btn-primary${entries.length >= 50 ? ' disabled' : ''}`} aria-disabled={entries.length >= 50} href="/trader/add-script"><Icon name="plus" size={16} />Add script</Link>}
         </div>
       )}
       {adding && <>
@@ -904,5 +921,5 @@ export function LedgerTable({ userId }: { userId?: string }) {
   );
 }
 
-export interface Payment { requestedByName?: string; reviewedByName?: string; updatedAt?: string; reviewedAt?: string; reviewedById?: string; journalId?: string; externalRef?: string; id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; reviewNote?: string; createdAt: string; requestedById: string }
-export const PAYMENT_FIELDS = 'id userId username type mode amount status reviewNote createdAt updatedAt reviewedAt reviewedById journalId externalRef requestedById requestedByName reviewedByName';
+export interface Payment { paymentEvidence?: PaymentEvidence; requestedByName?: string; reviewedByName?: string; updatedAt?: string; reviewedAt?: string; reviewedById?: string; journalId?: string; externalRef?: string; id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; reviewNote?: string; createdAt: string; requestedById: string }
+export const PAYMENT_FIELDS = `id userId username type mode amount status reviewNote createdAt updatedAt reviewedAt reviewedById journalId externalRef requestedById requestedByName reviewedByName paymentEvidence { ${EVIDENCE_FIELDS} }`;

@@ -36,7 +36,16 @@ export default function MarketData() {
     try {
       const d = await gql<{ syncDhanCatalog: string }>(`mutation{ syncDhanCatalog }`);
       const r = JSON.parse(d.syncDhanCatalog);
-      toast(r.status === 'HEALTHY' ? 'Instrument catalog updated' : r.error, r.status !== 'HEALTHY');
+      toast(
+        r.status === 'SYNCING'
+          ? 'Instrument sync started. Progress updates automatically.'
+          : r.status === 'HEALTHY'
+            ? 'Instrument catalog updated'
+            : r.status === 'ATTENTION'
+              ? 'Catalog updated. Some existing contracts need review.'
+              : (r.error ?? 'Instrument sync could not start. Try again shortly.'),
+        !['SYNCING', 'HEALTHY'].includes(r.status),
+      );
       await q.refetch();
     } catch (e) {
       toast((e as Error).message, true);
@@ -47,11 +56,22 @@ export default function MarketData() {
   return (
     <div className="stack">
       <PageHead title="Market data" sub="Dhan authorization, live feed health and automatic instrument maintenance." />
-      {q.error && <ErrorState error={q.error} retry={q.refetch} />}
+      {q.error?.code === 'NETWORK' ? (
+        <div className="notice err" role="alert">
+          The app cannot reach the API right now. The connection details below may be outdated. Retrying automatically.
+          <div>
+            <button className="btn btn-sm" onClick={() => void q.refetch()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : (
+        q.error && <ErrorState error={q.error} retry={q.refetch} />
+      )}
       <section className="panel panel-pad stack">
         <h2>Dhan connection</h2>
         <p>
-          {s?.connected ? 'Authorized' : 'Not authorized'} ? {s?.mode ?? 'Loading'}
+          {s?.connected ? 'Authorized' : 'Not authorized'} · {s?.mode ?? 'Loading'}
         </p>
         {s?.expiresAt && <p>Authorization expires: {new Date(s.expiresAt).toLocaleString()}</p>}
         {!s?.configured && <p>Add Dhan client ID, API key, secret and redirect URL to the backend environment.</p>}
@@ -68,6 +88,11 @@ export default function MarketData() {
       <section className="panel panel-pad stack">
         <h2>Instrument catalog</h2>
         <p>Status: {catalog.status ?? 'Loading'}</p>
+        {catalog.status === 'SYNCING' && (
+          <div className="notice">
+            Sync is running in the background. You can keep using the app; this page updates automatically.
+          </div>
+        )}
         <p>
           Last successful sync:{' '}
           {catalog.lastSuccessAt ? new Date(catalog.lastSuccessAt).toLocaleString() : 'Not yet synced'}
@@ -76,6 +101,19 @@ export default function MarketData() {
           Fresh live quotes: {feed.freshQuotes ?? 0} / {feed.instruments ?? 0}. Closed or illiquid markets may have no
           fresh trades.
         </p>
+        {(['domestic', 'global'] as const).map(
+          (key) =>
+            feed[key] && (
+              <div className="stack" key={key}>
+                <p>
+                  {key === 'domestic' ? 'Domestic' : 'Global'} feed:{' '}
+                  {feed[key].connected ? 'Connected' : 'Waiting for connection'} · {feed[key].subscriptions} instruments
+                </p>
+                {feed[key].lastTickAt && <p>Last price received: {new Date(feed[key].lastTickAt).toLocaleString()}</p>}
+                {feed[key].error && <div className="notice err">{feed[key].error}</div>}
+              </div>
+            ),
+        )}
         {!!catalog.conflicts?.length && (
           <div className="notice err">
             These existing contract identities are in use or conflict with the official catalog and need review:{' '}
@@ -89,8 +127,8 @@ export default function MarketData() {
         </p>
         {catalog.precisionNotice && <p>{catalog.precisionNotice}</p>}
         <div>
-          <button className="btn" disabled={busy || !s} onClick={() => void sync()}>
-            Sync instruments now
+          <button className="btn" disabled={busy || !s || catalog.status === 'SYNCING'} onClick={() => void sync()}>
+            {catalog.status === 'SYNCING' ? 'Syncing instruments…' : 'Sync instruments now'}
           </button>
         </div>
       </section>

@@ -1,4 +1,7 @@
-import { IsEnum, IsOptional, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID, Matches, MaxLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { PaymentEvidenceService } from './payment-evidence.service';
+import { PaymentEvidence, PaymentEvidenceInput } from './payment-evidence.types';
 import { RX } from '../common/validation';
 import { Args, Field, ID, InputType, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { inArray } from 'drizzle-orm';
@@ -14,6 +17,7 @@ import { PaymentsService } from './payments.service';
 
 @InputType()
 class PaymentRequestInput {
+  @Field(() => PaymentEvidenceInput, { nullable: true }) @IsOptional() @ValidateNested() @Type(() => PaymentEvidenceInput) payment?: PaymentEvidenceInput;
   @Field(() => PaymentTypeGql) @IsEnum(PaymentTypeGql) type: PaymentTypeGql;
   @Field({ description: 'Decimal rupees, e.g. "10000.00"' }) @Matches(RX.money, { message: 'Enter an amount with up to 2 decimals.' }) amount: string;
   @Field({ description: 'Client-generated unique key; retries are safe.' }) @Matches(RX.idempotencyKey, { message: 'Invalid idempotency key.' }) idempotencyKey: string;
@@ -26,6 +30,7 @@ export class PaymentsResolver {
   constructor(
     private readonly payments: PaymentsService,
     private readonly dbs: DbService,
+    private readonly evidence: PaymentEvidenceService,
   ) {}
 
   private async withNames(rows: Awaited<ReturnType<PaymentsService['list']>>) {
@@ -33,7 +38,20 @@ export class PaymentsResolver {
     const names = ids.length ? await this.dbs.db.select({ id: users.id, username: users.username, displayName: users.displayName }).from(users).where(inArray(users.id, ids)) : [];
     const map = new Map(names.map((n) => [n.id, n.username]));
     const display = new Map(names.map((n) => [n.id, `${n.displayName} (${n.username})`]));
-    return rows.map((r) => ({ ...toPayment(r, map.get(r.userId)), requestedByName: display.get(r.requestedById), reviewedByName: r.reviewedById ? display.get(r.reviewedById) : undefined }));
+    const evidence = new Map((await this.evidence.forRequests(rows.map((r) => r.id))).map((e) => [e.paymentRequestId, e]));
+    return rows.map((r) => ({ ...toPayment(r, map.get(r.userId)), paymentEvidence: evidence.get(r.id), requestedByName: display.get(r.requestedById), reviewedByName: r.reviewedById ? display.get(r.reviewedById) : undefined }));
+  }
+
+  @Roles('SUPER_ADMIN', 'BROKER', 'TRADER')
+  @Query(() => PaymentEvidence, { nullable: true })
+  openingPayment(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) userId: string) {
+    return this.evidence.opening(a, userId);
+  }
+
+  @Roles('SUPER_ADMIN', 'BROKER', 'TRADER')
+  @Query(() => String)
+  paymentEvidenceProof(@CurrentActor() a: Actor, @Args('id', { type: () => ID }) id: string, @Ctx() c: GqlContext) {
+    return this.evidence.proof(a, id, c.ip);
   }
 
   @Mutation(() => PaymentRequest)

@@ -35,6 +35,7 @@ import { env } from './config/env';
 import { DbModule, DbService } from './db/db';
 import { LedgerService } from './ledger/ledger.service';
 import { MarketDataService } from './market/market-data.service';
+import { PaymentEvidenceService } from './payments/payment-evidence.service';
 import { MarketResolver } from './market/market.resolver';
 import { AlgoResolver } from './algo/algo.resolver';
 import { AlgoRunnerService } from './algo/algo-runner.service';
@@ -222,6 +223,7 @@ function formatError(f: GraphQLFormattedError, err: unknown): GraphQLFormattedEr
     PositionFieldsResolver,
     PaymentsResolver,
     PaymentsService,
+    PaymentEvidenceService,
     UsersResolver,
     UsersService,
     AdminResolver,

@@ -37,30 +37,37 @@ export function segmentFor(exchange: string, segment: string) {
   if (exchange === 'MCX') return 'MCX_COMM';
   return ({ E: exchange + '_EQ', D: exchange + '_FNO', C: exchange + '_CURRENCY' } as Record<string, string>)[segment];
 }
-export function parseCatalog(text: string, global = false): CatalogInstrument[] {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
-  const h = csvFields(lines.shift() ?? '');
-  const required = global
-    ? ['SYMBOL', 'SCRIP_CODE', 'LOT_SIZE', 'TICK_SIZE']
-    : [
-        'SEM_TRADING_SYMBOL',
-        'SEM_SMST_SECURITY_ID',
-        'SEM_EXM_EXCH_ID',
-        'SEM_SEGMENT',
-        'SEM_LOT_UNITS',
-        'SEM_TICK_SIZE',
-        'SEM_EXPIRY_DATE',
-      ];
-  if (required.some((k) => !h.includes(k))) throw new Error('Instrument catalog headers changed');
-  const result: CatalogInstrument[] = [];
-  const seen = new Map<string, string>();
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const f = csvFields(line);
+class CatalogReader {
+  private readonly seen = new Map<string, string>();
+  count = 0;
+  private readonly h: string[];
+  constructor(
+    header: string,
+    private readonly global: boolean,
+  ) {
+    const h = (this.h = csvFields(header.replace(/^\uFEFF/, '').replace(/\r$/, '')));
+    const required = global
+      ? ['SYMBOL', 'SCRIP_CODE', 'LOT_SIZE', 'TICK_SIZE']
+      : [
+          'SEM_TRADING_SYMBOL',
+          'SEM_SMST_SECURITY_ID',
+          'SEM_EXM_EXCH_ID',
+          'SEM_SEGMENT',
+          'SEM_LOT_UNITS',
+          'SEM_TICK_SIZE',
+          'SEM_EXPIRY_DATE',
+        ];
+    if (required.some((k) => !h.includes(k))) throw new Error('Instrument catalog headers changed');
+  }
+  read(line: string): CatalogInstrument | undefined {
+    if (!line.trim()) return;
+    const { h, global, seen } = this;
+    const f = csvFields(line.replace(/\r$/, ''));
+    if (f.length !== h.length) throw new Error('Incomplete instrument catalog row');
     const get = (k: string) => f[h.indexOf(k)] ?? '';
     const ex = global ? '' : get('SEM_EXM_EXCH_ID');
     const seg = global ? 'INX_EQ' : segmentFor(ex, get('SEM_SEGMENT'));
-    if (!seg) continue;
+    if (!seg) return;
     const symbol = get(global ? 'SYMBOL' : 'SEM_TRADING_SYMBOL');
     const id = get(global ? 'SCRIP_CODE' : 'SEM_SMST_SECURITY_ID');
     if (!symbol || !/^\d+$/.test(id)) throw new Error('Invalid instrument identity');
@@ -73,13 +80,14 @@ export function parseCatalog(text: string, global = false): CatalogInstrument[] 
     const lot = Number(get(global ? 'LOT_SIZE' : 'SEM_LOT_UNITS'));
     const tick = Number(get(global ? 'TICK_SIZE' : 'SEM_TICK_SIZE')) * (global || seg === 'IDX_I' ? 100 : 1);
     // Current price precision is integer paise. Never silently round a finer tick.
-    if (!Number.isFinite(tick) || tick <= 0 || !Number.isInteger(lot) || lot < 1) continue;
+    if (!Number.isFinite(tick) || tick <= 0 || !Number.isInteger(lot) || lot < 1) return;
     const key = seg + ':' + id;
     const previous = seen.get(key);
     if (previous && previous !== symbol) throw new Error('Conflicting catalog identity');
     seen.set(key, symbol);
-    if (previous) continue;
-    result.push({
+    if (previous) return;
+    this.count++;
+    return {
       symbol,
       name: get(global ? 'CUSTOM_SYMBOL' : 'SEM_CUSTOM_SYMBOL') || symbol,
       exchange: global
@@ -107,9 +115,61 @@ export function parseCatalog(text: string, global = false): CatalogInstrument[] 
       expiry,
       lotSize: lot,
       tickMinor: Math.abs(tick - Math.round(tick)) < 1e-6 ? Math.round(tick) : tick,
-    });
+    };
+  }
+}
+export function parseCatalog(text: string, global = false): CatalogInstrument[] {
+  const lines = text.split(/\r?\n/);
+  const reader = new CatalogReader(lines.shift() ?? '', global);
+  const result: CatalogInstrument[] = [];
+  for (const line of lines) {
+    const row = reader.read(line);
+    if (row) result.push(row);
   }
   return result;
+}
+
+/** Keep only supported contracts, without buffering the entire 200,000-row master. */
+export async function readCatalog(response: Response, global: boolean, keep: (row: CatalogInstrument) => boolean) {
+  if (!response.ok || !response.body) throw new Error(`Official catalog download failed (HTTP ${response.status})`);
+  const body = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let reader: CatalogReader | undefined;
+  let pending = '',
+    bytes = 0,
+    processed = 0;
+  const rows: CatalogInstrument[] = [];
+  const line = (value: string) => {
+    if (value.length > 16_384) throw new Error('Instrument catalog row too large');
+    if (!reader) reader = new CatalogReader(value, global);
+    else {
+      const row = reader.read(value);
+      if (row && keep(row)) rows.push(row);
+    }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await body.read();
+      if (value) bytes += value.byteLength;
+      if (bytes > 150 * 1024 * 1024) throw new Error('Instrument catalog download too large');
+      pending += decoder.decode(value, { stream: !done });
+      let end: number;
+      while ((end = pending.indexOf('\n')) >= 0) {
+        line(pending.slice(0, end));
+        pending = pending.slice(end + 1);
+        // Give HTTP requests and live-feed processing time on the same Node event loop.
+        if (++processed % 1000 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (pending.length > 16_384) throw new Error('Instrument catalog row too large');
+      if (done) break;
+    }
+    if (pending) line(pending);
+    if (!reader) throw new Error('Empty instrument catalog');
+    return { rows, count: reader.count };
+  } finally {
+    await body.cancel().catch(() => undefined);
+    body.releaseLock();
+  }
 }
 export function supportedTick(tick: number) {
   return Number.isInteger(tick) && tick >= 1;

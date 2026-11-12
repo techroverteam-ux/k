@@ -1,13 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { soleAdminMayApprove } from '../common/maker-checker';
-import { and, desc, eq, gte, lt, ilike, or, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, ilike, or, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { Actor } from '../common/context';
 import { AppError, badInput, conflict, forbidden, notFound } from '../common/errors';
 import { formatMoney } from '../common/money';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config-mgmt/config.service';
 import { DbService } from '../db/db';
-import { paymentRequests, users, type PaymentRow } from '../db/schema';
+import { paymentEvidence, paymentRequests, users, type PaymentRow } from '../db/schema';
+import { PaymentEvidenceService } from './payment-evidence.service';
+import type { PaymentEvidenceInput } from './payment-evidence.types';
 import { LedgerService } from '../ledger/ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PolicyService } from '../policy/policy.service';
@@ -36,9 +38,10 @@ export class PaymentsService {
     private readonly policy: PolicyService,
     private readonly notifications: NotificationsService,
     private readonly orders: OrdersService,
+    private readonly evidence: PaymentEvidenceService,
   ) {}
 
-  async request(actor: Actor, input: { userId?: string; type: 'DEPOSIT' | 'WITHDRAWAL'; amountMinor: bigint; idempotencyKey: string; note?: string }, ip: string) {
+  async request(actor: Actor, input: { userId?: string; type: 'DEPOSIT' | 'WITHDRAWAL'; amountMinor: bigint; idempotencyKey: string; note?: string; payment?: PaymentEvidenceInput }, ip: string) {
     const userId = input.userId ?? actor.userId;
     if (actor.role === 'BROKER') {
       if (userId === actor.userId) throw forbidden('Brokers submit requests on behalf of their traders.');
@@ -47,6 +50,8 @@ export class PaymentsService {
     await this.policy.assertCanAccessUser(actor, userId, ip);
     if (!/^[A-Za-z0-9_-]{8,120}$/.test(input.idempotencyKey)) throw badInput('Invalid idempotency key.');
     await this.assertAmount(input.type, input.amountMinor);
+    if (input.type === 'DEPOSIT' && actor.role !== 'SUPER_ADMIN' && !input.payment) throw badInput('Enter the receiving account, UTR, payer name and payment date.');
+    if (input.type !== 'DEPOSIT' && input.payment) throw badInput('Payment evidence is only accepted for deposits.');
 
     return this.dbs.serializable(async (tx) => {
       const [dup] = await tx
@@ -55,6 +60,7 @@ export class PaymentsService {
         .where(and(eq(paymentRequests.requestedById, actor.userId), eq(paymentRequests.idempotencyKey, input.idempotencyKey)));
       if (dup) {
         if (dup.userId !== userId || dup.amountMinor !== input.amountMinor || dup.type !== input.type) throw conflict('Idempotency key reused with different details.');
+        await this.evidence.assertReplay(tx, dup.id, input.payment);
         return dup;
       }
       const [u] = await tx.select().from(users).where(eq(users.id, userId));
@@ -72,6 +78,7 @@ export class PaymentsService {
         .insert(paymentRequests)
         .values({ userId, type: input.type, mode: u.mode, amountMinor: input.amountMinor, idempotencyKey: input.idempotencyKey, requestedById: actor.userId, reviewNote: input.note?.slice(0, 500), requestedIp: requestContext.get()?.ip ?? ip, requestedUserAgent: requestContext.get()?.userAgent, requestedSessionId: actor.sessionId, requestId: requestContext.get()?.requestId })
         .returning();
+      if (input.payment) await this.evidence.record(tx, actor, userId, input.amountMinor, input.payment, p.id);
       await this.audit.record(tx, { actor, action: `payment.${input.type.toLowerCase()}_requested`, entityType: 'payment', entityId: p.id, outcome: 'SUCCESS', ip, metadata: { userId, amount: input.amountMinor, mode: u.mode } });
       const admins = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, 'SUPER_ADMIN'), eq(users.status, 'ACTIVE')));
       for (const a of admins) {
@@ -110,6 +117,7 @@ export class PaymentsService {
         .returning();
       await this.audit.record(tx, { actor, action: 'payment.deposit_requested', entityType: 'payment', entityId: p.id, outcome: 'SUCCESS', ip, metadata: { userId: u.id, amount: u.openingAmountMinor, mode: u.mode, opening: true, requestedBy: requestedById } });
     }
+    await tx.update(paymentEvidence).set({ paymentRequestId: p.id }).where(and(eq(paymentEvidence.userId, u.id), eq(paymentEvidence.purpose, 'OPENING'), isNull(paymentEvidence.paymentRequestId)));
     return this.approveTx(tx, actor, p.id, 'Opening amount, credited on account approval', ip);
   }
 

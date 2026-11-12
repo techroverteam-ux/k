@@ -920,6 +920,17 @@ tr.clickable { cursor: pointer; }
 .payee-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .payee-fields .field { min-width: 0; }
 .payee-dialog .actions { margin-top: 0; }
+.trader-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: min(100%, 420px); }
+.trader-actions .btn { min-width: 0; padding-inline: 8px; white-space: nowrap; }
+.payment-destination { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.payment-destination-info { min-width: 0; flex: 1; }
+.payment-destination dl { margin: 8px 0 0; }
+.payment-destination dl > div { margin-top: 5px; }
+.payment-destination dt { color: var(--text-2); font-size: 11px; }
+.payment-destination dd { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.payment-qr { display: grid; gap: 8px; width: 144px; flex-shrink: 0; text-align: center; }
+.payment-qr .sm { font-size: 10px; }
+@media (max-width: 400px) { .trader-actions .btn { font-size: 12px; padding-inline: 4px; } .payment-destination { gap: 8px; padding: 8px; } .payment-qr { width: 120px; } }
 .confirm-lines li > span { min-width: 0; overflow-wrap: anywhere; }
 .fee-grid > * { min-width: 0; }
 @media (max-width: 1200px) { .transaction-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

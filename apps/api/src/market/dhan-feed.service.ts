@@ -41,6 +41,17 @@ export const REVERSE_DHAN_SEGMENT_MAP: Record<string, number> = {
   BSE_FNO: 8,
 };
 
+/** Dhan's server-disconnection reasons; authorization and data subscription are separate. */
+export function dhanDisconnectMessage(code: number) {
+  return ({
+    805: 'Dhan connection limit reached. Close other feeds using this Dhan account.',
+    806: 'Dhan Data APIs subscription is required. Check the subscription in your Dhan account.',
+    807: 'Dhan authorization expired. Use Reconnect Dhan.',
+    808: 'Dhan rejected the client ID. Check the backend Dhan configuration.',
+    809: 'Dhan authentication failed. Use Reconnect Dhan.',
+  } as Record<number, string>)[code] ?? `Dhan rejected the feed (code ${code}). Check the API service logs.`;
+}
+
 @Injectable()
 export class DhanFeedService implements OnModuleDestroy {
   private readonly log = new Logger('DhanFeed');
@@ -48,6 +59,8 @@ export class DhanFeedService implements OnModuleDestroy {
   private connecting=false;
   private reconnectTimer?: NodeJS.Timeout;
   private isDestroyed = false;
+  private feedError?: string;
+  private lastTickAt?: string;
   private tickListener?: (tick: DhanTick) => void;
   private subscribedInstruments: Array<{ exchangeSegment: string; securityId: string }> = [];
 
@@ -58,12 +71,27 @@ export class DhanFeedService implements OnModuleDestroy {
   reconnect() {
     if(this.isDestroyed)return;
     if(this.reconnectTimer){clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined;}
-    if(this.ws){this.ws.removeAllListeners();this.ws.terminate();this.ws=undefined;}
+    if(this.ws){
+      this.ws.removeAllListeners();
+      // Terminating a CONNECTING socket emits an asynchronous error in ws.
+      this.ws.once('error', () => undefined);
+      this.ws.terminate();
+      this.ws=undefined;
+    }
     if(this.subscribedInstruments.length)void this.connect();
   }
 
   onTick(listener: (tick: DhanTick) => void) {
     this.tickListener = listener;
+  }
+
+  status() {
+    return {
+      connected: this.ws?.readyState === WebSocket.OPEN,
+      subscriptions: this.subscribedInstruments.length,
+      lastTickAt: this.lastTickAt,
+      error: this.feedError,
+    };
   }
 
   setSubscriptions(instruments: Array<{ exchangeSegment: string; securityId: string }>) {
@@ -85,6 +113,7 @@ export class DhanFeedService implements OnModuleDestroy {
     const token = this.credentials ? await this.credentials.token().catch(()=>undefined) : env().DHAN_ACCESS_TOKEN;
 
     if (!clientId || !token) {
+      this.feedError = 'Dhan authorization unavailable. Use Connect Dhan.';
       this.log.warn('Dhan authorization unavailable. Use Connect Dhan in the Super Admin market-data panel.');
       return;
     }
@@ -98,6 +127,7 @@ export class DhanFeedService implements OnModuleDestroy {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.on('open', () => {
+        this.feedError = undefined;
         this.log.log('Connected to Dhan Live Market Feed WebSocket.');
         this.sendSubscriptionRequest();
       });
@@ -107,6 +137,7 @@ export class DhanFeedService implements OnModuleDestroy {
       });
 
       this.ws.on('error', (err) => {
+        this.feedError = 'Could not connect to the Dhan feed. Retrying automatically; check the API service logs.';
         this.log.error(`Dhan WebSocket error: ${err.message}`);
       });
 
@@ -169,7 +200,10 @@ export class DhanFeedService implements OnModuleDestroy {
 
       // Response code 50 = Disconnect / error
       if (responseCode === 50) {
-        this.log.warn(`Dhan Feed Server sent disconnect packet (Code 50)`);
+        if (buf.length >= 10) {
+          this.feedError = dhanDisconnectMessage(buf.readUInt16LE(8));
+          this.log.warn(this.feedError);
+        }
         return;
       }
 
@@ -183,6 +217,7 @@ export class DhanFeedService implements OnModuleDestroy {
           timestamp: new Date(),
           lastTradeAt: new Date(buf.readUInt32LE(12) * 1000),
         };
+        if (Number.isFinite(ltp) && ltp > 0) {this.lastTickAt = tick.timestamp.toISOString();this.feedError = undefined;}
         this.tickListener?.(tick);
         return;
       }
@@ -226,6 +261,7 @@ export class DhanFeedService implements OnModuleDestroy {
           timestamp: new Date(),
           lastTradeAt: new Date(buf.readUInt32LE(14) * 1000),
         };
+        if (Number.isFinite(ltp) && ltp > 0) {this.lastTickAt = tick.timestamp.toISOString();this.feedError = undefined;}
         this.tickListener?.(tick);
         return;
       }

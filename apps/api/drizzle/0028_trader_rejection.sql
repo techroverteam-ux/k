@@ -1,0 +1,2 @@
+ALTER TYPE user_status ADD VALUE IF NOT EXISTS 'REJECTED';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason varchar(300);

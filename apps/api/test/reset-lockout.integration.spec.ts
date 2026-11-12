@@ -30,7 +30,7 @@ suite('isolated PostgreSQL reset approvals and lockout', () => {
     const passwords = new PasswordService(), config = new ConfigService(db, audit), alerts = new NotificationsService(db), policy = new PolicyService(db, audit);
     auth = new AuthService(db, passwords, audit, config, ledger, alerts, {} as any);
     wipe = new WipeService(db, auth, ledger, audit, alerts, { clearAll: jest.fn() } as any, config);
-    usersSvc = new UsersService(db, audit, passwords, policy, ledger, {} as any, {} as any, config, alerts);
+    usersSvc = new UsersService(db, audit, passwords, policy, ledger, {} as any, {} as any, config, alerts, {} as any);
     const hash = await passwords.hash(pw);
     const add = async (username: string, role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER', brokerId?: string) => (await db.db.insert(users).values({ username, displayName: username, role, status: 'ACTIVE', passwordHash: hash, brokerId }).returning())[0];
     admin = actor(await add('admin.reset', 'SUPER_ADMIN')); checker = admin;

@@ -52,7 +52,7 @@ async function raw<T>(query: string, variables: Record<string, unknown> | undefi
     headers: {
       'content-type': 'application/json',
       'x-client': 'web',
-      ...(/\bsubmitFeePayment\b/.test(query) ? { 'x-upload': 'fee-proof' } : {}), // carries a payment screenshot: larger body allowed
+      ...(/\b(submitFeePayment|createUser|requestPayment)\b/.test(query) ? { 'x-upload': 'fee-proof' } : {}), // payment screenshot upload
       ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
       ...(stepUp ? { 'x-step-up': stepUp } : {}),
     },

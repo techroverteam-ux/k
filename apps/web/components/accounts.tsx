@@ -10,9 +10,10 @@ import { inr, initials, when } from '@/lib/format';
 import { Icon } from './icons';
 import { LedgerTable, OrdersTable, PAYMENT_FIELDS, PaymentDialog, PortfolioSummary, PositionsTable, type Payment } from './trading';
 import { Dialog, Empty, ErrorState, SkeletonRows, Status, Tabs, useToast } from './ui';
+import { newPaymentDraft, paymentError, paymentInput, PaymentReferenceFields, ReceivingAccountPicker, OpeningPaymentDetails } from './payment-details';
 
-export interface UserRow { resetDisabledAt?: string; id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone';
+export interface UserRow { rejectionReason?: string; resetDisabledAt?: string; id: string; username: string; displayName: string; role: string; status: string; mode: string; isDemo: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone rejectionReason';
 /** "40.00" → "40%"; empty for non-brokers. Brokers without their own value use the platform default. */
 export const pctLabel = (u: Pick<UserRow, 'role' | 'commissionPerMiniLot' | 'commissionPerMegaLot'>) => (u.role !== 'BROKER' ? '' : u.commissionPerMiniLot ? `₹${Number(u.commissionPerMiniLot).toLocaleString('en-IN')} / mini lot · ₹${Number(u.commissionPerMegaLot).toLocaleString('en-IN')} / mega` : '');
 export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
@@ -31,6 +32,10 @@ export function Person({ u, href }: { u: Pick<UserRow, 'displayName' | 'username
 export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: ('BROKER' | 'TRADER')[]; brokers?: { id: string; username: string }[]; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({ username: '', displayName: '', role: roles[0], phone: '', email: '', brokerId: '', tempPassword: '', commMini: '', commMega: '', openingAmount: '' });
   const [showPw, setShowPw] = useState(false);
+  const [step, setStep] = useState(0);
+  const [payment, setPayment] = useState(newPaymentDraft);
+  const [proofBusy, setProofBusy] = useState(false);
+  const [paymentErr, setPaymentErr] = useState('');
   const sole = useSoleAdmin();
   const { me, settings } = useAuth();
   const asBroker = me?.role === 'BROKER';
@@ -43,7 +48,7 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
   const errs = {
     username: !/^[a-z][a-z0-9_.@#-]{3,39}$/.test(f.username.trim().toLowerCase()) ? '4–40 chars, start with letter' : '',
     displayName: !f.displayName.trim() ? 'Enter a name' : '',
-    phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile' : '',
+    phone: !asBroker && !f.phone ? 'Mobile number is required' : f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile' : '',
     email: f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email) ? 'Enter a valid email' : '',
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : '',
     openingAmount: f.role === 'TRADER' && (asBroker || f.openingAmount.trim()) && !(/^\d{1,12}(\.\d{1,2})?$/.test(f.openingAmount.trim()) && Number(f.openingAmount) >= minOpen) ? `Enter at least ₹${minLabel}` : '',
@@ -53,14 +58,20 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
   const bad = Object.values(errs).some(Boolean);
   const E = ({ k }: { k: keyof typeof errs }) => (touched && errs[k] ? <span className="err" style={{ fontSize: '11px', marginTop: 2 }}>{errs[k]}</span> : null);
   return (
-    <Dialog title={asBroker ? 'Add trader' : 'Create account'} sub={asBroker ? 'This sends a request to the Super Admin. When approved, the trader can sign in.' : sole ? 'The account can sign in straight away.' : 'New accounts can sign in after Super Admin approval.'} size="lg" onClose={onClose}>
+    <Dialog title={asBroker ? 'Add trader' : 'Create account'} sub={asBroker ? `Step ${step + 1} of 3 · ${['Account details', 'Super Admin receiving account', 'Payment reference and proof'][step]}` : sole ? 'The account can sign in straight away.' : 'New accounts can sign in after Super Admin approval.'} size="lg" onClose={onClose}>
       <form noValidate onSubmit={async (e) => {
         e.preventDefault(); setTouched(true);
-        if (bad) return;
-        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+        if (bad) { setStep(0); return; }
+        setPaymentErr('');
+        if (asBroker) {
+          if (step === 0) { if (!payment.payerName) setPayment({ ...payment, payerName: f.displayName });setStep(1);return; }
+          if (step === 1) { if (!payment.payeeAccountId) {setPaymentErr('Choose the receiving account paid by the trader.');return;} setStep(2);return; }
+          const err = paymentError(payment);if (err) {setPaymentErr(err);return;}
+        }
+        const r = await m.run({ i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, email: f.email || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined, payment: asBroker ? paymentInput(payment) : undefined } });
         if (r) { toast((r as { createUser?: { status?: string } }).createUser?.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose(); }
       }}>
-        <div className="form-grid-2">
+        {step === 0 && <div className="form-grid-2">
           {roles.length > 1 && (
             <div className="field">
               <label htmlFor="role">Account type</label>
@@ -84,8 +95,8 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
             <E k="username" />
           </div>
           <div className="field">
-            <label htmlFor="ph">Mobile (optional)</label>
-            <input id="ph" className="input num" placeholder="10-digit number" inputMode="tel" maxLength={10} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '') })} aria-invalid={touched && !!errs.phone} />
+            <label htmlFor="ph">{asBroker ? 'Mobile (optional)' : 'Mobile number'}</label>
+            <input id="ph" required={!asBroker} className="input num" placeholder="10-digit number" inputMode="tel" maxLength={10} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '') })} aria-invalid={touched && !!errs.phone} />
             <E k="phone" />
           </div>
           <div className="field">
@@ -144,11 +155,14 @@ export function CreateUserDialog({ roles, brokers, onClose, onDone }: { roles: (
               </div>
             </div>
           )}
-        </div>
+        </div>}
+        {asBroker && step === 1 && <ReceivingAccountPicker value={payment.payeeAccountId} onChange={(id) => setPayment((p) => ({ ...p, payeeAccountId: id }))} />}
+        {asBroker && step === 2 && <><p className="w6">Amount paid / opening balance: ₹{inr(f.openingAmount)}</p><PaymentReferenceFields value={payment} onChange={setPayment} onBusyChange={setProofBusy} /><p className="hint">The Super Admin checks these details before approving the trader and adding the opening balance.</p></>}
+        {paymentErr && <div className="notice err" role="alert">{paymentErr}</div>}
         {m.error && <div className="notice err" role="alert" style={{ marginTop: 8 }}><Icon name="alert" size={18} />{m.error}</div>}
         <div className="actions" style={{ marginTop: 12 }}>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={m.pending}>{m.pending ? (asBroker ? 'Sending…' : 'Creating…') : asBroker ? 'Send for approval' : 'Create account'}</button>
+          <button type="button" className="btn" disabled={m.pending || proofBusy} onClick={() => step ? setStep(step - 1) : onClose()}>{step ? 'Back' : 'Cancel'}</button>
+          <button className="btn btn-primary" disabled={m.pending || proofBusy}>{m.pending ? (asBroker ? 'Sending…' : 'Creating…') : asBroker ? step < 2 ? 'Next' : 'Send for approval' : 'Create account'}</button>
         </div>
       </form>
     </Dialog>
@@ -180,6 +194,8 @@ export function AccountDetail({ id, back, actions }: { id: string; back: { href:
           </>}
         </div>
       </div>
+      {t.rejectionReason && <div className="notice err">Rejection reason: {t.rejectionReason}</div>}
+      {t.role === 'TRADER' && t.status === 'PENDING' && <OpeningPaymentDetails userId={id} />}
       {t.role === 'TRADER' ? (
         <>
           <AccountWipes userId={id} />

@@ -9,8 +9,9 @@ import { useQuery } from '@/lib/hooks';
 import { ROLE_LABEL, type UserRow } from './accounts';
 import { Icon } from './icons';
 import { Confirm, Dialog, RowMenu, type RowMenuItem, useToast } from './ui';
+import { OpeningPaymentDetails } from './payment-details';
 
-type Kind = 'approve' | 'suspend' | 'reactivate' | 'assign' | 'reset' | 'delete' | 'commission';
+type Kind = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'assign' | 'reset' | 'delete' | 'commission';
 
 /** All Super Admin account actions with their confirmation dialogs. Step-up is prompted automatically by the API client. */
 export function useUserActions(onDone: () => void) {
@@ -22,12 +23,13 @@ export function useUserActions(onDone: () => void) {
   const [showResetPw, setShowResetPw] = useState(false);
   const [broker, setBroker] = useState('');
   const [typed, setTyped] = useState('');
+  const [paymentReady, setPaymentReady] = useState(false);
   const sole = useSoleAdmin();
   const router = useRouter();
   const toast = useToast();
   const brokers = useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
-  const open = (kind: Kind, u: UserRow) => { setErr(null); setReason(''); setTyped(kind === 'commission' ? (u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '') : ''); setPw(kind === 'commission' ? (u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '') : ''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
+  const open = (kind: Kind, u: UserRow) => { setPaymentReady(false);setErr(null); setReason(''); setTyped(kind === 'commission' ? (u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '') : ''); setPw(kind === 'commission' ? (u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '') : ''); setBroker(u.brokerId ?? ''); setAct({ kind, u }); };
   const close = () => setAct(null);
   const run = async (q: string, v: Record<string, unknown>, ok: string | ((d: Record<string, { status?: string } | undefined>) => string)) => {
     setBusy(true); setErr(null);
@@ -45,9 +47,16 @@ export function useUserActions(onDone: () => void) {
   if (act?.kind === 'approve') node = (
     <Confirm title="Approve this account?" sub={act.u.openingAmount ? `They can sign in as soon as you approve, and ₹${inr(act.u.openingAmount)} is added to their balance.` : 'They can sign in as soon as you approve.'}
       lines={[['Name', act.u.displayName], ['Username', act.u.username], ['Type', ROLE_LABEL[act.u.role]], ...(act.u.brokerName ? [['Broker', act.u.brokerName] as [string, string]] : []), ...(act.u.createdByName ? [['Requested by', act.u.createdByName] as [string, string]] : []), ['Requested on', when(act.u.createdAt)], ...(act.u.openingAmount ? [['Opening amount', `₹${inr(act.u.openingAmount)}`] as [string, string]] : [])]}
-      confirmLabel="Approve account" pending={busy} error={err} onClose={close}
-      onConfirm={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: act.u.id }, act.u.openingAmount ? `Account approved and ₹${inr(act.u.openingAmount)} added` : 'Account approved')} />
+      confirmLabel="Approve account" confirmDisabled={act.u.role === 'TRADER' && !paymentReady} pending={busy} error={err} onClose={close}
+      warning={act.u.openingAmount ? 'Confirm the amount and UTR against your bank statement before approving.' : undefined}
+      onConfirm={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: act.u.id }, act.u.openingAmount ? `Account approved and ₹${inr(act.u.openingAmount)} added` : 'Account approved')}>
+      {act.u.role === 'TRADER' && <OpeningPaymentDetails userId={act.u.id} onReady={setPaymentReady} />}
+    </Confirm>
   );
+  if (act?.kind === 'reject') node = <Dialog title={`Reject ${act.u.displayName}?`} sub="The trader will not be able to sign in. Their broker will see the reason. No opening balance is credited." onClose={close}>
+    <div className="field"><label htmlFor="reject-trader-reason">Reason</label><textarea id="reject-trader-reason" className="input" value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} /><span className="hint">5–300 characters</span></div><ErrBox />
+    <div className="actions"><button className="btn" disabled={busy} onClick={close}>Cancel</button><button className="btn btn-sell" disabled={busy || reason.trim().length < 5} onClick={() => run(`mutation($id:ID!,$r:String!){ rejectTrader(userId:$id, reason:$r){ id status } }`, { id: act.u.id, r: reason.trim() }, 'Trader request rejected')}>Reject trader</button></div>
+  </Dialog>;
   if (act?.kind === 'suspend' || act?.kind === 'reactivate') {
     const s = act.kind === 'suspend';
     node = (
@@ -146,6 +155,7 @@ export function UserActionButtons({ u, open }: { u: UserRow; open: (k: Kind, u: 
   return (
     <div className="row" style={{ gap: 4, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
       {u.status === 'PENDING' && <button className="btn btn-sm btn-primary" onClick={() => open('approve', u)}>Approve</button>}
+      {u.status === 'PENDING' && u.role === 'TRADER' && <button className="btn btn-sm btn-sell" onClick={() => open('reject', u)}>Reject</button>}
       {u.status === 'SUSPENDED' && <button className="btn btn-sm" onClick={() => open('reactivate', u)}>Reactivate</button>}
       <RowMenu label={`More actions for ${u.username}`} items={more} />
     </div>

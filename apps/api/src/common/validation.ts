@@ -73,7 +73,7 @@ export function inputHygienePlugin(): ApolloServerPlugin {
       return {
         async didResolveOperation({ request, document }) {
           let image = false;
-          visit(document, { Field: (n) => { if (n.name.value === 'submitFeePayment') image = true; } });
+          visit(document, { Field: (n) => { if (['submitFeePayment', 'createUser', 'requestPayment'].includes(n.name.value)) image = true; } });
           const bad = check(request.variables ?? {}, 'variables', 0, image);
           let lit: string | null = null;
           visit(document, { StringValue: (n) => { if (!lit && (n.value.length > MAX_STRING || CONTROL.test(n.value))) lit = 'a string argument is too long or contains control characters'; } });

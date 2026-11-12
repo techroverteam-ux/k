@@ -5,10 +5,12 @@ import { View } from 'react-native';
 import { gql } from '@/api';
 import { ProofImage } from '@/proof';
 import { useAuth } from '@/auth';
+import { QR, upiLink } from '@/qr';
+import { ReceivingAccount } from '@/payment-details';
 import { inr, S, when } from '@/theme';
 import { Badge, Button, Chips, Empty, ErrorState, Field, ListRow, Notice, Row, Screen, Section, Sheet, Skeleton, T, Tabs, toast, useQuery } from '@/ui';
 
-interface Payee { id: string; kind: 'BANK' | 'UPI'; label: string; accountName: string; bankName?: string; accountNumber?: string; ifsc?: string; upiId?: string; status: string; createdById: string; createdAt: string }
+interface Payee { id: string; kind: 'BANK' | 'UPI'; label: string; accountName: string; bankName?: string; accountNumber?: string; ifsc?: string; branch?: string; upiId?: string; status: string; createdById: string; createdAt: string }
 interface Fee { id: string; displayName: string; username: string; payee: string; amount: string; purpose: string; utr: string; hasProof?: boolean; status: string; reviewNote?: string; createdAt: string }
 const PSTATUS: Record<string, [string, 'warn' | 'ok' | 'bad' | undefined]> = { PENDING: ['Waiting for approval', 'warn'], ACTIVE: ['Live', 'ok'], REJECTED: ['Rejected', 'bad'], DISABLED: ['Disabled', undefined] };
 
@@ -16,7 +18,7 @@ export default function AdminFees() {
   const { me } = useAuth();
   const sole = useSoleAdmin();
   const [tab, setTab] = useState<'details' | 'payments'>('payments');
-  const payees = useQuery<{ payeeAccounts: Payee[] }>(`{ payeeAccounts { id kind label accountName bankName accountNumber ifsc upiId status createdById createdAt } }`);
+  const payees = useQuery<{ payeeAccounts: Payee[] }>(`{ payeeAccounts { id kind label accountName bankName accountNumber ifsc branch upiId status createdById createdAt } }`);
   const [st, setSt] = useState<'SUBMITTED' | 'VERIFIED' | 'REJECTED'>('SUBMITTED');
   const fees = useQuery<{ feePayments: Fee[] }>(`query($s:[String!]){ feePayments(status:$s, limit:200){ id displayName username payee amount purpose utr hasProof status reviewNote createdAt } }`, { s: [st] }, 20000);
   const [adding, setAdding] = useState(false);
@@ -48,7 +50,7 @@ export default function AdminFees() {
                 return (
                   <View key={p.id} style={{ gap: S[2], paddingVertical: S[3] }}>
                     <Row gap={S[2]}><T w="600" style={{ flexShrink: 1 }}>{p.label}</T><Badge text={label} tone={tone} /></Row>
-                    <T v="xs" c="text2" selectable>{p.accountName} · {p.kind === 'BANK' ? `A/c ${p.accountNumber} · IFSC ${p.ifsc}${p.bankName ? ` · ${p.bankName}` : ''}` : `UPI ${p.upiId}`}</T>
+                    <ReceivingAccount payee={p} />
                     <T v="xs" c="text3">Added {when(p.createdAt)}{p.createdById === me?.id ? ' by you' : ''}</T>
                     <Row gap={S[2]}>
                       {p.status === 'PENDING' && (p.createdById !== me?.id || sole) && <View style={{ flex: 1 }}><Button block size="sm" kind="primary" title="Approve" onPress={() => void act(`mutation($id:ID!){ approvePayeeAccount(id:$id){ id } }`, p.id, 'Approved: traders can see it now')} /></View>}
@@ -75,37 +77,39 @@ export default function AdminFees() {
 }
 
 function AddSheet({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const sole = useSoleAdmin();
   const [kind, setKind] = useState<'BANK' | 'UPI'>('BANK');
+  const [step, setStep] = useState(0);
   const [f, setF] = useState({ label: '', accountName: '', bankName: '', accountNumber: '', ifsc: '', branch: '', upiId: '' });
+  const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  return (
-    <Sheet visible title="Add payment details" sub={sole ? 'Traders see them as soon as you add them.' : 'A different Super Admin must approve them before traders see them.'} onClose={onClose}>
-      <Chips value={kind} onChange={setKind} items={[{ k: 'BANK', label: 'Bank account' }, { k: 'UPI', label: 'UPI ID' }]} />
-      <Field label="Name for this (shown to traders)" maxLength={80} value={f.label} onChangeText={(v) => setF({ ...f, label: v })} placeholder={kind === 'BANK' ? 'e.g. HDFC current account' : 'e.g. Company UPI'} />
-      <Field label="Account holder name" maxLength={120} value={f.accountName} onChangeText={(v) => setF({ ...f, accountName: v })} />
-      {kind === 'BANK' ? (
-        <>
-          <Field label="Account number" keyboardType="number-pad" maxLength={18} value={f.accountNumber} onChangeText={(v) => setF({ ...f, accountNumber: v.replace(/\D/g, '') })} />
-          <Field label="IFSC" autoCapitalize="characters" maxLength={11} value={f.ifsc} onChangeText={(v) => setF({ ...f, ifsc: v.toUpperCase() })} />
-          <Field label="Bank (optional)" maxLength={120} value={f.bankName} onChangeText={(v) => setF({ ...f, bankName: v })} />
-        </>
-      ) : (
-        <Field label="UPI ID" autoCapitalize="none" autoCorrect={false} maxLength={120} placeholder="name@bank" value={f.upiId} onChangeText={(v) => setF({ ...f, upiId: v })} />
-      )}
-      <Notice tone="warn">Double-check every digit. Traders will send real money here.</Notice>
-      {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title="Add for approval" busy={busy} onPress={async () => {
-        setBusy(true); setErr(null);
-        try {
-          const i = kind === 'BANK' ? { kind, label: f.label, accountName: f.accountName, bankName: f.bankName || undefined, accountNumber: f.accountNumber, ifsc: f.ifsc } : { kind, label: f.label, accountName: f.accountName, upiId: f.upiId };
-          const d = await gql<{ addPayeeAccount: { status: string } }>(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });
-          toast(d.addPayeeAccount.status === 'ACTIVE' ? 'Added: traders can see it now' : 'Added. Another Super Admin needs to approve it.'); onDone();
-        } catch (e) { setErr((e as Error).message); setBusy(false); }
-      }} />
-    </Sheet>
-  );
+  const name = (v: string, max: number) => v.trim().length >= 2 && v.trim().length <= max && /^[\p{L}\p{M} &'().,\-]+$/u.test(v.trim()) ? '' : `Use 2–${max} characters with no numbers.`;
+  const errors = { label: name(f.label, 80), accountName: name(f.accountName, 120), bankName: name(f.bankName, 120), branch: name(f.branch, 60),
+    accountNumber: /^\d{9,18}$/.test(f.accountNumber) ? '' : 'Enter 9–18 digits.',
+    ifsc: /^[A-Z]{4}0[A-Z0-9]{6}$/.test(f.ifsc) ? '' : 'Enter a valid 11-character IFSC.',
+    upiId: kind === 'BANK' && !f.upiId.trim() ? '' : /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(f.upiId.trim()) ? '' : 'Enter a valid UPI ID, e.g. name@bank.',
+  };
+  const lastStep = kind === 'BANK' ? 2 : 1;
+  const keys: (keyof typeof f)[] = step === 0 ? ['label', 'accountName'] : kind === 'BANK' && step === 1 ? ['accountNumber', 'ifsc', 'bankName', 'branch'] : ['upiId'];
+  const field = (k: keyof typeof f, label: string, max: number) => <Field key={k} label={label} maxLength={max} autoCorrect={false} autoCapitalize={k === 'ifsc' ? 'characters' : k === 'upiId' ? 'none' : 'words'} keyboardType={k === 'accountNumber' ? 'number-pad' : 'default'} value={f[k]} error={touched ? errors[k] : null} onChangeText={(v) => {
+    if (['label', 'accountName', 'bankName', 'branch'].includes(k)) v = v.replace(/\p{N}/gu, '');
+    if (k === 'accountNumber') v = v.replace(/\D/g, '');
+    if (k === 'ifsc') v = v.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    setF((prev) => ({ ...prev, [k]: v }));
+  }} />;
+  return <Sheet visible title="Add payment details" sub={`Step ${step + 1} of ${lastStep + 1} · ${step === 0 ? 'Account names' : kind === 'BANK' && step === 1 ? 'Bank details' : kind === 'BANK' ? 'UPI and QR (optional)' : 'UPI and QR'}`} onClose={onClose}>
+    {step === 0 ? <><Chips value={kind} onChange={setKind} items={[{ k: 'BANK', label: 'Bank account' }, { k: 'UPI', label: 'UPI ID' }]} />{field('label', 'Name shown to traders', 80)}{field('accountName', 'Account holder name', 120)}</> : kind === 'BANK' && step === 1 ? <>{field('accountNumber', 'Account number', 18)}{field('ifsc', 'IFSC', 11)}{field('bankName', 'Bank name', 120)}{field('branch', 'Branch name', 60)}</> : <>{field('upiId', kind === 'BANK' ? 'UPI ID (optional)' : 'UPI ID', 120)}{f.upiId.trim() && !errors.upiId ? <View style={{ alignItems: 'center' }}><QR value={upiLink(f.upiId.trim(), f.accountName.trim())} size={144} /></View> : null}</>}
+    {err && <Notice tone="err">{err}</Notice>}
+    <Row><Button block title={step ? 'Back' : 'Cancel'} disabled={busy} onPress={() => {setTouched(false);step ? setStep(step - 1) : onClose();}} /><Button block kind="primary" title={step === lastStep ? 'Add details' : 'Next'} busy={busy} onPress={async () => {
+      setTouched(true);if (keys.some((k) => errors[k])) return;
+      if (step < lastStep) {setStep(step + 1);setTouched(false);return;}
+      setBusy(true);setErr(null);
+      try {
+        const i = kind === 'BANK' ? { kind, label: f.label.trim(), accountName: f.accountName.trim(), bankName: f.bankName.trim(), accountNumber: f.accountNumber, ifsc: f.ifsc, branch: f.branch.trim(), upiId: f.upiId.trim() || undefined } : { kind, label: f.label.trim(), accountName: f.accountName.trim(), upiId: f.upiId.trim() };
+        await gql(`mutation($i:PayeeAccountInput!){ addPayeeAccount(input:$i){ id status } }`, { i });toast('Payment details added');onDone();
+      } catch (e) {setErr((e as Error).message);setBusy(false);}
+    }} /></Row>
+  </Sheet>;
 }
 
 function ReviewSheet({ f, ok, onClose, onDone }: { f: Fee; ok: boolean; onClose: () => void; onDone: () => void }) {

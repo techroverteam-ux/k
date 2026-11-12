@@ -14,6 +14,7 @@ export enum UserStatusGql {
   ACTIVE = 'ACTIVE',
   SUSPENDED = 'SUSPENDED',
   CLOSED = 'CLOSED',
+  REJECTED = 'REJECTED',
 }
 export enum AccountModeGql {
   SIMULATED = 'SIMULATED',
@@ -32,6 +33,7 @@ export class UserType {
   @Field({ nullable: true }) email?: string;
   @Field(() => RoleGql) role: RoleGql;
   @Field(() => UserStatusGql) status: UserStatusGql;
+  @Field({ nullable: true }) rejectionReason?: string;
   @Field(() => AccountModeGql) mode: AccountModeGql;
   @Field() isDemo: boolean;
   @Field(() => ID, { nullable: true }) brokerId?: string;
@@ -58,6 +60,7 @@ export class UserType {
       email: full ? (readEmail(u) ?? undefined) : undefined,
       role: u.role as RoleGql,
       status: u.status as UserStatusGql,
+      rejectionReason: u.rejectionReason ?? undefined,
       mode: u.mode as AccountModeGql,
       isDemo: u.isDemo,
       brokerId: u.brokerId ?? undefined,

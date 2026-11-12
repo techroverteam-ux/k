@@ -33,7 +33,7 @@ const money = (name: string) => bigint(name, { mode: 'bigint' });
 const id = () => uuid('id').primaryKey().default(sql`gen_random_uuid()`);
 
 export const roleEnum = pgEnum('role', ['SUPER_ADMIN', 'BROKER', 'TRADER']);
-export const userStatusEnum = pgEnum('user_status', ['PENDING', 'ACTIVE', 'SUSPENDED', 'CLOSED']);
+export const userStatusEnum = pgEnum('user_status', ['PENDING', 'ACTIVE', 'SUSPENDED', 'CLOSED', 'REJECTED']);
 export const accountModeEnum = pgEnum('account_mode', ['SIMULATED', 'LIVE']);
 
 export const users = pgTable(
@@ -54,6 +54,7 @@ export const users = pgTable(
     passwordHash: text('password_hash'),
     role: roleEnum('role').notNull(),
     status: userStatusEnum('status').notNull().default('PENDING'),
+    rejectionReason: varchar('rejection_reason', { length: 300 }),
     mode: accountModeEnum('mode').notNull().default('SIMULATED'),
     isDemo: boolean('is_demo').notNull().default(false),
     brokerId: uuid('broker_id').references((): AnyPgColumn => users.id, { onDelete: 'restrict' }),
@@ -694,6 +695,24 @@ export const feePaymentProofs = pgTable('fee_payment_proofs', {
   data: text('data').notNull(),
   createdAt: ts('created_at').notNull().defaultNow(),
 });
+
+/** Bank/UPI evidence for opening balances and deposits. A reference can fund only one request. */
+export const paymentEvidence = pgTable('payment_evidence', {
+  id: id(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  purpose: varchar('purpose', { length: 12 }).notNull(), // OPENING | DEPOSIT
+  paymentRequestId: uuid('payment_request_id').unique().references(() => paymentRequests.id, { onDelete: 'cascade' }),
+  payeeAccountId: uuid('payee_account_id').notNull().references(() => payeeAccounts.id, { onDelete: 'restrict' }),
+  submittedById: uuid('submitted_by_id').references(() => users.id, { onDelete: 'set null' }),
+  amountMinor: money('amount_minor').notNull(),
+  utr: text('utr').notNull(), // encrypted, AAD payment_evidence.utr
+  utrHash: char('utr_hash', { length: 64 }).notNull().unique(),
+  payerName: text('payer_name').notNull(), // encrypted, AAD payment_evidence.payer_name
+  paidAt: ts('paid_at').notNull(),
+  proofMime: varchar('proof_mime', { length: 20 }),
+  proofData: text('proof_data'), // encrypted, AAD payment_evidence.proof
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [index('payment_evidence_user_idx').on(t.userId, t.createdAt), uniqueIndex('payment_evidence_opening_uq').on(t.userId).where(sql`${t.purpose} = 'OPENING'`)]);
 
 
 /** Approval requests for owner-only soft resets; separate from irreversible platform wipes. */

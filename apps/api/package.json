@@ -20,7 +20,8 @@
     "logs:archive": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts archive",
     "keys:rotate": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/rotate-keys.ts",
     "logs:verify": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/archive-logs.ts verify",
-    "instruments:audit-dhan": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/audit-dhan-instruments.ts"
+    "instruments:audit-dhan": "dotenv -e .env -e ../../.env.local -- ts-node --transpile-only scripts/audit-dhan-instruments.ts",
+    "predev": "npm run db:migrate"
   },
   "devDependencies": {
     "@types/cookie-parser": "1.4.10",

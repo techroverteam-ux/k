@@ -11,7 +11,7 @@ import { useQuery } from '@/lib/hooks';
 const SIZE = 20;
 export default function BrokerTraders() {
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<'' | 'ACTIVE' | 'PENDING' | 'SUSPENDED'>('');
+  const [status, setStatus] = useState<'' | 'ACTIVE' | 'PENDING' | 'SUSPENDED' | 'REJECTED'>('');
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const { data, loading, error, refetch } = useQuery<{ users: { total: number; items: UserRow[] } }>(
@@ -26,7 +26,7 @@ export default function BrokerTraders() {
       </PageHead>
       <div className="spread" style={{ marginBottom: 12, gap: 12 }}>
         <div className="input-icon" style={{ flex: '1 1 220px', maxWidth: 320, width: '100%' }}><Icon name="search" size={18} /><input className="input" placeholder="Search name or username" aria-label="Search traders" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} /></div>
-        <Chips label="Status" value={status} onChange={(v) => { setStatus(v); setPage(0); }} items={[{ v: '', label: 'All' }, { v: 'ACTIVE', label: 'Active' }, { v: 'PENDING', label: 'Pending' }, { v: 'SUSPENDED', label: 'Suspended' }]} />
+        <Chips label="Status" value={status} onChange={(v) => { setStatus(v); setPage(0); }} items={[{ v: '', label: 'All' }, { v: 'ACTIVE', label: 'Active' }, { v: 'PENDING', label: 'Pending' }, { v: 'SUSPENDED', label: 'Suspended' }, { v: 'REJECTED', label: 'Rejected' }]} />
       </div>
       <section className="panel">
         {loading && !data ? <SkeletonRows /> : error && !data ? <ErrorState error={error} retry={refetch} /> : !items.length ? (
@@ -39,7 +39,7 @@ export default function BrokerTraders() {
                 <tbody>{items.map((u) => (
                   <tr key={u.id}>
                     <td className="lead"><Person u={u} href={`/broker/traders/${u.id}`} /></td>
-                    <td data-label="Status"><span className="cell-v"><Status value={u.status} />{u.status === 'PENDING' && u.openingAmount && <span className="sub num">Opening ₹{inr(u.openingAmount)}</span>}</span></td>
+                    <td data-label="Status"><span className="cell-v"><Status value={u.status} />{u.rejectionReason && <span className="sub">{u.rejectionReason}</span>}{u.status === 'PENDING' && u.openingAmount && <span className="sub num">Opening ₹{inr(u.openingAmount)}</span>}</span></td>
                     <td className="t2 num hide-sm">{u.phone ?? '—'}</td>
                     <td data-label="Requested" className="t2 sm num">{when(u.createdAt)}</td>
                     <td className="r acts"><Link className="btn btn-sm" href={`/broker/traders/${u.id}`}>View</Link></td>

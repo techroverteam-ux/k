@@ -5,14 +5,15 @@ import { View } from 'react-native';
 import { gql } from '@/api';
 import { useAuth } from '@/auth';
 import { BellButton } from '@/screens';
+import { EVIDENCE_FIELDS, PaymentEvidenceDetails, type PaymentEvidence } from '@/payment-details';
 import { inr, when } from '@/theme';
 import { Button, Empty, ErrorState, Field, Lines, ListRow, Notice, Row, Screen, Sheet, Skeleton, T, toast, useQuery } from '@/ui';
 
-interface P { id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; createdAt: string; requestedById: string }
+interface P { paymentEvidence?: PaymentEvidence; id: string; userId: string; username?: string; type: string; mode: string; amount: string; status: string; createdAt: string; requestedById: string }
 export default function Approvals() {
   const { me } = useAuth();
   const sole = useSoleAdmin();
-  const { data, error, loading, refetch } = useQuery<{ paymentRequests: P[] }>(`{ paymentRequests(status:[REQUESTED], limit:100){ id userId username type mode amount status createdAt requestedById } }`, undefined, 10000, !me?.mfaEnabled);
+  const { data, error, loading, refetch } = useQuery<{ paymentRequests: P[] }>(`{ paymentRequests(status:[REQUESTED], limit:100){ id userId username type mode amount status createdAt requestedById paymentEvidence { ${EVIDENCE_FIELDS} } } }`, undefined, 10000, !me?.mfaEnabled);
   const [sel, setSel] = useState<P | null>(null);
   const [mode, setMode] = useState<'approve' | 'reject'>('approve');
   const [note, setNote] = useState('');
@@ -39,6 +40,7 @@ export default function Approvals() {
       ))}
       <Sheet visible={!!sel} title={mode === 'approve' ? 'Approve request?' : 'Reject request?'} sub="You’ll confirm with your password." onClose={() => setSel(null)}>
         {sel && <Lines lines={[['Account', sel.username ?? ''], ['Type', sel.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'], ['Amount', `₹${inr(sel.amount)}`]]} />}
+        {sel?.paymentEvidence && <PaymentEvidenceDetails evidence={sel.paymentEvidence} />}
         {sel?.mode === 'SIMULATED' && mode === 'approve' && <Notice>This changes a virtual balance only. No money moves.</Notice>}
         {mode === 'reject' && <Field label="Reason shown to the requester" value={note} onChangeText={setNote} />}
         {err && <Notice tone="err">{err}</Notice>}

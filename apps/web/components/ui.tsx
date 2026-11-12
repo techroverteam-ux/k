@@ -86,7 +86,7 @@ export function Dialog({ title, sub, children, size = 'md', className = '', onCl
 }
 
 /** Confirmation step for consequential actions: shows exactly what will happen. */
-export function Confirm(p: { title: string; sub?: string; lines: [string, ReactNode][]; warning?: string; confirmLabel: string; tone?: 'primary' | 'buy' | 'sell' | 'danger'; pending?: boolean; error?: string | null; onConfirm: () => void; onClose: () => void }) {
+export function Confirm(p: { title: string; sub?: string; lines: [string, ReactNode][]; children?: ReactNode; confirmDisabled?: boolean; warning?: string; confirmLabel: string; tone?: 'primary' | 'buy' | 'sell' | 'danger'; pending?: boolean; error?: string | null; onConfirm: () => void; onClose: () => void }) {
   const cls = p.tone === 'buy' ? 'btn-buy' : p.tone === 'sell' || p.tone === 'danger' ? 'btn-sell' : 'btn-primary';
   return (
     <Dialog title={p.title} sub={p.sub} onClose={p.onClose}>
@@ -95,11 +95,12 @@ export function Confirm(p: { title: string; sub?: string; lines: [string, ReactN
           <li key={k}><span className="t2">{k}</span><span className="num w6">{v}</span></li>
         ))}
       </ul>
+      {p.children}
       {p.warning && <div className="notice warn" style={{ marginTop: 12 }}><Icon name="info" size={18} /><span>{p.warning}</span></div>}
       {p.error && <div className="notice err" role="alert" style={{ marginTop: 12 }}><Icon name="alert" size={18} /><span>{p.error}</span></div>}
       <div className="actions">
         <button className="btn" onClick={p.onClose}>Cancel</button>
-        <button className={`btn ${cls}`} disabled={p.pending} onClick={p.onConfirm} aria-busy={p.pending}>{p.pending ? 'Please wait…' : p.confirmLabel}</button>
+        <button className={`btn ${cls}`} disabled={p.pending || p.confirmDisabled} onClick={p.onConfirm} aria-busy={p.pending}>{p.pending ? 'Please wait…' : p.confirmLabel}</button>
       </div>
     </Dialog>
   );

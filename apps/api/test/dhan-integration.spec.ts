@@ -116,6 +116,33 @@ suite('isolated Dhan maintenance and authorization', () => {
     expect(await db.db.select().from(instruments)).toEqual(before);
     expect(await catalog.usable()).toBe(true);
   });
+  it('returns immediately, deduplicates background sync and keeps status queries available during download', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider = jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      await waiting;
+      return new Response(String(url).includes('us-stock') ? globals : domestic);
+    });
+    const first = catalog.startSync();
+    try {
+      expect(first.status).toBe('SYNCING');
+      expect(catalog.startSync()).toEqual(first);
+      expect((await catalog.status()).status).toBe('SYNCING');
+      expect(await db.db.$count(users)).toBe(1);
+      expect(provider).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+    expect((await catalog.sync()).status).toBe('HEALTHY');
+    expect((await catalog.status()).status).toBe('HEALTHY');
+    expect(provider).toHaveBeenCalledTimes(2);
+    const restarted = new DhanCatalogService(db);
+    await restarted.onModuleInit();
+    expect(restarted.isFresh()).toBe(true);
+    await restarted.onModuleDestroy();
+  });
   it('requires admin/MFA, binds callback to its browser, encrypts issued tokens and rejects replay', async () => {
     await expect(credentials.begin({ ...admin, role: 'BROKER' })).rejects.toThrow();
     await expect(credentials.begin({ ...admin, mfaVerified: false })).rejects.toThrow();

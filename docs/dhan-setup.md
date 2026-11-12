@@ -31,7 +31,8 @@ Issued access tokens are encrypted in PostgreSQL and survive service restarts. T
 
 ## Automatic catalog maintenance
 
-- Downloads and validates both official catalogs on startup and hourly in Dhan mode.
+- Streams and validates both official catalogs on startup and hourly in Dhan mode, retaining only supported contracts in memory.
+- Refreshes run in the background so the API can start serving requests while a catalog downloads. Manual sync returns immediately; web and mobile show `SYNCING` and poll the final result. Repeated clicks share the running job.
 - Applies metadata changes atomically using batched writes and a PostgreSQL advisory lock.
 - Keeps stable instrument identities and preserves users, login credentials, orders, ledger history and balances.
 - Retires unavailable/expired/demo contracts from new trading; it never silently rolls an open position into another contract.
@@ -44,6 +45,8 @@ Issued access tokens are encrypted in PostgreSQL and survive service restarts. T
 - Candles stay in process memory only. No candle persistence is reintroduced.
 
 The panel reports last successful synchronization, authorization expiry and fresh quote coverage. Fresh quote coverage naturally falls when markets close or instruments are illiquid. Order previews and fills refuse stale or unavailable live data.
+
+The panel also reports domestic/global socket connections, subscriptions, the last received price and Dhan rejection messages. Browser authorization alone does not confirm that market ticks are arriving. For example, Dhan disconnect reason 806 requires a Data APIs subscription; reconnecting cannot replace that subscription. An API 503 is a separate availability problem: inspect the Render API logs for restarts and memory-limit events. App logs saying `Please sign in again` concern the platform session, not the shared Dhan authorization.
 
 Manual commands:
 

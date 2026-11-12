@@ -96,7 +96,7 @@ async function rawFetch(query: string, variables?: Record<string, unknown>, step
     headers: {
       'content-type': 'application/json',
       'x-client': 'mobile',
-      ...(/\bsubmitFeePayment\b/.test(query) ? { 'x-upload': 'fee-proof' } : {}), // carries a payment screenshot: larger body allowed
+      ...(/\b(submitFeePayment|createUser|requestPayment)\b/.test(query) ? { 'x-upload': 'fee-proof' } : {}), // payment screenshot upload
       ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
       ...(stepUp ? { 'x-step-up': stepUp } : {}),
     },

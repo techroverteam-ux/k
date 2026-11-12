@@ -1,9 +1,10 @@
-import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsUUID, Length, Matches, MaxLength, ValidateNested } from 'class-validator';
 import { soleAdminMayApprove } from '../common/maker-checker';
 import { DbService } from '../db/db';
 import { inArray, sql } from 'drizzle-orm';
 import { users, type UserRow } from '../db/schema';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { PaymentEvidenceInput } from '../payments/payment-evidence.types';
 import { RX } from '../common/validation';
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const trimLower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
@@ -38,6 +39,7 @@ class CommissionDownload {
 
 @InputType()
 class CreateUserInput {
+  @Field(() => PaymentEvidenceInput, { nullable: true }) @IsOptional() @ValidateNested() @Type(() => PaymentEvidenceInput) payment?: PaymentEvidenceInput;
   @Field() @Transform(trimLower) @Matches(RX.username, { message: 'Username: 4–40 characters, starting with a letter; letters, digits and _ . - @ # only.' }) username: string;
   @Field() @Transform(trim) @Length(2, 120, { message: 'Enter a name of 2–120 characters.' }) displayName: string;
   @Field(() => RoleGql) @IsEnum(RoleGql) role: RoleGql;
@@ -142,6 +144,12 @@ export class UsersResolver {
     return UserType.from(await this.approveWithOpening(a, id, c.ip), a);
   }
 
+  @Roles('SUPER_ADMIN')
+  @Mutation(() => UserType)
+  async rejectTrader(@CurrentActor() a: Actor, @Args('userId', { type: () => ID }) id: string, @Args('reason') reason: string, @Ctx() c: GqlContext) {
+    return UserType.from(await this.users.reject(a, id, reason, c.ip), a);
+  }
+
   @Roles('SUPER_ADMIN', 'BROKER')
   @RequireStepUp()
   @Mutation(() => UserType)
@@ -152,7 +160,7 @@ export class UsersResolver {
     @Args('reason') reason: string,
     @Ctx() c: GqlContext,
   ) {
-    if (status === 'PENDING') throw badInput('Invalid status.');
+    if (!['ACTIVE', 'SUSPENDED', 'CLOSED'].includes(status)) throw badInput('Invalid status.');
     return UserType.from(await this.users.setStatus(a, id, status as 'ACTIVE' | 'SUSPENDED' | 'CLOSED', reason, c.ip), a);
   }
 

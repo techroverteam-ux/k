@@ -14,6 +14,7 @@ import { Pressable, View } from 'react-native';
 import { CONSENT_FIELDS, deviceLabel, LOGIN_FIELDS, LOGIN_LABEL, stamp, type ConsentRecord, type LoginEvent } from './activity';
 import { gql } from './api';
 import { useAuth } from './auth';
+import { newPaymentDraft, paymentError, paymentInput, PaymentReferenceFields, ReceivingAccountPicker, OpeningPaymentDetails } from './payment-details';
 import { Icon } from './icons';
 import { BellButton, LoginHistoryList, MfaSetupSheet } from './screens';
 import { inr, initials, R, S, useTheme, when } from './theme';
@@ -22,8 +23,8 @@ import {
   StatusBadge, T, Tabs, toast, useQuery, VList,
 } from './ui';
 
-export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone';
-export interface UserRow { resetDisabledAt?: string; id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
+export const USER_FIELDS = 'id username displayName role status mode isDemo brokerId brokerName createdByName openingAmount commissionPct commissionPerMiniLot commissionPerMegaLot commissionIsDefault mfaEnabled resetDisabledAt createdAt phone rejectionReason';
+export interface UserRow { rejectionReason?: string; resetDisabledAt?: string; id: string; username: string; displayName: string; role: 'SUPER_ADMIN' | 'BROKER' | 'TRADER'; status: string; isDemo?: boolean; brokerId?: string; brokerName?: string; createdByName?: string; openingAmount?: string; commissionPct?: string; commissionPerMiniLot?: string; commissionPerMegaLot?: string; commissionIsDefault?: boolean; mfaEnabled: boolean; createdAt: string; phone?: string }
 const ROLE: Record<string, string> = { SUPER_ADMIN: 'Super Admin', BROKER: 'Broker', TRADER: 'Trader' };
 const useBrokers = () => useQuery<{ users: { items: { id: string; username: string; displayName: string }[] } }>(`{ users(role:BROKER, status:ACTIVE, limit:100){ items{ id username displayName } } }`);
 
@@ -56,7 +57,7 @@ export function AdminUsersScreen() {
   const { me } = useAuth();
   const [q, setQ] = useState('');
   const [role, setRole] = useState<'' | 'TRADER' | 'BROKER' | 'SUPER_ADMIN'>('');
-  const [status, setStatus] = useState<'' | 'PENDING' | 'ACTIVE' | 'SUSPENDED'>('');
+  const [status, setStatus] = useState<'' | 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'REJECTED'>('');
   const [create, setCreate] = useState(false);
   const list = useQuery<{ users: { total: number; items: UserRow[] } }>(
     `query($r:Role,$s:UserStatus,$q:String){ users(role:$r, status:$s, search:$q, limit:100, offset:0){ total items{ ${USER_FIELDS} } } }`,
@@ -70,7 +71,7 @@ export function AdminUsersScreen() {
     <>
       <PendingDeletions onDeleted={() => void list.refetch()} />
       <SearchBox value={q} onChangeText={setQ} placeholder="Search name or username" />
-      <Chips value={status} onChange={setStatus} items={[{ k: '', label: 'All' }, { k: 'PENDING', label: 'Pending' }, { k: 'ACTIVE', label: 'Active' }, { k: 'SUSPENDED', label: 'Suspended' }]} />
+      <Chips value={status} onChange={setStatus} items={[{ k: '', label: 'All' }, { k: 'PENDING', label: 'Pending' }, { k: 'ACTIVE', label: 'Active' }, { k: 'SUSPENDED', label: 'Suspended' }, { k: 'REJECTED', label: 'Rejected' }]} />
       <Chips value={role} onChange={setRole} items={[{ k: '', label: 'Every role' }, { k: 'TRADER', label: 'Traders' }, { k: 'BROKER', label: 'Brokers' }, { k: 'SUPER_ADMIN', label: 'Admins' }]} />
       <Spread><T v="xs">{list.data ? `${list.data.users.total} account${list.data.users.total === 1 ? '' : 's'}${list.data.users.total > items.length ? `, showing ${items.length}` : ''}` : ' '}</T><Button size="sm" kind="primary" icon="plus" title="New account" onPress={() => setCreate(true)} /></Spread>
     </>
@@ -90,6 +91,9 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
   const sole = useSoleAdmin();
   const { me, settings } = useAuth();
   const asBroker = me?.role === 'BROKER';
+  const [step, setStep] = useState(0);
+  const [payment, setPayment] = useState(newPaymentDraft);
+  const [proofBusy, setProofBusy] = useState(false);
   const minOpen = Number(settings?.minDeposit ?? 50000);
   const minLabel = minOpen.toLocaleString('en-IN');
   const [touched, setTouched] = useState(false);
@@ -98,7 +102,7 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
   const errs = {
     username: !/^[a-z][a-z0-9_.@#-]{3,39}$/.test(f.username.trim().toLowerCase()) ? '4–40 characters starting with a letter: letters, digits and _ . - @ #' : null,
     displayName: !f.displayName.trim() ? 'Enter a name' : null,
-    phone: f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
+    phone: !asBroker && !f.phone ? 'Mobile number is required' : f.phone && !/^[6-9]\d{9}$/.test(f.phone) ? 'Enter a 10-digit mobile number' : null,
     tempPassword: f.tempPassword.length < 10 ? 'At least 10 characters' : null,
     commMini: f.role === 'BROKER' && f.commMini.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMini.trim()) ? 'Enter rupees, e.g. 170' : null,
     commMega: f.role === 'BROKER' && f.commMega.trim() && !/^\d{1,7}(\.\d{1,2})?$/.test(f.commMega.trim()) ? 'Enter rupees, e.g. 1700' : null,
@@ -107,11 +111,12 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
   const bad = Object.values(errs).some(Boolean);
   const e = (k: keyof typeof errs) => (touched ? errs[k] : null);
   return (
-    <Sheet visible title={asBroker ? 'Add trader' : 'New account'} sub={asBroker ? 'Sent to the Super Admin. When they approve, the trader can sign in and the opening amount is added to their balance.' : sole ? 'It can sign in straight away.' : 'It can sign in after a Super Admin approves it.'} onClose={onClose}>
+    <Sheet visible title={asBroker ? 'Add trader' : 'New account'} sub={asBroker ? `Step ${step + 1} of 3 · ${['Account details', 'Super Admin receiving account', 'Payment reference and proof'][step]}` : sole ? 'It can sign in straight away.' : 'It can sign in after a Super Admin approves it.'} onClose={onClose}>
+      {step === 0 && <>
       {!asBroker && <Chips value={f.role} onChange={(role) => setF({ ...f, role })} items={[{ k: 'TRADER', label: 'Trader' }, { k: 'BROKER', label: 'Broker' }]} />}
       <Field label="Full name" value={f.displayName} maxLength={120} onChangeText={(v) => setF({ ...f, displayName: v })} error={e('displayName')} />
       <Field label="Username" autoCapitalize="none" autoCorrect={false} value={f.username} onChangeText={(v) => setF({ ...f, username: v.toLowerCase() })} error={e('username')} />
-      <Field label="Mobile (optional)" keyboardType="phone-pad" maxLength={10} value={f.phone} onChangeText={(v) => setF({ ...f, phone: v.replace(/\D/g, '') })} error={e('phone')} />
+      <Field label={asBroker ? 'Mobile (optional)' : 'Mobile number'} keyboardType="phone-pad" maxLength={10} value={f.phone} onChangeText={(v) => setF({ ...f, phone: v.replace(/\D/g, '') })} error={e('phone')} />
       {f.role === 'BROKER' && <Field label="Broker earns per mini lot (₹)" keyboardType="decimal-pad" placeholder="170" maxLength={10} value={f.commMini} onChangeText={(v) => setF({ ...f, commMini: v.replace(/[^\d.]/g, '') })} error={e('commMini')} hint="For every lot their traders open or cut. Empty: platform default." />}
       {f.role === 'BROKER' && <Field label="Broker earns per mega lot (₹)" keyboardType="decimal-pad" placeholder="1700" maxLength={10} value={f.commMega} onChangeText={(v) => setF({ ...f, commMega: v.replace(/[^\d.]/g, '') })} error={e('commMega')} />}
       {f.role === 'TRADER' && brokers.length > 0 && (
@@ -119,13 +124,23 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
       )}
       {f.role === 'TRADER' && <Field label={`Opening amount (₹)${asBroker ? '' : ' — optional'}`} keyboardType="decimal-pad" placeholder={minLabel} maxLength={15} value={f.openingAmount} onChangeText={(v) => setF({ ...f, openingAmount: v.replace(/[^\d.]/g, '') })} error={e('openingAmount')} hint={`Minimum ₹${minLabel}. Added to the trader’s balance when the account is approved.`} />}
       <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={f.tempPassword} onChangeText={(v) => setF({ ...f, tempPassword: v })} error={e('tempPassword')} hint="Use three of: lowercase, uppercase, digits, symbols. Share it privately." />
+      </>}
+      {asBroker && step === 1 && <ReceivingAccountPicker value={payment.payeeAccountId} onChange={(payeeAccountId) => setPayment((p) => ({ ...p, payeeAccountId }))} />}
+      {asBroker && step === 2 && <><T w="600">Amount paid / opening balance: ₹{inr(f.openingAmount)}</T><PaymentReferenceFields value={payment} onChange={setPayment} onBusyChange={setProofBusy} /><Notice>The Super Admin checks these details before approving the trader and adding the opening balance.</Notice></>}
       {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title={asBroker ? 'Send for approval' : 'Create account'} busy={busy} onPress={async () => {
+      {step > 0 && <Button title="Back" disabled={busy} onPress={() => setStep(step - 1)} />}
+      <Button kind="primary" size="lg" title={asBroker ? step < 2 ? 'Next' : 'Send for approval' : 'Create account'} busy={busy || proofBusy} onPress={async () => {
         setTouched(true);
-        if (bad) return;
+        if (bad) {setStep(0);return;}
+        setErr(null);
+        if (asBroker) {
+          if (step === 0) {if (!payment.payerName) setPayment({ ...payment, payerName: f.displayName });setStep(1);return;}
+          if (step === 1) {if (!payment.payeeAccountId) {setErr('Choose the receiving account paid by the trader.');return;}setStep(2);return;}
+          const error = paymentError(payment);if (error) {setErr(error);return;}
+        }
         setBusy(true); setErr(null);
         try {
-          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined } });
+          const d = await gql<{ createUser: { status: string } }>(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, { i: { username: f.username, displayName: f.displayName, role: f.role, phone: f.phone || undefined, brokerId: f.role === 'TRADER' && f.brokerId ? f.brokerId : undefined, tempPassword: f.tempPassword, commissionPerMiniLot: f.role === 'BROKER' && f.commMini.trim() ? f.commMini.trim() : undefined, commissionPerMegaLot: f.role === 'BROKER' && f.commMega.trim() ? f.commMega.trim() : undefined, openingAmount: f.role === 'TRADER' && f.openingAmount.trim() ? f.openingAmount.trim() : undefined, payment: asBroker ? paymentInput(payment) : undefined } });
           toast(d.createUser.status === 'ACTIVE' ? 'Account created and active' : asBroker ? 'Request sent to the Super Admin' : 'Account created and sent for approval'); onDone(); onClose();
         } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }} />
@@ -134,7 +149,7 @@ export function CreateUserSheet({ brokers, onClose, onDone }: { brokers: { id: s
 }
 
 /* ============================================================== one account */
-type Action = 'approve' | 'suspend' | 'reactivate' | 'broker' | 'password' | 'signout' | 'delete' | 'commission';
+type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'broker' | 'password' | 'signout' | 'delete' | 'commission';
 export function AdminUserScreen({ id }: { id: string }) {
   const sole = useSoleAdmin();
   const t = useTheme();
@@ -152,6 +167,7 @@ export function AdminUserScreen({ id }: { id: string }) {
     <Screen back title={x.displayName}>
       <ReenableResetTrader user={x} onDone={u.refetch} />
       <PendingDeletions userId={x.id} onDeleted={() => router.back()} />
+      {x.rejectionReason && <Notice tone="err">Rejection reason: {x.rejectionReason}</Notice>}
       <Row>
         <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: t.brandSoft, alignItems: 'center', justifyContent: 'center' }}><T v="h3" c="brand">{initials(x.displayName)}</T></View>
         <View style={{ flex: 1, gap: 4 }}><T v="h2">{x.displayName}</T><Row gap={S[2]}><T v="sm" c="text2">{x.username} · {ROLE[x.role]}</T><StatusBadge v={x.status} /></Row></View>
@@ -166,6 +182,7 @@ export function AdminUserScreen({ id }: { id: string }) {
       {self ? <Notice>This is your own account. Use Profile to change your password or devices.</Notice> : (
         <Section title="Actions">
           {x.status === 'PENDING' && <ActionRow icon="check" tone="pos" label="Approve account" sub={x.openingAmount ? `Lets them sign in and adds ₹${inr(x.openingAmount)}` : 'Lets them sign in'} onPress={() => setAct('approve')} />}
+          {x.status === 'PENDING' && x.role === 'TRADER' && <ActionRow icon="alert" tone="neg" label="Reject trader" sub="Keep the account disabled and notify its broker" onPress={() => setAct('reject')} />}
           {x.status === 'ACTIVE' && <ActionRow icon="lock" tone="neg" label="Suspend account" sub="Signs them out and blocks sign-in" onPress={() => setAct('suspend')} />}
           {x.status === 'SUSPENDED' && <ActionRow icon="check" tone="pos" label="Reactivate account" sub="Lets them sign in again" onPress={() => setAct('reactivate')} />}
           {x.role === 'BROKER' && <ActionRow icon="briefcase" label="Change commission" sub={x.commissionPerMiniLot ? `Now ₹${inr(x.commissionPerMiniLot)} mini · ₹${inr(x.commissionPerMegaLot)} mega` : 'Per mini and mega lot'} onPress={() => setAct('commission')} />}
@@ -209,6 +226,7 @@ function UserSessions({ userId }: { userId: string }) {
 
 function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u: UserRow; brokers: { id: string; username: string; displayName: string }[]; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
+  const [paymentReady, setPaymentReady] = useState(false);
   const [broker, setBroker] = useState(u.brokerId ?? '');
   const [pw, setPw] = useState(act === 'commission' && u.commissionPerMegaLot ? String(Number(u.commissionPerMegaLot)) : '');
   const [typed, setTyped] = useState(act === 'commission' && u.commissionPerMiniLot ? String(Number(u.commissionPerMiniLot)) : '');
@@ -219,12 +237,14 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
     setBusy(true); setErr(null);
     try { const d = await gql(q, v); toast(typeof ok === 'string' ? ok : ok(d)); if (act === 'delete' && d?.requestUserDeletion?.status === 'EXECUTED') { router.back(); return; } onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
-  const title = { approve: 'Approve account?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?', commission: 'Change commission' }[act];
+  const title = { approve: 'Approve account?', reject: 'Reject trader?', suspend: 'Suspend account?', reactivate: 'Reactivate account?', broker: 'Assign broker', password: 'Reset password', signout: 'Sign out everywhere?', delete: 'Delete permanently?', commission: 'Change commission' }[act];
   return (
     <Sheet visible title={title} sub={`${u.displayName} (${u.username})`} onClose={onClose}>
       {act === 'approve' && <T c="text2">{u.openingAmount ? `They can sign in as soon as you approve, and ₹${inr(u.openingAmount)} is added to their balance.` : 'They can sign in as soon as you approve.'}</T>}
       {act === 'approve' && <Lines lines={[['Type', ROLE[u.role]], ...(u.brokerName ? [['Broker', u.brokerName] as [string, string]] : []), ...(u.createdByName ? [['Requested by', u.createdByName] as [string, string]] : []), ['Requested on', when(u.createdAt)], ...(u.openingAmount ? [['Opening amount', `₹${inr(u.openingAmount)}`] as [string, string]] : [])]} />}
       {(act === 'suspend' || act === 'reactivate') && <Field label="Reason (recorded in the audit log)" value={reason} onChangeText={setReason} maxLength={200} hint="At least 5 characters" />}
+      {act === 'approve' && u.role === 'TRADER' && <><OpeningPaymentDetails userId={u.id} onReady={setPaymentReady} /><Notice tone="warn">Confirm the amount and UTR against your bank statement before approving.</Notice></>}
+      {act === 'reject' && <><Notice>The trader cannot sign in. No opening balance is credited. Their broker will see the rejection reason.</Notice><Field label="Rejection reason" value={reason} onChangeText={setReason} maxLength={300} hint="5–300 characters" /></>}
       {act === 'broker' && <Chips value={broker} onChange={setBroker} items={[{ k: '', label: 'No broker' }, ...brokers.map((b) => ({ k: b.id, label: b.username }))]} />}
       {act === 'password' && <Field label="Temporary password" secureTextEntry textContentType="newPassword" value={pw} onChangeText={setPw} hint="At least 10 characters. They’ll be signed out and should change it after signing in." />}
       {act === 'signout' && <T c="text2">Every device signed in as this user is signed out now.</T>}
@@ -238,7 +258,8 @@ function UserActionSheet({ act, u, brokers, onClose, onDone }: { act: Action; u:
       {err && <Notice tone="err">{err}</Notice>}
       <Row>
         <Button block title="Cancel" onPress={onClose} />
-        {act === 'approve' && <Button block kind="primary" title="Approve" busy={busy} onPress={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: u.id }, u.openingAmount ? `Account approved and ₹${inr(u.openingAmount)} added` : 'Account approved')} />}
+        {act === 'approve' && <Button block kind="primary" title="Approve" busy={busy} disabled={u.role === 'TRADER' && !paymentReady} onPress={() => run(`mutation($id:ID!){ approveUser(userId:$id){ id } }`, { id: u.id }, u.openingAmount ? `Account approved and ₹${inr(u.openingAmount)} added` : 'Account approved')} />}
+        {act === 'reject' && <Button block kind="sell" title="Reject trader" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$r:String!){ rejectTrader(userId:$id, reason:$r){ id status } }`, { id: u.id, r: reason.trim() }, 'Trader request rejected')} />}
         {act === 'suspend' && <Button block kind="sell" title="Suspend" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$s:UserStatus!,$r:String!){ setUserStatus(userId:$id, status:$s, reason:$r){ id } }`, { id: u.id, s: 'SUSPENDED', r: reason.trim() }, 'Account suspended')} />}
         {act === 'reactivate' && <Button block kind="primary" title="Reactivate" busy={busy} disabled={reason.trim().length < 5} onPress={() => run(`mutation($id:ID!,$s:UserStatus!,$r:String!){ setUserStatus(userId:$id, status:$s, reason:$r){ id } }`, { id: u.id, s: 'ACTIVE', r: reason.trim() }, 'Account reactivated')} />}
         {act === 'broker' && <Button block kind="primary" title="Save" busy={busy} disabled={broker === (u.brokerId ?? '')} onPress={() => run(`mutation($t:ID!,$b:ID){ assignTraderToBroker(traderId:$t, brokerId:$b){ id } }`, { t: u.id, b: broker || null }, 'Broker updated')} />}

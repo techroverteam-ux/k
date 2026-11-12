@@ -11,6 +11,7 @@ import { NUM_SCALE, usePrefs, usePrivate } from './prefs';
 import { useSplashActive } from './splash';
 import { CONSENT_FIELDS, deviceLabel, LOGIN_FIELDS, LOGIN_LABEL, stamp, type ConsentRecord, type LoginEvent } from './activity';
 import { useAuth } from './auth';
+import { newPaymentDraft, paymentError, paymentInput, PaymentReferenceFields, ReceivingAccountPicker } from './payment-details';
 import { QuickTradeSheet } from './quick-trade';
 import { Icon } from './icons';
 import { CTL, inr, initials, R, S, shortSymbol, toneOfValue, useTheme, when } from './theme';
@@ -187,12 +188,13 @@ interface Summary { balance: string; available: string; marginUsed: string; real
 export const SUMMARY = `query($u:ID){ accountSummary(userId:$u){ balance available marginUsed realizedPnl unrealizedPnl openPositions openOrders deposits withdrawals fees } }`;
 export const useSummary = (userId?: string) => useQuery<{ accountSummary: Summary }>(SUMMARY, { u: userId }, 5000);
 
-export function SummaryBlock({ userId, actions, title = 'Available to trade', compact, detail }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean }) {
+export function SummaryBlock({ userId, actions, title = 'Available to trade', compact, detail, addScript }: { userId?: string; actions?: boolean; title?: string; compact?: boolean; detail?: boolean; addScript?: boolean }) {
   const t = useTheme();
   const { data, error, loading, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const priv = usePrivate();
   const showFees = useAuth().me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
+  const scriptAction = addScript || (!showFees && !userId);
   const s = data?.accountSummary;
   if (loading && !s) return <Skeleton rows={2} />;
   if (error && !s) return <ErrorState error={error} retry={refetch} />;
@@ -219,8 +221,9 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
         </View>
         {actions && (
           <Row gap={S[2]}>
-            <View style={{ flex: 1 }}><Button block size="sm" title="Withdraw" onPress={() => setPay('WITHDRAWAL')} /></View>
-            <View style={{ flex: 1 }}><Button block size="sm" kind="primary" icon="plus" title="Add funds" onPress={() => setPay('DEPOSIT')} /></View>
+            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} title="Withdraw" onPress={() => setPay('WITHDRAWAL')} /></View>
+            {scriptAction && <View style={{ flex: 1 }}><Button block size="sm" fitLabel title="Add script" onPress={() => router.push('/search?mode=add' as never)} /></View>}
+            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} kind="primary" title="Add funds" onPress={() => setPay('DEPOSIT')} /></View>
           </Row>
         )}
         {pay && <PaymentSheet type={pay} userId={userId} available={s?.available} onClose={() => { setPay(null); void refetch(); }} />}
@@ -237,8 +240,9 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
       </View>
       {actions && (
         <Row>
-          <Button block title="Withdraw" onPress={() => setPay('WITHDRAWAL')} />
-          <Button block kind="primary" icon="plus" title="Add funds" onPress={() => setPay('DEPOSIT')} />
+          <Button block fitLabel={scriptAction} title="Withdraw" onPress={() => setPay('WITHDRAWAL')} />
+          {scriptAction && <Button block fitLabel title="Add script" onPress={() => router.push('/search?mode=add' as never)} />}
+          <Button block fitLabel={scriptAction} kind="primary" icon={scriptAction ? undefined : 'plus'} title="Add funds" onPress={() => setPay('DEPOSIT')} />
         </Row>
       )}
       <Metrics items={[
@@ -254,14 +258,18 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
 
 export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPOSIT' | 'WITHDRAWAL'; userId?: string; available?: string; onClose: () => void }) {
   const [amount, setAmount] = useState('');
-  const [review, setReview] = useState(false);
+  const [step, setStep] = useState(0);
+  const [payment, setPayment] = useState(newPaymentDraft);
+  const [proofBusy, setProofBusy] = useState(false);
   const [touched, setTouched] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A new key whenever the amount changes: a retry of the same request is safe, a different amount is a new request.
-  const key = useMemo(newKey, [amount]);
+  const key = useMemo(newKey, [amount, payment.utr, payment.payeeAccountId]);
   const { settings, me } = useAuth();
   const sole = useSoleAdmin() && me?.role === 'SUPER_ADMIN';
+  const needsPayment = type === 'DEPOSIT' && me?.role !== 'SUPER_ADMIN';
+  const review = step === (needsPayment ? 3 : 1);
   const min = type === 'DEPOSIT' ? Number(settings?.minDeposit ?? 50000) : 0;
   const minLabel = `₹${inr(String(min)).replace('.00', '')}`;
   const fmt = /^\d{1,12}(\.\d{1,2})?$/.test(amount) && Number(amount) > 0;
@@ -270,19 +278,26 @@ export function PaymentSheet({ type, userId, available, onClose }: { type: 'DEPO
   const fieldErr = touched && (!fmt ? 'Enter an amount with up to 2 decimals' : under ? `Minimum to add is ${minLabel}` : over ? `You can withdraw up to ₹${inr(available)}` : null);
   return (
     <Sheet visible title={type === 'DEPOSIT' ? 'Add funds' : 'Withdraw funds'} sub={sole ? (type === 'DEPOSIT' ? `Added straight away. Minimum ${minLabel}.` : 'Withdrawn straight away.') : type === 'DEPOSIT' ? `A Super Admin reviews every request. Minimum ${minLabel}.` : 'A Super Admin reviews every request.'} onClose={onClose}>
-      {!review ? <>
+      {needsPayment && !review && <T v="xs" c="text2">Step {step + 1} of 4 · {['Amount', 'Super Admin receiving account', 'Payment reference'][step]}</T>}
+      {step === 0 && <>
       <Field label="Amount" prefix="₹" keyboardType="decimal-pad" value={amount} onBlur={() => setTouched(true)} onChangeText={(v) => setAmount(v.replace(/[^\d.]/g, ''))} placeholder="0.00" error={fieldErr || null} hint={type === 'WITHDRAWAL' && available ? `Withdrawable now: ₹${inr(available)}` : type === 'DEPOSIT' ? `Minimum ${minLabel}` : undefined} />
       {type === 'DEPOSIT' && <Chips value={amount} onChange={setAmount} items={[min, min * 2, min * 4, min * 10].map(String).map((v) => ({ k: v, label: `+₹${inr(v).replace('.00', '')}` }))} />}
-      </> : <Lines lines={[[type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw', `\u20b9${inr(amount)}`], ['Approval', sole ? 'Posts immediately' : 'Administrator review']]} />}
-      {review && <Button kind="ghost" title="Edit amount" disabled={busy} onPress={() => setReview(false)} />}
+      </>}
+      {needsPayment && step === 1 && <ReceivingAccountPicker value={payment.payeeAccountId} onChange={(payeeAccountId) => setPayment((p) => ({ ...p, payeeAccountId }))} />}
+      {needsPayment && step === 2 && <PaymentReferenceFields value={payment} onChange={setPayment} onBusyChange={setProofBusy} />}
+      {review && <Lines lines={[[type === 'DEPOSIT' ? 'Amount to add' : 'Amount to withdraw', `\u20b9${inr(amount)}`], ...(needsPayment ? [['Payer', payment.payerName], ['UTR / reference', payment.utr], ['Payment date', payment.paidOn]] as [string, string][] : []), ['Approval', sole ? 'Posts immediately' : 'Administrator review']]} />}
+      {step > 0 && <Button kind="ghost" title="Back" disabled={busy} onPress={() => setStep(step - 1)} />}
       {err && <Notice tone="err">{err}</Notice>}
-      <Button kind="primary" size="lg" title={review ? "Send request" : "Review request"} busy={busy} onPress={async () => {
+      <Button kind="primary" size="lg" title={review ? 'Send request' : needsPayment && step < 2 ? 'Next' : 'Review request'} busy={busy || proofBusy} onPress={async () => {
         setTouched(true);
         if (!fmt || over || under) return;
-        if (!review) { setReview(true); return; }
+        setErr(null);
+        if (needsPayment && step === 1 && !payment.payeeAccountId) {setErr('Choose a receiving account.');return;}
+        if (needsPayment && step >= 2) {const error = paymentError(payment);if (error) {setErr(error);return;}}
+        if (!review) {if (!payment.payerName && me?.role === 'TRADER') setPayment({ ...payment, payerName: me.displayName });setStep(step + 1);return;}
         setBusy(true); setErr(null);
         try {
-          const d = await gql<{ requestPayment: { id: string } }>(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId } });
+          const d = await gql<{ requestPayment: { id: string } }>(`mutation($i:PaymentRequestInput!){ requestPayment(input:$i){ id } }`, { i: { type, amount, idempotencyKey: key, userId, payment: needsPayment ? paymentInput(payment) : undefined } });
           // Only one Super Admin: post immediately without a separate approval step.
           if (sole) {
             try { await gql(`mutation($id:ID!){ approvePayment(id:$id){ id } }`, { id: d.requestPayment.id }); toast(type === 'DEPOSIT' ? 'Funds added' : 'Withdrawal done'); }
@@ -380,9 +395,10 @@ export function WatchlistBlock({ limit, header }: { limit?: number; header?: Rea
   const top = (
     <>
       {header}
+      {!limit && <SummaryBlock compact detail actions addScript title="Available balance" />}
       <Spread style={{ alignItems: 'center', marginBottom: S[1] }}>
         {count > 0 ? <T w="600">Watchlist <T v="sm" c="text2">{count}/50</T></T> : <View />}
-        <Button size="sm" kind="primary" icon="plus" title="Add script" disabled={count >= 50} onPress={addScript} />
+        {!!limit && <Button size="sm" kind="primary" icon="plus" title="Add script" disabled={count >= 50} onPress={addScript} />}
       </Spread>
       {entries.length > 0 && detailed && <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}><T v="xs" w="600" style={{ flex: 1, fontSize: 9 }}>INSTRUMENT · LTP · CHG%</T><T v="xs" c="neg" w="600" style={{ width: columnWidth, textAlign: 'center' }}>BID</T><T v="xs" c="pos" w="600" style={{ width: columnWidth, textAlign: 'center' }}>ASK</T></View>}
     </>

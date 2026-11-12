@@ -35,6 +35,8 @@ let app: INestApplication;
 let url: string;
 let pg: Pool;
 const PW = process.env.SEED_PASSWORD!;
+let fundPayeeId: string;
+const fundEvidence = (utr = 'TEST' + randomUUID().replace(/-/g, '').slice(0, 24)) => ({ payeeAccountId: fundPayeeId, utr: utr.toUpperCase(), payerName: 'Test Payer', paidAt: new Date(Date.now() - 60_000).toISOString() });
 
 type Res = { data?: any; errors?: Array<{ message: string; extensions?: { code?: string } }> };
 
@@ -127,6 +129,7 @@ beforeAll(async () => {
   execSync('npx ts-node --transpile-only scripts/migrate.ts', { stdio: 'inherit', env: process.env });
   execSync('npx ts-node --transpile-only scripts/seed.ts', { stdio: 'inherit', env: process.env });
   pg = new Pool({ connectionString: base });
+  fundPayeeId = (await pg.query(`INSERT INTO payee_accounts(kind,label,account_name,bank_name,account_number,ifsc,branch,upi_id,status,created_by_id) SELECT 'BANK','Test receiving account','K Training','HDFC Bank',$1,'HDFC0001234','Main Branch',$2,'ACTIVE',id FROM users WHERE username='admin' RETURNING id`, [encryptField('50100123456789', 'payee_accounts.account_number'), encryptField('thek@hdfc', 'payee_accounts.upi_id')])).rows[0].id;
 
   // Most suites sign the same users in many times: start with no concurrent-session limit.
   await setConfig('security.sessionPolicy', OPEN_POLICY);
@@ -229,8 +232,9 @@ describe('payments: idempotency, maker-checker, step-up', () => {
   it('deduplicates retried requests and posts exactly once', async () => {
     const t = await login('trader.one');
     const key = randomUUID();
-    const q = `mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.50", idempotencyKey:$k}){ id status amount } }`;
-    const results = await Promise.all(Array.from({ length: 8 }, () => gql(q, { k: key }, { token: t.accessToken })));
+    const q = `mutation($k:String!,$p:PaymentEvidenceInput!){ requestPayment(input:{type:DEPOSIT, amount:"50000.50", idempotencyKey:$k,payment:$p}){ id status amount } }`;
+    const evidence = fundEvidence();
+    const results = await Promise.all(Array.from({ length: 8 }, () => gql(q, { k: key, p: evidence }, { token: t.accessToken })));
     const ids = new Set(results.filter((r) => !r.errors).map((r) => r.data.requestPayment.id));
     expect(ids.size).toBe(1);
     const id = [...ids][0];
@@ -262,9 +266,9 @@ describe('payments: idempotency, maker-checker, step-up', () => {
     const b1 = await login('broker.one');
     const t1 = await login('trader.one');
     const t3 = await login('trader.three');
-    const q = `mutation($u:ID,$k:String!){ requestPayment(input:{type:DEPOSIT, amount:"60000.00", idempotencyKey:$k, userId:$u}){ id status } }`;
-    expect((await gql(q, { u: t1.user.id, k: randomUUID() }, { token: b1.accessToken })).data.requestPayment.status).toBe('REQUESTED');
-    expect(code(await gql(q, { u: t3.user.id, k: randomUUID() }, { token: b1.accessToken }))).toBe('NOT_FOUND');
+    const q = `mutation($u:ID,$k:String!,$p:PaymentEvidenceInput!){ requestPayment(input:{type:DEPOSIT, amount:"60000.00", idempotencyKey:$k, userId:$u,payment:$p}){ id status } }`;
+    expect((await gql(q, { u: t1.user.id, k: randomUUID(), p: fundEvidence() }, { token: b1.accessToken })).data.requestPayment.status).toBe('REQUESTED');
+    expect(code(await gql(q, { u: t3.user.id, k: randomUUID(), p: fundEvidence() }, { token: b1.accessToken }))).toBe('NOT_FOUND');
   });
 
   it('refuses add-funds requests below the ₹50,000 minimum', async () => {
@@ -538,7 +542,7 @@ describe('activity log & audit enrichment', () => {
     const { rows: [act] } = await pg.query(`SELECT op_name, outcome FROM activity_log WHERE request_id = $1`, [reqId]);
     expect(act).toMatchObject({ op_name: 'placeOrder', outcome: 'OK' });
 
-    const p = await gql(`mutation($k:String!){ requestPayment(input:{type:DEPOSIT, amount:"50000.00", idempotencyKey:$k}){ id } }`, { k: randomUUID() }, { token: t.accessToken, ua: 'TestPhone/2.0' });
+    const p = await gql(`mutation($k:String!,$p:PaymentEvidenceInput!){ requestPayment(input:{type:DEPOSIT, amount:"50000.00", idempotencyKey:$k,payment:$p}){ id } }`, { k: randomUUID(), p: fundEvidence() }, { token: t.accessToken, ua: 'TestPhone/2.0' });
     const { rows: [pr] } = await pg.query(`SELECT requested_ip, requested_user_agent, requested_session_id FROM payment_requests WHERE id = $1`, [p.data.requestPayment.id]);
     expect(pr).toMatchObject({ requested_ip: '127.0.0.1', requested_user_agent: 'TestPhone/2.0' });
   });
@@ -1144,7 +1148,7 @@ describe('fees: bank & UPI details (maker-checker) and fee payments', () => {
     const bad = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', accountNumber: '50100123456789', ifsc: 'HDFC123' } }, { token: admin.token, stepUp: suA });
     expect(code(bad)).toBe('BAD_USER_INPUT');
     expect(code(await gql(ADD, { i: { kind: 'UPI', label: 'UPI', accountName: 'K Training', upiId: 'not-a-upi' } }, { token: admin.token, stepUp: suA }))).toBe('BAD_USER_INPUT');
-    const add = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', bankName: 'HDFC Bank', accountNumber: '50100123456789', ifsc: 'hdfc0001234' } }, { token: admin.token, stepUp: suA });
+    const add = await gql(ADD, { i: { kind: 'BANK', label: 'HDFC current', accountName: 'K Training Pvt Ltd', bankName: 'HDFC Bank', branch: 'Main Branch', upiId: 'thek@hdfc', accountNumber: '50100123456789', ifsc: 'hdfc0001234' } }, { token: admin.token, stepUp: suA });
     expect(add.data.addPayeeAccount.status).toBe('ACTIVE');
     const id = add.data.addPayeeAccount.id;
 
@@ -1259,7 +1263,7 @@ describe('broker commission per lot', () => {
     await gql(`mutation($b:ID!){ setBrokerCommissionPerLot(brokerId:$b,perMiniLot:"170",perMegaLot:"1700"){ id } }`,{b:b1},{token:admin.token});
     // Each broker can have their own amounts.
     const CREATE = `mutation($i:CreateUserInput!){ createUser(input:$i){ id role } }`;
-    const ok = await gql(CREATE, { i: { username: 'broker.lot', displayName: 'Lot Broker', role: 'BROKER', tempPassword: 'Brok3r!Pass#26', commissionPerMiniLot: '200' } }, { token: admin.token });
+    const ok = await gql(CREATE, { i: { username: 'broker.lot', displayName: 'Lot Broker', phone: '9898000101', role: 'BROKER', tempPassword: 'Brok3r!Pass#26', commissionPerMiniLot: '200' } }, { token: admin.token });
     const id = ok.data.createUser.id;
     const SET = `mutation($b:ID!,$m:String!,$g:String!){ setBrokerCommissionPerLot(brokerId:$b, perMiniLot:$m, perMegaLot:$g){ commissionPerMiniLot commissionPerMegaLot commissionIsDefault } }`;
     expect((await gql(SET, { b: id, m: '180', g: '1800' }, { token: admin.token })).data.setBrokerCommissionPerLot).toEqual({ commissionPerMiniLot: '180.00', commissionPerMegaLot: '1800.00', commissionIsDefault: false });
@@ -1280,7 +1284,7 @@ describe('loss watch: warning at 80%, all trades cut at 95%', () => {
     market.setPrice(inst, 636450n);
     // A fresh trader with ₹50,000 (approved by the second admin, opening amount credited).
     const admin = await adminLogin('admin');
-    const created = await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`, { i: { username: 'trader.risk', displayName: 'Risk Trader', role: 'TRADER', tempPassword: PW, openingAmount: '50000' } }, { token: admin.token });
+    const created = await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`, { i: { username: 'trader.risk', displayName: 'Risk Trader', phone: '9898000102', role: 'TRADER', tempPassword: PW, openingAmount: '50000' } }, { token: admin.token });
     const uid = created.data.createUser.id;
     const chk = await adminLogin('admin');
     await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: uid }, { token: chk.token, stepUp: await stepUp(chk.token, 'admin') });
@@ -1328,7 +1332,7 @@ describe('broker creates a trader with an opening amount', () => {
     const base = { username: 'trader.opening', displayName: 'Opening Trader', role: 'TRADER', tempPassword: 'Trad3r!Open#26' };
     expect(code(await gql(CREATE, { i: base }, tok))).toBe('BAD_USER_INPUT'); // amount required from a broker
     expect(code(await gql(CREATE, { i: { ...base, openingAmount: '1000' } }, tok))).toBe('BAD_USER_INPUT'); // below the minimum
-    const r = await gql(CREATE, { i: { ...base, openingAmount: '75000' } }, tok);
+    const r = await gql(CREATE, { i: { ...base, openingAmount: '75000', payment: fundEvidence() } }, tok);
     expect(r.data.createUser).toMatchObject({ status: 'PENDING', openingAmount: '75000.00' });
     const id = r.data.createUser.id;
     const admin = await adminLogin('admin');
@@ -1347,6 +1351,99 @@ describe('broker creates a trader with an opening amount', () => {
     expect(bal.rows[0].s).toBe('7500000');
     expect(code(await gql(`mutation($u:ID!){ approveUser(userId:$u){ status } }`, { u: id }, { token: admin.token }))).toBe('CONFLICT');
     expect((await pg.query(`SELECT count(*)::int AS n FROM payment_requests WHERE user_id = $1`, [id])).rows[0].n).toBe(1);
+    expect((await pg.query(`SELECT count(*)::int AS n FROM payment_evidence e JOIN payment_requests p ON p.id=e.payment_request_id WHERE e.user_id=$1 AND e.amount_minor=p.amount_minor AND e.purpose='OPENING'`,[id])).rows[0].n).toBe(1);
+  });
+
+  it('requires a valid mobile number when the Super Admin creates an account', async () => {
+    const admin = await adminLogin('admin');
+    const q = `mutation($i:CreateUserInput!){ createUser(input:$i){ id status phone } }`;
+    const input = { username: 'broker.mobile', displayName: 'Mobile Broker', role: 'BROKER', tempPassword: PW };
+    const missing = await gql(q, {i:input}, {token:admin.token});
+    expect(code(missing)).toBe('BAD_USER_INPUT');
+    expect(missing.errors![0].message).toContain('Mobile');
+    expect(code(await gql(q, {i:{...input,phone:'123'}}, {token:admin.token}))).toBe('BAD_USER_INPUT');
+    const valid = await gql(q, {i:{...input,phone:'9898000111'}}, {token:admin.token});
+    expect(valid.data.createUser).toMatchObject({status:'ACTIVE',phone:'+919898000111'});
+  });
+
+  it('shows encrypted bank/UPI payment evidence to the admin and assigned broker, then rejects without crediting funds', async () => {
+    const broker = await login('broker.one'), other = await login('broker.two'), admin = await adminLogin('admin');
+    const proof = `data:image/png;base64,${Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a1e2ad3d0000000049454e44ae426082','hex'),Buffer.alloc(150*1024)]).toString('base64')}`;
+    const payment = {...fundEvidence(),proof};
+    const created = await gql(`mutation($i:CreateUserInput!){ createUser(input:$i){ id status } }`, {i:{username:'trader.proof',displayName:'Proof Trader',role:'TRADER',tempPassword:PW,openingAmount:'65000',payment}}, {token:broker.accessToken,headers:{'x-upload':'fee-proof'}});
+    expect(created.errors).toBeUndefined();
+    const id = created.data.createUser.id;
+    const view = `query($id:ID!){ openingPayment(userId:$id){ id amount utr payerName paidAt hasProof accountNumber ifsc branch upiId } }`;
+    const details = (await gql(view,{id},{token:admin.token})).data.openingPayment;
+    expect(details).toMatchObject({amount:'65000.00',utr:payment.utr,payerName:payment.payerName,hasProof:true,accountNumber:'50100123456789',ifsc:'HDFC0001234',branch:'Main Branch',upiId:'thek@hdfc'});
+    expect((await gql(view,{id},{token:broker.accessToken})).data.openingPayment.utr).toBe(payment.utr);
+    expect(code(await gql(view,{id},{token:other.accessToken}))).toBe('NOT_FOUND');
+    const raw = (await pg.query(`SELECT utr,payer_name,proof_data FROM payment_evidence WHERE id=$1`,[details.id])).rows[0];
+    expect(raw.utr).not.toBe(payment.utr);expect(raw.payer_name).not.toBe(payment.payerName);
+    expect(decryptField(raw.utr,'payment_evidence.utr')).toBe(payment.utr);
+    const image = `query($id:ID!){ paymentEvidenceProof(id:$id) }`;
+    expect((await gql(image,{id:details.id},{token:admin.token})).data.paymentEvidenceProof).toBe(proof);
+    expect(code(await gql(image,{id:details.id},{token:other.accessToken}))).toBe('NOT_FOUND');
+    const reject = `mutation($id:ID!,$r:String!){ rejectTrader(userId:$id,reason:$r){ status rejectionReason } }`;
+    expect(code(await gql(reject,{id,r:'No'},{token:admin.token}))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(reject,{id,r:'Payment not found'},{token:broker.accessToken}))).toBe('FORBIDDEN');
+    expect((await gql(reject,{id,r:'Payment not found'},{token:admin.token})).data.rejectTrader).toMatchObject({status:'REJECTED',rejectionReason:'Payment not found'});
+    expect((await gql(SUMMARY,{u:id},{token:admin.token})).data.accountSummary.balance).toBe('0.00');
+    expect((await pg.query(`SELECT count(*)::int AS n FROM payment_requests WHERE user_id=$1`,[id])).rows[0].n).toBe(0);
+    expect(code(await gql(`mutation($id:ID!){ approveUser(userId:$id){ id } }`,{id},{token:admin.token}))).toBe('CONFLICT');
+    expect(code(await gql(`mutation($id:ID!){ setUserStatus(userId:$id,status:ACTIVE,reason:"Try to bypass rejection"){ id } }`,{id},{token:admin.token}))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(`mutation($u:String!,$p:String!){login(username:$u,password:$p){accessToken}}`,{u:'trader.proof',p:PW}))).toBe('UNAUTHENTICATED');
+    expect((await pg.query(`SELECT count(*)::int AS n FROM notifications WHERE user_id=$1 AND kind='user.rejected'`,[broker.user.id])).rows[0].n).toBeGreaterThan(0);
+  });
+
+  it('rolls back invalid account payment details and prevents reusing an opening payment as a deposit', async () => {
+    const broker = await login('broker.one');
+    const create = `mutation($i:CreateUserInput!){ createUser(input:$i){ id } }`;
+    const base = {username:'trader.reference',displayName:'Reference Trader',role:'TRADER',tempPassword:PW,openingAmount:'50000'};
+    expect(code(await gql(create,{i:base},{token:broker.accessToken}))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(create,{i:{...base,payment:{...fundEvidence(),payeeAccountId:randomUUID()}}},{token:broker.accessToken}))).toBe('BAD_USER_INPUT');
+    expect(code(await gql(create,{i:{...base,payment:{...fundEvidence(),paidAt:'2099-01-01T00:00:00Z'}}},{token:broker.accessToken}))).toBe('BAD_USER_INPUT');
+    expect((await pg.query(`SELECT count(*)::int AS n FROM users WHERE username='trader.reference'`)).rows[0].n).toBe(0);
+    const payment = fundEvidence();
+    expect((await gql(create,{i:{...base,payment}},{token:broker.accessToken})).errors).toBeUndefined();
+    expect(code(await gql(create,{i:{...base,username:'trader.reference.dup',payment}},{token:broker.accessToken}))).toBe('CONFLICT');
+    expect((await pg.query(`SELECT count(*)::int AS n FROM users WHERE username='trader.reference.dup'`)).rows[0].n).toBe(0);
+    const trader = await login('trader.one');
+    expect(code(await gql(`mutation($i:PaymentRequestInput!){requestPayment(input:$i){id}}`,{i:{type:'DEPOSIT',amount:'50000',idempotencyKey:randomUUID(),payment}},{token:trader.accessToken}))).toBe('CONFLICT');
+  });
+
+  it('retains deposit evidence for review and credits a verified request only once', async () => {
+    const trader = await login('trader.one'), admin = await adminLogin('admin');
+    const request = `mutation($i:PaymentRequestInput!){ requestPayment(input:$i){id} }`;
+    const i = {type:'DEPOSIT',amount:'50000',idempotencyKey:randomUUID(),payment:fundEvidence()};
+    expect(code(await gql(request,{i:{...i,payment:undefined}},{token:trader.accessToken}))).toBe('BAD_USER_INPUT');
+    const before = Number((await gql(SUMMARY,{}, {token:trader.accessToken})).data.accountSummary.balance);
+    const id = (await gql(request,{i},{token:trader.accessToken})).data.requestPayment.id;
+    expect((await gql(request,{i},{token:trader.accessToken})).data.requestPayment.id).toBe(id);
+    expect(code(await gql(request,{i:{...i,payment:fundEvidence()}},{token:trader.accessToken}))).toBe('CONFLICT');
+    const review = await gql(`query($u:ID){paymentRequests(userId:$u){id paymentEvidence{id utr payerName amount accountNumber branch upiId}}}`,{u:trader.user.id},{token:admin.token});
+    expect(review.data.paymentRequests.find((p:any)=>p.id===id).paymentEvidence).toMatchObject({utr:i.payment.utr,payerName:'Test Payer',amount:'50000.00',accountNumber:'50100123456789',branch:'Main Branch',upiId:'thek@hdfc'});
+    const approve = `mutation($id:ID!){approvePayment(id:$id){id status journalId}}`;
+    const a = await gql(approve,{id},{token:admin.token}), b = await gql(approve,{id},{token:admin.token});
+    expect(a.data.approvePayment.status).toBe('POSTED');expect(b.data.approvePayment.journalId).toBe(a.data.approvePayment.journalId);
+    const after = Number((await gql(SUMMARY,{}, {token:trader.accessToken})).data.accountSummary.balance);
+    expect(after-before).toBe(50000);
+    expect((await pg.query(`SELECT count(*)::int AS n FROM payment_evidence WHERE payment_request_id=$1`,[id])).rows[0].n).toBe(1);
+  });
+
+  it('serializes competing account approval and rejection without crediting a rejected trader', async () => {
+    const broker = await login('broker.one'), admin = await adminLogin('admin');
+    const created = await gql(`mutation($i:CreateUserInput!){createUser(input:$i){id}}`,{i:{username:'trader.decision.race',displayName:'Decision Trader',role:'TRADER',tempPassword:PW,openingAmount:'50000',payment:fundEvidence()}},{token:broker.accessToken});
+    const id=created.data.createUser.id;
+    const outcomes = await Promise.all([
+      gql(`mutation($id:ID!){approveUser(userId:$id){status}}`,{id},{token:admin.token}),
+      gql(`mutation($id:ID!){rejectTrader(userId:$id,reason:"Could not verify payment"){status}}`,{id},{token:admin.token}),
+    ]);
+    expect(outcomes.filter((r)=>!r.errors)).toHaveLength(1);
+    const status=(await pg.query(`SELECT status FROM users WHERE id=$1`,[id])).rows[0].status;
+    expect(['ACTIVE','REJECTED']).toContain(status);
+    const balance=(await gql(SUMMARY,{u:id},{token:admin.token})).data.accountSummary.balance;
+    expect(balance).toBe(status==='ACTIVE'?'50000.00':'0.00');
   });
 });
 

@@ -51,13 +51,13 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   ) {}
 
   async onModuleInit() {
-    if(process.env.NODE_ENV!=='test' && env().MARKET_FEED==='dhan' && env().DHAN_CATALOG_SYNC==='on') await this.catalog?.sync();
     this.catalog?.onChange(async()=>{await this.reload();if(env().MARKET_FEED==='dhan')await this.startDhanFeed();});
     await this.reload();
     if (process.env.NODE_ENV !== 'test') {
       const feedMode = env().MARKET_FEED;
       if (feedMode === 'dhan') {
         await this.startDhanFeed();
+        if(env().DHAN_CATALOG_SYNC==='on')this.catalog?.startSync();
       }
       this.timer = setInterval(() => this.tick(), 1000);
     }
@@ -147,6 +147,10 @@ export class MarketDataService implements MarketDataProvider, OnModuleInit, OnMo
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     this.history.clear();
+  }
+
+  feedStatus() {
+    return { domestic: this.dhanFeed.status(), global: this.dhanGlobalFeed.status() };
   }
 
   /** Clear transient market data after a platform reset. */

@@ -31,6 +31,7 @@ export class DhanIntegrationResolver {
       ...(await this.credentials.status()),
       catalogJson: JSON.stringify(await this.catalog.status()),
       feedJson: JSON.stringify({
+        ...this.market.feedStatus(),
         instruments: this.market.instrumentCount(),
         freshQuotes: this.market.all().filter((q) => q.source === 'DHAN' && Date.now() - q.ts.getTime() < 60000).length,
       }),
@@ -44,7 +45,7 @@ export class DhanIntegrationResolver {
   @Roles('SUPER_ADMIN')
   @Mutation(() => String)
   async syncDhanCatalog() {
-    return JSON.stringify(await this.catalog.sync());
+    return JSON.stringify(this.catalog.startSync());
   }
 }
 

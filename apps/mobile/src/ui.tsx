@@ -219,7 +219,7 @@ export function Flash({ value, children, style }: { value?: string; children: Re
 
 /* ============================================================== controls */
 type BK = 'primary' | 'secondary' | 'buy' | 'sell' | 'danger' | 'ghost';
-export function Button({ title, onPress, kind = 'secondary', disabled, busy, size = 'md', icon, block }: { title: string; onPress: () => void; kind?: BK; disabled?: boolean; busy?: boolean; size?: 'sm' | 'md' | 'lg'; icon?: IconName; block?: boolean }) {
+export function Button({ title, onPress, kind = 'secondary', disabled, busy, size = 'md', icon, block, fitLabel }: { title: string; onPress: () => void; kind?: BK; disabled?: boolean; busy?: boolean; size?: 'sm' | 'md' | 'lg'; icon?: IconName; block?: boolean; fitLabel?: boolean }) {
   const t = useTheme();
   const bg = { primary: t.brand, buy: t.pos, sell: t.neg, secondary: t.bg, danger: t.bg, ghost: 'transparent' }[kind];
   const fg = { primary: t.brandInk, buy: '#fff', sell: '#fff', secondary: t.text, danger: t.neg, ghost: t.brand }[kind];
@@ -227,8 +227,8 @@ export function Button({ title, onPress, kind = 'secondary', disabled, busy, siz
   const h = { sm: CTL.hSm, md: CTL.h, lg: CTL.hLg }[size];
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }} onPress={() => { if (kind === 'primary' || kind === 'buy' || kind === 'sell') tap(); onPress(); }} disabled={disabled || busy}
-      style={({ pressed }) => ({ height: h, minHeight: h, minWidth: CTL.tap, paddingHorizontal: size === 'sm' ? S[3] : S[4], borderRadius: R.md, borderWidth: 1, borderColor: border, backgroundColor: pressed ? (kind === 'secondary' || kind === 'danger' || kind === 'ghost' ? t.bg3 : t.brandPressed) : bg, opacity: disabled ? 0.45 : 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: S[2], alignSelf: block ? 'stretch' : undefined, flex: block ? 1 : undefined })}>
-      {busy ? <ActivityIndicator color={fg} /> : <>{icon && <Icon name={icon} size={18} color={fg} />}<Text style={{ color: fg, fontWeight: '600', fontSize: size === 'sm' ? FS.sm : size === 'lg' ? FS.lg : FS.md }}>{title}</Text></>}
+      style={({ pressed }) => ({ height: h, minHeight: h, minWidth: CTL.tap, paddingHorizontal: fitLabel ? 6 : size === 'sm' ? S[3] : S[4], borderRadius: R.md, borderWidth: 1, borderColor: border, backgroundColor: pressed ? (kind === 'secondary' || kind === 'danger' || kind === 'ghost' ? t.bg3 : t.brandPressed) : bg, opacity: disabled ? 0.45 : 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: S[2], alignSelf: block ? 'stretch' : undefined, flex: block ? 1 : undefined })}>
+      {busy ? <ActivityIndicator color={fg} /> : <>{icon && <Icon name={icon} size={18} color={fg} />}<Text numberOfLines={fitLabel ? 1 : undefined} adjustsFontSizeToFit={fitLabel} minimumFontScale={0.8} style={{ color: fg, fontWeight: '600', flexShrink: fitLabel ? 1 : undefined, fontSize: size === 'sm' ? FS.sm : size === 'lg' ? FS.lg : FS.md }}>{title}</Text></>}
     </Pressable>
   );
 }

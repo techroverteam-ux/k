@@ -3,6 +3,7 @@ import { useSoleAdmin } from '@/lib/sole-admin';
 import { useState } from 'react';
 import { Icon } from '@/components/icons';
 import { PAYMENT_FIELDS, type Payment } from '@/components/trading';
+import { PaymentEvidenceDetails } from '@/components/payment-details';
 import { Confirm, Dialog, Empty, ErrorState, PageHead, SkeletonRows, Status, Tabs, useToast } from '@/components/ui';
 import { gql } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -85,14 +86,17 @@ export default function Transactions() {
         <ul className="confirm-lines transaction-details">
           {([['Transaction ID', selected.id], ['Account', selected.username ?? selected.userId], ['Type', selected.type], ['Amount', `₹${inr(selected.amount)}`], ['Status', selected.status], ['Mode', selected.mode], ['Requested', when(selected.createdAt)], ['Requested by', selected.requestedByName ?? selected.requestedById], ['Reviewed', selected.reviewedAt ? when(selected.reviewedAt) : 'Awaiting review'], ['Reviewed by', selected.reviewedByName ?? selected.reviewedById ?? '—'], ['Review note', selected.reviewNote ?? '—'], ['Reference', selected.externalRef ?? '—'], ['Ledger entry', selected.journalId ?? '—']] as [string, string][]).map(([k, v]) => <li key={k}><span className="t2">{k}</span><span className="w6">{v}</span></li>)}
         </ul>
+        {selected.paymentEvidence && <PaymentEvidenceDetails evidence={selected.paymentEvidence} />}
         <div className="actions"><button className="btn" onClick={() => setSelected(null)}>Close</button></div>
       </Dialog>}
       {approve && (
         <Confirm title={`Approve ${approve.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'}?`} sub="This posts the amount to the ledger."
           lines={[['Account', approve.username ?? ''], ['Type', approve.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'], ['Amount', `₹${inr(approve.amount)}`], ['Requested', when(approve.createdAt)]]}
-          warning={undefined}
+          warning={approve.type === 'DEPOSIT' ? 'Confirm the amount and UTR against your bank statement before approving.' : undefined}
           confirmLabel="Approve and post" pending={busy} error={err} onClose={() => setApprove(null)}
-          onConfirm={() => act(`mutation($id:ID!){ approvePayment(id:$id){ id status } }`, { id: approve.id }, 'Approved and posted to the ledger')} />
+          onConfirm={() => act(`mutation($id:ID!){ approvePayment(id:$id){ id status } }`, { id: approve.id }, 'Approved and posted to the ledger')}>
+          {approve.paymentEvidence && <PaymentEvidenceDetails evidence={approve.paymentEvidence} />}
+        </Confirm>
       )}
       {reject && (
         <Dialog title="Reject this request?" sub={`${reject.username} · ₹${inr(reject.amount)}`} onClose={() => setReject(null)}>

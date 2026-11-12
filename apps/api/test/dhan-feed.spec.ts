@@ -2,8 +2,31 @@ import 'reflect-metadata';
 import { DhanGlobalFeedService } from '../src/market/dhan-global-feed.service';
 import { csvFields, masterSegment } from '../scripts/audit-dhan-instruments';
 import { DhanFeedService } from '../src/market/dhan-feed.service';
+import WebSocket from 'ws';
 
 describe('Dhan binary packet decoding', () => {
+  it.each([DhanFeedService, DhanGlobalFeedService])('safely cancels a connecting %p socket during reconnect', async (Feed) => {
+    const feed = new Feed();
+    const socket = new WebSocket('ws://127.0.0.1:1');
+    const listener = jest.fn();socket.on('error', listener);
+    (feed as any).ws = socket;
+    try {
+      expect(socket.readyState).toBe(WebSocket.CONNECTING);
+      feed.reconnect();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(socket.readyState).toBe(WebSocket.CLOSED);
+      expect(listener).not.toHaveBeenCalled();
+    } finally {feed.onModuleDestroy();}
+  });
+  it('reports Data APIs subscription and expired-authorization rejections without treating them as prices', () => {
+    const feed = new DhanFeedService();const received = jest.fn();feed.onTick(received);
+    const b = Buffer.alloc(10);b[0]=50;b.writeUInt16LE(10,1);b.writeUInt16LE(806,8);
+    (feed as any).parseBinaryMessage(b);
+    expect(feed.status().error).toContain('Data APIs subscription');
+    b.writeUInt16LE(807,8);(feed as any).parseBinaryMessage(b);
+    expect(feed.status().error).toContain('authorization expired');
+    expect(received).not.toHaveBeenCalled();
+  });
   it('reads Full packet OHLC, depth and exchange time at their documented offsets', () => {
     const feed = new DhanFeedService(); const received = jest.fn(); feed.onTick(received);
     const b = Buffer.alloc(162); b[0]=8; b.writeUInt16LE(162,1); b[3]=1; b.writeUInt32LE(1333,4);
@@ -14,6 +37,7 @@ describe('Dhan binary packet decoding', () => {
     expect(received).toHaveBeenCalledWith(expect.objectContaining({ ltp:100.5,open:98,close:97,high:102,low:96,volume:777,lastTradeAt:new Date(1794476000000) }));
     expect(received.mock.calls[0][0].bid).toBeCloseTo(100.4,3);
     expect(received.mock.calls[0][0].ask).toBeCloseTo(100.6,3);
+    expect(feed.status().lastTickAt).toBeDefined();
   });
   it('ignores truncated tick packets', () => {
     const feed = new DhanFeedService(); const received=jest.fn(); feed.onTick(received);
