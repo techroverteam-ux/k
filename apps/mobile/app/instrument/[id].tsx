@@ -161,7 +161,6 @@ export default function StockScreen() {
             ]} />
           </Section>
 
-          <Button block size="lg" kind="buy" title="Trade" onPress={() => onTradePress('BUY')} />
         </View>
       )}
 

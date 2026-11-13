@@ -919,12 +919,15 @@ describe('encryption at rest', () => {
       expect(fresh.startsWith('enc:v2:k2:')).toBe(true);
       expect(needsRotation(fresh)).toBe(false);
     } finally {
-      process.env.DATA_ENCRYPTION_KEY = saved.k;
-      process.env.DATA_ENCRYPTION_KEY_ID = saved.id;
+      if (saved.k === undefined) delete process.env.DATA_ENCRYPTION_KEY; else process.env.DATA_ENCRYPTION_KEY = saved.k;
+      // Assigning undefined to process.env stores the string "undefined", overriding the k1 default in CI.
+      if (saved.id === undefined) delete process.env.DATA_ENCRYPTION_KEY_ID; else process.env.DATA_ENCRYPTION_KEY_ID = saved.id;
       if (saved.prev === undefined) delete process.env.DATA_ENCRYPTION_KEYS_PREVIOUS; else process.env.DATA_ENCRYPTION_KEYS_PREVIOUS = saved.prev;
       (require('../src/config/env') as { resetEnvCache?: () => void }).resetEnvCache?.();
       resetKeyRing();
     }
+    expect(process.env.DATA_ENCRYPTION_KEY_ID).toBe(saved.id);
+    expect(decryptField(old, 'users.phone')).toBe('secret-value');
   });
 });
 

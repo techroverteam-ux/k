@@ -25,6 +25,7 @@ export const QF = 'instrumentId ltp bid ask high low change changePct ts source'
 interface Inst { id: string; symbol: string; name: string; exchange: string; segment: string; expiry?: string; lotClass?: 'MINI' | 'MEGA'; lotLabel?: string; category?: string }
 const INST_FIELDS = 'id symbol name exchange segment expiry lotClass lotLabel category';
 type Cat = '' | 'FUTURES' | 'MCX' | 'OPTIONS' | 'FOREX' | 'CRYPTO' | 'US_STOCK' | 'COMEX' | 'US_INDEX';
+const MARKET_CATEGORIES: { k: Cat; label: string }[] = [{ k: 'FUTURES', label: 'Futures' }, { k: 'MCX', label: 'MCX' }, { k: 'OPTIONS', label: 'Options' }, { k: 'FOREX', label: 'Forex' }, { k: 'CRYPTO', label: 'Crypto' }, { k: 'US_STOCK', label: 'US Stock' }, { k: 'COMEX', label: 'COMEX' }, { k: 'US_INDEX', label: 'US Index' }, { k: '', label: 'All' }];
 type Lot = '' | 'MINI' | 'MEGA';
 
 /** Market tabs (same as the web portal) and, for MCX, Mini / Mega. */
@@ -101,9 +102,22 @@ export function SearchButton() {
   return <IconButton icon="search" label="Search instruments" onPress={() => router.push('/search')} />;
 }
 
-const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void }) {
+const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd, simple }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void; simple?: boolean }) {
   const t = useTheme();
   const sym = shortSymbol(i.symbol);
+  if (simple) return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[3], minHeight: 96, paddingVertical: S[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
+      <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+        <T w="700" numberOfLines={1}>{sym.replace(/-\d{2}[A-Za-z]{3}\d{4}-FUT$/, '')}</T>
+        <T v="sm" c="text2" numberOfLines={1}>{i.symbol}</T>
+        <T v="xs">{i.expiry ? `Exp: ${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' })}` : `${i.exchange} · ${i.segment}`}{lotText(i) ? ` · ${lotText(i)}` : ''}</T>
+      </View>
+      <Pressable disabled={inList} onPress={() => onAdd(i)} accessibilityRole="button" accessibilityLabel={`${inList ? 'Added to watchlist' : 'Add to watchlist'}: ${i.symbol}`} accessibilityState={{ disabled: inList }}
+        style={({ pressed }) => ({ width: CTL.tap, height: CTL.tap, borderWidth: 1, borderColor: inList ? t.brand : t.line2, borderRadius: R.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: inList ? t.brandSoft : pressed ? t.bg3 : t.bg })}>
+        <Icon name={inList ? 'check' : 'plus'} color={inList ? t.brand : t.text2} size={20} />
+      </Pressable>
+    </View>
+  );
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
       <Pressable onPress={() => router.push(`/instrument/${i.id}`)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}, open chart`} style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -117,34 +131,64 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd }: { i: Inst; q
   );
 });
 
-/** Search every instrument; tap to open its chart, + to add it to Watchlist 1. */
+/** Add mode is a simple contract picker; regular search also shows live prices. */
 export function SearchView({ addMode }: { addMode?: boolean } = {}) {
+  const t = useTheme();
   const [q, setQ] = useState('');
-  const [cat, setCat] = useState<Cat>('');
+  const [cat, setCat] = useState<Cat>(addMode ? 'FUTURES' : '');
   const [lot, setLot] = useState<Lot>('');
   const [res, setRes] = useState<Inst[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [added, setAdded] = useState<string[]>([]);
+  const adding = useRef(new Set<string>());
+  const counts = useQuery<{ instrumentCategoryCounts: { category: Cat; count: number }[] }>(`{ instrumentCategoryCounts { category count } }`);
   useEffect(() => {
     setRes(null);
-    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!,$c:String,$l:String){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:100){ ${INST_FIELDS} } }`, { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined }).then((d) => { setErr(null); setRes(d.searchInstruments); }).catch((e) => { setErr((e as Error).message); setRes([]); }), q ? 180 : 0);
-    return () => clearTimeout(h);
-  }, [q, cat, lot, nonce]);
+    let current = true;
+    const h = setTimeout(() => gql<{ searchInstruments: Inst[] }>(`query($q:String!,$c:String,$l:String,$n:Int!){ searchInstruments(query:$q, category:$c, lotClass:$l, limit:$n){ ${INST_FIELDS} } }`, { q: q.trim(), c: cat || undefined, l: cat === 'MCX' && lot ? lot : undefined, n: addMode ? 500 : 100 }).then((d) => { if (current) { setErr(null); setRes(d.searchInstruments); } }).catch((e) => { if (current) { setErr((e as Error).message); setRes([]); } }), q ? 180 : 0);
+    return () => { current = false; clearTimeout(h); };
+  }, [q, cat, lot, nonce, addMode]);
   const wl = useQuery<{ watchlist: { instrument: { id: string } }[] }>(`{ watchlist(listIndex:0){ instrument{ id } } }`);
   const inList = useMemo(() => new Set([...(wl.data?.watchlist ?? []).map((w) => w.instrument.id), ...added]), [wl.data, added]);
-  const quotes = useLiveQuotes((res ?? []).map((i) => i.id));
+  const quotes = useLiveQuotes(addMode ? [] : (res ?? []).map((i) => i.id));
   const onAdd = useCallback(async (i: Inst) => {
-    try { await gql(`mutation($i:ID!){ addToWatchlist(listIndex:0, instrumentId:$i) }`, { i: i.id }); setAdded((a) => [...a, i.id]); tap(); toast(`${shortSymbol(i.symbol)} added to Watchlist 1`); }
+    if (adding.current.has(i.id)) return;
+    adding.current.add(i.id);
+    try { await gql(`mutation($i:ID!){ addToWatchlist(listIndex:0, instrumentId:$i) }`, { i: i.id }); setAdded((a) => a.includes(i.id) ? a : [...a, i.id]); tap(); toast(`${shortSymbol(i.symbol)} added to Watchlist 1`); }
     catch (e) { toast((e as Error).message, true); }
+    finally { adding.current.delete(i.id); }
   }, []);
+  const pickerHeader = addMode ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingHorizontal: S[2], paddingVertical: S[2], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
+      <IconButton icon="chevronLeft" label="Back to watchlist" onPress={() => router.canGoBack() ? router.back() : router.replace('/(trader)/watchlist')} />
+      <View style={{ flex: 1, minWidth: 0 }}><SearchBox value={q} onChangeText={setQ} placeholder="Search scripts…" autoFocus /></View>
+      <T v="xs" style={{ paddingRight: S[2] }}>{added.length} added</T>
+    </View>
+  ) : undefined;
+  const categoryItems = MARKET_CATEGORIES.map((c) => {
+    const rows = counts.data?.instrumentCategoryCounts;
+    const count = c.k ? rows?.find((v) => v.category === c.k)?.count ?? 0 : rows?.reduce((sum, v) => sum + v.count, 0);
+    return { k: c.k, label: `${c.label.toUpperCase()}${rows ? `  ${count}` : ''}` };
+  });
+  const filters = addMode ? (
+    <View style={{ gap: S[2] }}>
+      <Tabs scroll value={cat} onChange={(c) => { setCat(c); setLot(''); }} items={categoryItems} />
+      {cat === 'MCX' && <Chips value={lot} onChange={setLot} items={[{ k: '', label: 'All lots' }, { k: 'MINI', label: 'Mini' }, { k: 'MEGA', label: 'Mega' }]} />}
+    </View>
+  ) : (
+    <View style={{ gap: S[3] }}>
+      <SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. GOLDM, RELIANCE" autoFocus />
+      <MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} />
+    </View>
+  );
   return (
-    <Screen back title={addMode ? 'Add script' : 'Search'} scroll={false}
-      right={addMode ? <Button size="sm" kind="primary" title="Done" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} /> : undefined}>
+    <Screen back title={addMode ? 'Add script' : 'Search'} header={pickerHeader} scroll={false}>
       <VList data={res ?? []} keyOf={(i) => i.id}
-        header={<View style={{ gap: S[3] }}><SearchBox value={q} onChangeText={setQ} placeholder="Symbol or company, e.g. GOLDM, RELIANCE" autoFocus /><MarketFilter cat={cat} lot={lot} onCat={setCat} onLot={setLot} /></View>}
+        header={filters}
+        footer={res?.length === 500 ? <T v="xs">Showing the first 500 instruments. Search to narrow the list.</T> : undefined}
         empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={q ? `No instruments match “${q}”` : 'Nothing listed here yet'}>{q ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>}
-        render={(i) => <SearchRow i={i} qq={quotes[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
+        render={(i) => <SearchRow i={i} simple={addMode} qq={quotes[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
     </Screen>
   );
 }
@@ -193,7 +237,12 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
   const { data, error, loading, refetch } = useSummary(userId);
   const [pay, setPay] = useState<'DEPOSIT' | 'WITHDRAWAL' | null>(null);
   const priv = usePrivate();
-  const showFees = useAuth().me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
+  const { me } = useAuth();
+  const showFees = me?.role !== 'TRADER'; // brokerage is not shown to traders (staff still see it)
+  const openPayment = (type: 'DEPOSIT' | 'WITHDRAWAL') => {
+    if (me?.isDemo) { toast('Adding funds and withdrawing are unavailable in demo accounts. Your balance is for practice trading.'); return; }
+    setPay(type);
+  };
   const scriptAction = addScript || (!showFees && !userId);
   const s = data?.accountSummary;
   if (loading && !s) return <Skeleton rows={2} />;
@@ -221,9 +270,9 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
         </View>
         {actions && (
           <Row gap={S[2]}>
-            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} title="Withdraw" onPress={() => setPay('WITHDRAWAL')} /></View>
+            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} title="Withdraw" onPress={() => openPayment('WITHDRAWAL')} /></View>
             {scriptAction && <View style={{ flex: 1 }}><Button block size="sm" fitLabel title="Add script" onPress={() => router.push('/search?mode=add' as never)} /></View>}
-            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} kind="primary" title="Add funds" onPress={() => setPay('DEPOSIT')} /></View>
+            <View style={{ flex: 1 }}><Button block size="sm" fitLabel={scriptAction} kind="primary" title="Add funds" onPress={() => openPayment('DEPOSIT')} /></View>
           </Row>
         )}
         {pay && <PaymentSheet type={pay} userId={userId} available={s?.available} onClose={() => { setPay(null); void refetch(); }} />}
@@ -240,9 +289,9 @@ export function SummaryBlock({ userId, actions, title = 'Available to trade', co
       </View>
       {actions && (
         <Row>
-          <Button block fitLabel={scriptAction} title="Withdraw" onPress={() => setPay('WITHDRAWAL')} />
+          <Button block fitLabel={scriptAction} title="Withdraw" onPress={() => openPayment('WITHDRAWAL')} />
           {scriptAction && <Button block fitLabel title="Add script" onPress={() => router.push('/search?mode=add' as never)} />}
-          <Button block fitLabel={scriptAction} kind="primary" icon={scriptAction ? undefined : 'plus'} title="Add funds" onPress={() => setPay('DEPOSIT')} />
+          <Button block fitLabel={scriptAction} kind="primary" icon={scriptAction ? undefined : 'plus'} title="Add funds" onPress={() => openPayment('DEPOSIT')} />
         </Row>
       )}
       <Metrics items={[

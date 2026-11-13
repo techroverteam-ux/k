@@ -47,7 +47,7 @@ const ControlCtx = createContext<ReactElement<RefreshControlProps> | undefined>(
 export const useRefreshControl = () => useContext(ControlCtx);
 
 /** Screen = safe area + app header + pull-to-refresh (always on). With scroll={false}, a child list scrolls instead. */
-export function Screen({ children, onRefresh, title, back, right, scroll = true, footer, pad = true }: { children: ReactNode; onRefresh?: () => Promise<unknown>; title?: string; back?: boolean; right?: ReactNode; scroll?: boolean; footer?: ReactNode; pad?: boolean }) {
+export function Screen({ children, onRefresh, title, back, right, header, scroll = true, footer, pad = true }: { children: ReactNode; onRefresh?: () => Promise<unknown>; title?: string; back?: boolean; right?: ReactNode; header?: ReactNode; scroll?: boolean; footer?: ReactNode; pad?: boolean }) {
   const t = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const fns = useRef(new Set<Refresher>());
@@ -64,7 +64,7 @@ export function Screen({ children, onRefresh, title, back, right, scroll = true,
     <RegisterCtx.Provider value={register}>
       <ControlCtx.Provider value={control}>
         <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={['top']}>
-          <Header title={title} back={back} right={right} />
+          {header ?? <Header title={title} back={back} right={right} />}
           <LiveBanner />
           {scroll ? (
             <ScrollView keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="automatic" refreshControl={control}>
@@ -253,7 +253,7 @@ export function SearchBox({ value, onChangeText, placeholder, autoFocus }: { val
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], height: CTL.h, backgroundColor: t.bg2, borderRadius: R.md, paddingHorizontal: S[3] }}>
       <Icon name="search" size={18} color={t.text3} />
-      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.text3} autoFocus={autoFocus} autoCapitalize="characters" autoCorrect={false} accessibilityLabel={placeholder} style={{ flex: 1, color: t.text, fontSize: FS.md, height: '100%' }} />
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.text3} autoFocus={autoFocus} autoCapitalize="characters" autoCorrect={false} accessibilityLabel={placeholder} style={{ flex: 1, minWidth: 0, color: t.text, fontSize: FS.md, height: '100%' }} />
       {!!value && <Pressable accessibilityLabel="Clear search" onPress={() => onChangeText('')} hitSlop={8}><Icon name="x" size={18} color={t.text3} /></Pressable>}
     </View>
   );

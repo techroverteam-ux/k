@@ -6,7 +6,7 @@ import { View } from 'react-native';
 import { inr, toneOfValue, useTheme } from '@/theme';
 import { Chips, DateField, ErrorState, IconMark, ListRow, Metrics, Row, Screen, Section, T, Tabs, useQuery } from '@/ui';
 
-/** Funds: balance, add/withdraw, P&L by period, transaction history. */
+/** Trade: balance, add/withdraw, P&L by period and transaction history. */
 export default function Funds() {
   const t = useTheme();
   const [p, setP] = useState<'d' | 'w' | 'm' | 'c'>('d');
@@ -26,7 +26,7 @@ export default function Funds() {
   const s = useQuery<{ periodSummary: { realizedPnl: string; brokerage: string; trades: number; volume: string } }>(`query($f:DateTime!,$t:DateTime!){ periodSummary(from:$f,to:$t){ realizedPnl brokerage trades volume } }`, r);
   const d = s.data?.periodSummary;
   return (
-    <Screen title="Funds" right={<><SearchButton /><BellButton /></>}>
+    <Screen title="Trade" right={<><SearchButton /><BellButton /></>}>
       <SummaryBlock actions title="Available balance" />
       <ListRow onPress={() => router.push('/fees')} label="Pay fees" left={<IconMark icon="wallet" tone="brand" />} title="Pay fees" sub="Course & subscription fees by bank transfer or UPI" right={<Icon name="chevronRight" size={18} color={t.text3} />} />
       <Section title="Profit & loss" action={<Chips value={p} onChange={setP} items={[{ k: 'd', label: 'Today' }, { k: 'w', label: 'Week' }, { k: 'm', label: 'Month' }, { k: 'c', label: 'Custom' }]} />}>
