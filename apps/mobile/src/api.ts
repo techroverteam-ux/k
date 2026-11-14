@@ -105,22 +105,35 @@ async function rawFetch(query: string, variables?: Record<string, unknown>, step
   return (await res.json()) as { data?: any; errors?: { message: string; extensions?: { code?: string; reason?: string; lockedUntil?: string; retryAfterSec?: number; remainingAttempts?: number } }[] };
 }
 
+/**
+ * How the last refresh went. 'unreachable' = the server couldn't be reached or failed (e.g. still starting up):
+ * the saved sign-in is kept, so the app can try again instead of sending the user back to the sign-in screen.
+ */
+export type RefreshOutcome = 'ok' | 'none' | 'rejected' | 'unreachable';
+let lastRefresh: RefreshOutcome = 'none';
+export const refreshOutcome = () => lastRefresh;
+
 export async function refreshSession(): Promise<boolean> {
   refreshing ??= (async () => {
     try {
       const rt = memRefresh ?? (persistRefresh ? await store.getItemAsync(RT_KEY) : null);
-      if (!rt) return false;
+      if (!rt) { lastRefresh = 'none'; return false; }
       const r = await raw(`mutation($r:String){ refresh(refreshToken:$r){ accessToken refreshToken } }`, { r: rt });
       const d = r.data?.refresh;
       const why = r.errors?.[0];
-      if (why?.extensions?.reason && why.extensions.reason !== 'SESSION_ENDED') rememberSignedOut(why.message);
-      if (!d?.accessToken) {
-        await clearSession();
-        return false;
+      if (d?.accessToken) {
+        await storeSession(d.accessToken, d.refreshToken);
+        lastRefresh = 'ok';
+        return true;
       }
-      await storeSession(d.accessToken, d.refreshToken);
-      return true;
+      // Only forget the sign-in when the server says it's no longer valid. A server error keeps it.
+      if (why?.extensions?.code !== 'UNAUTHENTICATED') { lastRefresh = 'unreachable'; return false; }
+      if (why.extensions.reason && why.extensions.reason !== 'SESSION_ENDED') rememberSignedOut(why.message);
+      await clearSession();
+      lastRefresh = 'rejected';
+      return false;
     } catch {
+      lastRefresh = 'unreachable'; // network error, or the server answered with a non-JSON error page
       return false;
     } finally {
       setTimeout(() => (refreshing = null), 0);
@@ -129,12 +142,14 @@ export async function refreshSession(): Promise<boolean> {
   return refreshing;
 }
 
+export const NETWORK_MESSAGE = 'Can’t reach the server. It may be starting up. Please wait about 30 seconds and try again.';
+
 export async function gql<T = any>(query: string, variables?: Record<string, unknown>, opts: { stepUp?: string; retried?: boolean } = {}): Promise<T> {
   let r;
   try {
     r = await raw(query, variables, opts.stepUp);
   } catch {
-    throw new ApiError('Network error. Check your connection.', 'NETWORK');
+    throw new ApiError(NETWORK_MESSAGE, 'NETWORK');
   }
   const e = r.errors?.[0];
   if (!e) return r.data as T;
@@ -143,6 +158,7 @@ export async function gql<T = any>(query: string, variables?: Record<string, unk
     const reason = e.extensions?.reason;
     if (reason && reason !== 'SESSION_ENDED') rememberSignedOut(e.message); // e.g. signed in on another device
     else if (await refreshSession()) return gql<T>(query, variables, { ...opts, retried: true });
+    else if (refreshOutcome() === 'unreachable') throw new ApiError(NETWORK_MESSAGE, 'NETWORK'); // keep the sign-in; try again later
     await clearSession();
     signedOutHandler?.();
   }

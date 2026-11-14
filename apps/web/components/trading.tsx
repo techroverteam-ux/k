@@ -3,7 +3,8 @@ import { useSoleAdmin } from '@/lib/sole-admin';
 import { useAuth } from '@/lib/auth';
 import Link from 'next/link';
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
-import { gql, newKey, subscribe } from '@/lib/api';
+import { gql, newKey, pollingPaused, subscribe } from '@/lib/api';
+import { downloadXlsx } from '@/lib/xlsx';
 import { fullName, inr, shortSymbol, tone, when, curSign } from '@/lib/format';
 import { useMutation, useQuery } from '@/lib/hooks';
 import { Icon } from './icons';
@@ -70,18 +71,18 @@ export function LotTag({ i }: { i: Pick<Instrument, 'lotClass' | 'lotLabel' | 'c
 }
 export const QUOTE_FIELDS = 'instrumentId ltp bid ask high low change changePct ts source open close volume avgPrice lowerCircuit upperCircuit depth { levels { bidQty bidPrice askPrice askQty } totalBidQty totalAskQty }';
 
-/** Live quotes over WebSocket with polling heartbeat; seeds with one-off fetch and keeps active. */
+/**
+ * Live quotes: one WebSocket subscription pushes updates, plus a polling heartbeat as a fallback.
+ * One request covers the whole list (the API takes up to 1000 ids), long lists poll less often, and polling
+ * stops while the tab is hidden or after a 429, so a page with hundreds of rows (Add script) can't use up
+ * the user's request budget.
+ */
 export function useLiveQuotes(ids: string[]) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const key = ids.slice().sort().join(',');
   useEffect(() => {
     if (!key) return;
-    const list = key.split(',');
-    const chunkSize = 100;
-    const chunks: string[][] = [];
-    for (let i = 0; i < list.length; i += chunkSize) {
-      chunks.push(list.slice(i, i + chunkSize));
-    }
+    const list = key.split(',').slice(0, 1000);
 
     const merge = (rows: Quote[]) => {
       if (!rows || !rows.length) return;
@@ -109,19 +110,18 @@ export function useLiveQuotes(ids: string[]) {
     };
 
     const fetchAll = () => {
-      for (const chunk of chunks) {
-        gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: chunk })
-          .then((d) => {
-            if (d?.quotes) merge(d.quotes);
-          })
-          .catch(() => undefined);
-      }
+      gql<{ quotes: Quote[] }>(`query($i:[ID!]!){ quotes(instrumentIds:$i){ ${QUOTE_FIELDS} } }`, { i: list })
+        .then((d) => {
+          if (d?.quotes) merge(d.quotes);
+        })
+        .catch(() => undefined);
     };
-
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    // One request for the whole list; long lists poll less often; no polling while hidden or after a 429.
+    const every = list.length > 50 ? 6000 : 2000;
+    const interval = setInterval(() => { if (!document.hidden && !pollingPaused()) fetchAll(); }, every);
 
-    const unsubs = chunks.map((chunk) =>
+    const unsubs = [list].map((chunk) =>
       subscribe<{ quotesUpdated: Quote[] }>(
         `subscription($i:[ID!]!){ quotesUpdated(instrumentIds:$i){ ${QUOTE_FIELDS} } }`,
         { i: chunk },
@@ -132,7 +132,6 @@ export function useLiveQuotes(ids: string[]) {
         }
       )
     );
-
     return () => {
       clearInterval(interval);
       for (const unsub of unsubs) {
@@ -409,6 +408,34 @@ export function Watchlist({ compact, mode = 'list', showAddButton = true }: { co
 
   const hitIds = useMemo(() => hits?.map((h) => h.id) ?? [], [hits]);
   const hitQuotes = useLiveQuotes(hitIds);
+  const [exporting, setExporting] = useState(false);
+  /** Every tradable script with the rate the server has right now (and where that rate came from) as .xlsx. */
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const d = await gql<{ tradableInstruments: Instrument[] }>(`{ tradableInstruments{ id symbol name exchange segment expiry lotSize tickSize lotClass lotLabel category quote{ ltp bid ask high low open close change changePct volume ts source } } }`);
+      const catLabel = Object.fromEntries(CATEGORIES.map((c) => [c.v, c.label]));
+      const num = (v?: string | null) => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) ? '' : Number(v));
+      const when = (v?: string) => (v ? new Date(v).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '');
+      const rows = d.tradableInstruments.map((i) => [
+        i.symbol, i.name, i.exchange, catLabel[i.category ?? ''] ?? i.category ?? '', i.segment,
+        i.expiry ? new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : '',
+        i.lotSize, i.lotLabel ?? '', i.category === 'MCX' ? (i.lotClass === 'MEGA' ? 'Mega' : 'Mini') : '', num(i.tickSize),
+        num(i.quote?.ltp), num(i.quote?.bid), num(i.quote?.ask), num(i.quote?.open), num(i.quote?.high), num(i.quote?.low), num(i.quote?.close),
+        num(i.quote?.change), num(i.quote?.changePct), num(i.quote?.volume), when(i.quote?.ts), i.quote?.source ?? 'no rate yet',
+      ]);
+      const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      downloadXlsx(`the-k-scripts-${day}.xlsx`, 'Scripts',
+        ['Symbol', 'Name', 'Exchange', 'Category', 'Segment', 'Expiry', 'Lot size', 'One lot', 'Mini / Mega', 'Tick size', 'LTP', 'Bid', 'Ask', 'Open', 'High', 'Low', 'Prev close', 'Change', 'Change %', 'Volume', 'Rate time (IST)', 'Rate source'],
+        rows,
+        [28, 30, 10, 12, 10, 13, 9, 12, 11, 9, 12, 12, 12, 12, 12, 12, 12, 10, 10, 12, 22, 14]);
+      toast(`${rows.length} scripts downloaded`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Download failed', true);
+    } finally {
+      setExporting(false);
+    }
+  };
   const inList = useMemo(() => new Set(entries.map((e) => e.instrument.id)), [entries]);
 
   const add = async (i: Instrument) => {
@@ -477,6 +504,7 @@ export function Watchlist({ compact, mode = 'list', showAddButton = true }: { co
         </div>
         {(q || cat) && <button className="btn btn-sm btn-ghost" onClick={() => { setQ(''); setCat(''); setLot(''); }}>Clear</button>}
         <span className="t3 sm num" style={{ whiteSpace: 'nowrap' }}>{entries.length}/50 added</span>
+        {adding && <button type="button" className="btn btn-sm" disabled={exporting} onClick={() => void exportExcel()} title="Download every tradable script with its current rate as an Excel file"><Icon name="download" size={16} />{exporting ? 'Preparing…' : 'Excel'}</button>}
       </div>
       {!compact && (
         <div className="wl-cats">

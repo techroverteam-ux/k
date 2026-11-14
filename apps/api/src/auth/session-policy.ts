@@ -31,11 +31,11 @@ export function signedOutMessage(reason?: string | null): { code: string; messag
     case REVOKE_REASON.reuse:
       return { code: 'SESSION_REVOKED', message: 'This device was signed out for your security. Please sign in again.' };
     case 'expired':
-      return { code: 'SESSION_EXPIRED', message: 'Your session has ended. Please sign in again.' };
+      return { code: 'SESSION_EXPIRED', message: 'For your security you are signed out every 48 hours. Please sign in again.' };
     default:
       return { code: 'SESSION_ENDED', message: 'Please sign in again.' };
   }
 }
 
 export const policyFor = (all: Record<string, RolePolicy>, role: Role): RolePolicy =>
-  all[role] ?? { maxConcurrent: 0, onLimit: 'ask', idleMinutes: 60, maxHours: 24 };
+  all[role] ?? { maxConcurrent: 0, onLimit: 'ask', idleMinutes: 2880, maxHours: 48 };

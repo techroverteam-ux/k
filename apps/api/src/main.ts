@@ -12,6 +12,19 @@ import { JsonLogger } from './logging/json-logger';
 import { databaseHost, databaseUrl } from './db/database-url';
 
 // Redeploy trigger 2026-10-28: no functional change.
+
+/**
+ * Background jobs (order matching on every tick, risk checks, log flushing…) run outside any request. If the
+ * database is briefly unreachable (a managed database waking up, a network blip) one of them fails, and an
+ * unhandled rejection would make Node exit the whole API. Log it and keep serving; the job runs again on the
+ * next tick. Only the error's kind and code are logged, never query parameters.
+ */
+process.on('unhandledRejection', (e: unknown) => {
+  const err = e as { name?: string; message?: string; code?: string; cause?: { code?: string; message?: string } };
+  const code = err?.code ?? err?.cause?.code ?? 'no code';
+  const what = (err?.cause?.message ?? err?.message ?? String(e)).split('\nparams:')[0].slice(0, 160);
+  new Logger('Background').error(`Background task failed (${err?.name ?? 'Error'}, ${code}): ${what}`);
+});
 async function bootstrap() {
   const cfg = env(); // fail fast on invalid / insecure configuration
   const json_ = (cfg.LOG_FORMAT ?? (cfg.NODE_ENV === 'production' ? 'json' : 'pretty')) === 'json';

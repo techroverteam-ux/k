@@ -65,14 +65,15 @@ export const CONFIG_REGISTRY = {
       z.object({
         maxConcurrent: z.number().int().min(0).max(20),
         onLimit: z.enum(['ask', 'replace_oldest', 'block']),
-        idleMinutes: z.number().int().min(5).max(1440),
+        idleMinutes: z.number().int().min(5).max(2880),
         maxHours: z.number().int().min(1).max(720),
       }),
     ),
     default: {
-      SUPER_ADMIN: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 30, maxHours: 12 },
-      BROKER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 120, maxHours: 24 },
-      TRADER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 480, maxHours: 24 },
+      // Stay signed in for 48 hours from sign-in, then sign in again (no early idle sign-out).
+      SUPER_ADMIN: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 2880, maxHours: 48 },
+      BROKER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 2880, maxHours: 48 },
+      TRADER: { maxConcurrent: 1, onLimit: 'ask', idleMinutes: 2880, maxHours: 48 },
     },
     description:
       'Per role: how many devices may be signed in at once (0 = unlimited); what happens on one more sign-in (ask = offer "sign out the other device and continue", replace_oldest = sign it out automatically, block = refuse); sign-out after idle minutes; maximum session length in hours.',

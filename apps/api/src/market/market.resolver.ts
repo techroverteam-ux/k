@@ -1,7 +1,8 @@
 import { Args, Float, ID, Int, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { and, asc, eq, isNull, ilike, inArray, not, or, sql } from 'drizzle-orm';
 import type { Actor, GqlContext } from '../common/context';
-import { AllowWithoutMfa, Ctx, CurrentActor, Public, Roles } from '../common/context';
+import { Throttle } from '@nestjs/throttler';
+import { AllowWithoutMfa, Ctx, CurrentActor, lim, Public, Roles } from '../common/context';
 import { AuditService } from '../audit/audit.service';
 import { badInput, notFound } from '../common/errors';
 import { AppSettings, Candle, CandleIntervalGql, CategoryCount, Instrument, MarketPulseItem, Quote, WatchlistCount, WatchlistEntry } from '../common/gql-types';
@@ -133,6 +134,20 @@ export class MarketResolver {
       .where(and(eq(instruments.active, true), notExpired, query.trim() ? or(ilike(instruments.symbol, s), ilike(instruments.name, s)) : undefined, cat, cls))
       .orderBy(asc(sql`coalesce(${instruments.expiry}, '9999-12-31')`), asc(instruments.symbol))
       .limit(clampLimit(limit, 50, 500));
+    return rows.map((r) => toInstrument(r, this.market.quote(r.id)));
+  }
+
+  @AllowWithoutMfa()
+  @Throttle({ default: { limit: lim(5), ttl: 60_000 } })
+  @Query(() => [Instrument], { description: 'Every instrument that can be traded now (active, not expired), for the "Download Excel" list. Up to 20,000.' })
+  async tradableInstruments() {
+    const notExpired = sql`(${instruments.expiry} IS NULL OR (${instruments.expiry} AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)`;
+    const rows = await this.dbs.db
+      .select()
+      .from(instruments)
+      .where(and(eq(instruments.active, true), notExpired))
+      .orderBy(asc(instruments.exchange), asc(sql`coalesce(${instruments.expiry}, '9999-12-31')`), asc(instruments.symbol))
+      .limit(20_000);
     return rows.map((r) => toInstrument(r, this.market.quote(r.id)));
   }
 

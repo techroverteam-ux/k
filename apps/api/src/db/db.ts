@@ -1,4 +1,4 @@
-import { Global, Injectable, Module, OnApplicationShutdown } from '@nestjs/common';
+import { Global, Injectable, Logger, Module, OnApplicationShutdown } from '@nestjs/common';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { env } from '../config/env';
@@ -25,14 +25,26 @@ export function dbSsl(url: string, nodeEnv: string | undefined = env().NODE_ENV)
 }
 
 export function createPool(url = databaseUrl({ DATABASE_URL: env().DATABASE_URL, DATABASE_URL_UNPOOLED: env().DATABASE_URL_UNPOOLED }), max = env().DB_POOL_MAX) {
-  return new Pool({
+  const pool = new Pool({
     connectionString: url,
     ssl: dbSsl(url),
     max,
     statement_timeout: 10_000,
     idle_in_transaction_session_timeout: 15_000,
     application_name: 'tradedesk-api',
+    // Managed Postgres (Neon) closes idle connections when it scales to zero. Drop ours first, keep them alive
+    // while in use, and don't wait forever for a sleeping database to wake.
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 20_000,
+    keepAlive: true,
   });
+  // An idle connection closed by the server emits 'error' on the pool. Without a listener Node treats it as
+  // unhandled and the whole API exits (every app then looks signed out until it restarts). The pool already
+  // discards the dead client and opens a new one on the next query, so log it and carry on.
+  pool.on('error', (e: Error & { code?: string }) => {
+    new Logger('Database').warn(`Idle connection closed by the server (${e.code ?? 'no code'}): ${e.message}. A new one opens on the next query.`);
+  });
+  return pool;
 }
 
 @Injectable()

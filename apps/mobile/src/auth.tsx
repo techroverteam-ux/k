@@ -2,7 +2,7 @@ import * as Device from 'expo-device';
 import { router } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
-import { clearSession, gql, refreshSession, rememberSignedOut, setPersistRefresh, setSignedOutHandler, storeSession, subscribe } from './api';
+import { clearSession, gql, refreshOutcome, refreshSession, rememberSignedOut, setPersistRefresh, setSignedOutHandler, storeSession, subscribe } from './api';
 import { forgetQuickDevice, quickDevice, RELOCK_AFTER_MS, type QuickOwner } from './quick';
 import { requestSplash } from './splash';
 
@@ -81,11 +81,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setSignedOutHandler(() => { setMe(null); if (quickRef.current) showLock(); else router.replace('/login'); });
-    gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled signupEnabled maxWatchlists minDeposit apiVersion } }`).then((d) => setSettings(d.appSettings)).catch(() => undefined);
+    const loadSettings = () => gql<{ appSettings: Settings }>(`{ appSettings { appName tickerMessages termsRules helplineUrl demoEnabled signupEnabled maxWatchlists minDeposit apiVersion } }`).then((d) => { setSettings(d.appSettings); return true; }).catch(() => false);
+    void loadSettings();
     (async () => {
       // Quick unlock on: always open locked. Otherwise resume the saved session, if any.
       if (await reloadQuick()) setLocked(true);
-      else if (await refreshSession()) { requestSplash(); await reload(); }
+      else {
+        let ok = await refreshSession();
+        // Server still starting up (free hosting sleeps when idle): keep the saved sign-in and wait for it,
+        // instead of showing the sign-in screen. Up to about 2 minutes.
+        for (let i = 0; !ok && refreshOutcome() === 'unreachable' && i < 24; i++) {
+          await new Promise((r) => setTimeout(r, 5_000));
+          ok = await refreshSession();
+        }
+        if (ok) { requestSplash(); await reload(); void loadSettings(); }
+      }
       setReady(true);
     })();
   }, [reload, reloadQuick, showLock]);

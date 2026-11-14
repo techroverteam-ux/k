@@ -1,8 +1,13 @@
 import { Pool } from 'pg';
 import WebSocket from 'ws';
 
-const clientId = '1114583141';
-const token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzkzOTA3MDAyLCJpYXQiOjE3OTM4MjA2MDIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTE0NTgzMTQxIn0.ufKpDLY1I7NolS6SgDWEKRTkrFOaGUHklI3AIBpwkswxLpK2RFXD8JJYZN79nS81LJmTGiCATvgG0ovCkcwsuQ';
+// Credentials come from the environment (never commit them): DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN.
+const clientId = process.env.DHAN_CLIENT_ID ?? '';
+const token = process.env.DHAN_ACCESS_TOKEN ?? '';
+if (!clientId || !token) {
+  console.error('Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in the environment first.');
+  process.exit(1);
+}
 
 interface DhanQuote {
   ltp: number;
