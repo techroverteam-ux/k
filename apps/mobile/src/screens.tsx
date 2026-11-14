@@ -48,7 +48,7 @@ const expiryTime = (expiry?: string, ts?: string) =>
 const scriptPrice = (value?: string) => inr(value).replace(/\.00$/, '');
 
 /** Bid (red) and ask (green) boxes; each blinks green when its price rises and red when it falls. Low / High below. */
-function BidAsk({ id, qq, onPick }: { id: string; qq?: Quote; onPick?: (side: 'BUY' | 'SELL') => void }) {
+function BidAsk({ id, qq, onPick, compact }: { id: string; qq?: Quote; onPick?: (side: 'BUY' | 'SELL') => void; compact?: boolean }) {
   const t = useTheme();
   const { width } = useWindowDimensions();
   const columnWidth = Math.min(108, Math.max(68, (width - 100) * .25));
@@ -57,10 +57,10 @@ function BidAsk({ id, qq, onPick }: { id: string; qq?: Quote; onPick?: (side: 'B
       {(['SELL', 'BUY'] as const).map((sd) => {
         const v = sd === 'BUY' ? qq?.ask : qq?.bid;
         return (
-          <Pressable key={sd} onPress={() => { tap(); if (onPick) onPick(sd); else router.push(`/instrument/${id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${v ?? ''}`} style={{ width: columnWidth, alignItems: 'stretch', gap: 5 }}>
-            <Flash value={v} style={{ borderRadius: 12, overflow: 'hidden' }}>
-              <View style={{ width: columnWidth, paddingVertical: 12, paddingHorizontal: 3, backgroundColor: sd === 'BUY' ? t.pos : t.negSoft, alignItems: 'center' }}>
-                <T v="num" c={sd === 'BUY' ? 'text' : 'neg'} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ fontSize: 14, ...(sd === 'BUY' ? { color: '#fff' } : {}) }}>{scriptPrice(v)}</T>
+          <Pressable key={sd} onPress={() => { tap(); if (onPick) onPick(sd); else router.push(`/instrument/${id}?side=${sd}`); }} accessibilityRole="button" accessibilityLabel={`${sd === 'BUY' ? 'Buy' : 'Sell'} at ${v ?? ''}`} style={{ width: columnWidth, alignItems: 'stretch', gap: compact ? 3 : 5 }}>
+            <Flash value={v} style={{ borderRadius: compact ? 10 : 12, overflow: 'hidden' }}>
+              <View style={{ width: columnWidth, minHeight: CTL.tap, paddingVertical: compact ? 8 : 12, paddingHorizontal: 3, backgroundColor: sd === 'BUY' ? t.pos : t.negSoft, alignItems: 'center', justifyContent: 'center' }}>
+                <T v="num" c={sd === 'BUY' ? 'text' : 'neg'} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ fontSize: compact ? 13 : 14, ...(sd === 'BUY' ? { color: '#fff' } : {}) }}>{scriptPrice(v)}</T>
               </View>
             </Flash>
             <T v="xs" numberOfLines={1} adjustsFontSizeToFit style={{ textAlign: 'center', fontSize: 10 }}>{sd === 'BUY' ? `H ${scriptPrice(qq?.high)}` : `L ${scriptPrice(qq?.low)}`}</T>
@@ -102,9 +102,15 @@ export function SearchButton() {
   return <IconButton icon="search" label="Search instruments" onPress={() => router.push('/search')} />;
 }
 
-const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd, simple }: { i: Inst; qq?: Quote; inList: boolean; onAdd: (i: Inst) => void; simple?: boolean }) {
+const SearchRow = memo(function SearchRow({ i, qq, inList, onToggle, pending, simple }: { i: Inst; qq?: Quote; inList: boolean; onToggle: (i: Inst) => void; pending: boolean; simple?: boolean }) {
   const t = useTheme();
   const sym = shortSymbol(i.symbol);
+  const toggle = (
+    <Pressable disabled={pending} onPress={() => onToggle(i)} accessibilityRole="button" accessibilityLabel={`${inList ? 'Remove from watchlist' : 'Add to watchlist'}: ${i.symbol}`} accessibilityState={{ disabled: pending, selected: inList, busy: pending }}
+      style={({ pressed }) => ({ width: CTL.tap, height: CTL.tap, borderWidth: 1, borderColor: inList ? t.brand : t.line2, borderRadius: R.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: inList ? t.brandSoft : pressed ? t.bg3 : t.bg, opacity: pending ? 0.5 : 1 })}>
+      <Icon name={inList ? 'check' : 'plus'} color={inList ? t.brand : t.text2} size={20} />
+    </Pressable>
+  );
   if (simple) return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[3], minHeight: 96, paddingVertical: S[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
@@ -112,10 +118,7 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd, simple }: { i:
         <T v="sm" c="text2" numberOfLines={1}>{i.symbol}</T>
         <T v="xs">{i.expiry ? `Exp: ${new Date(i.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' })}` : `${i.exchange} · ${i.segment}`}{lotText(i) ? ` · ${lotText(i)}` : ''}</T>
       </View>
-      <Pressable disabled={inList} onPress={() => onAdd(i)} accessibilityRole="button" accessibilityLabel={`${inList ? 'Added to watchlist' : 'Add to watchlist'}: ${i.symbol}`} accessibilityState={{ disabled: inList }}
-        style={({ pressed }) => ({ width: CTL.tap, height: CTL.tap, borderWidth: 1, borderColor: inList ? t.brand : t.line2, borderRadius: R.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: inList ? t.brandSoft : pressed ? t.bg3 : t.bg })}>
-        <Icon name={inList ? 'check' : 'plus'} color={inList ? t.brand : t.text2} size={20} />
-      </Pressable>
+      {toggle}
     </View>
   );
   return (
@@ -126,7 +129,7 @@ const SearchRow = memo(function SearchRow({ i, qq, inList, onAdd, simple }: { i:
         <Row gap={6}>{lotText(i) ? <Badge text={lotText(i)} tone={i.lotClass === 'MEGA' ? 'info' : undefined} /> : null}<T v="xs" numberOfLines={1} style={{ flexShrink: 1 }}>{expiryTime(i.expiry, qq?.ts)}</T></Row>
       </Pressable>
       <BidAsk id={i.id} qq={qq} />
-      <IconButton icon={inList ? 'check' : 'plus'} label={inList ? 'In watchlist 1' : 'Add to watchlist 1'} onPress={() => !inList && onAdd(i)} />
+      {toggle}
     </View>
   );
 });
@@ -140,8 +143,9 @@ export function SearchView({ addMode }: { addMode?: boolean } = {}) {
   const [res, setRes] = useState<Inst[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [added, setAdded] = useState<string[]>([]);
-  const adding = useRef(new Set<string>());
+  const [selection, setSelection] = useState<Record<string, boolean>>({});
+  const [pendingIds, setPendingIds] = useState<string[]>([]);
+  const changing = useRef(new Set<string>());
   const counts = useQuery<{ instrumentCategoryCounts: { category: Cat; count: number }[] }>(`{ instrumentCategoryCounts { category count } }`);
   useEffect(() => {
     setRes(null);
@@ -150,20 +154,33 @@ export function SearchView({ addMode }: { addMode?: boolean } = {}) {
     return () => { current = false; clearTimeout(h); };
   }, [q, cat, lot, nonce, addMode]);
   const wl = useQuery<{ watchlist: { instrument: { id: string } }[] }>(`{ watchlist(listIndex:0){ instrument{ id } } }`);
-  const inList = useMemo(() => new Set([...(wl.data?.watchlist ?? []).map((w) => w.instrument.id), ...added]), [wl.data, added]);
+  const inList = useMemo(() => {
+    const selected = new Set((wl.data?.watchlist ?? []).map((w) => w.instrument.id));
+    for (const [id, included] of Object.entries(selection)) {
+      if (included) selected.add(id); else selected.delete(id);
+    }
+    return selected;
+  }, [wl.data, selection]);
   const quotes = useLiveQuotes(addMode ? [] : (res ?? []).map((i) => i.id));
-  const onAdd = useCallback(async (i: Inst) => {
-    if (adding.current.has(i.id)) return;
-    adding.current.add(i.id);
-    try { await gql(`mutation($i:ID!){ addToWatchlist(listIndex:0, instrumentId:$i) }`, { i: i.id }); setAdded((a) => a.includes(i.id) ? a : [...a, i.id]); tap(); toast(`${shortSymbol(i.symbol)} added to Watchlist 1`); }
+  const onToggle = useCallback(async (i: Inst) => {
+    if (changing.current.has(i.id)) return;
+    changing.current.add(i.id);
+    setPendingIds((ids) => [...ids, i.id]);
+    const remove = inList.has(i.id);
+    try {
+      const mutation = remove ? 'removeFromWatchlist' : 'addToWatchlist';
+      await gql(`mutation($i:ID!){ ${mutation}(listIndex:0, instrumentId:$i) }`, { i: i.id });
+      setSelection((s) => ({ ...s, [i.id]: !remove }));
+      tap(); toast(`${shortSymbol(i.symbol)} ${remove ? 'removed from' : 'added to'} Watchlist 1`);
+    }
     catch (e) { toast((e as Error).message, true); }
-    finally { adding.current.delete(i.id); }
-  }, []);
+    finally { changing.current.delete(i.id); setPendingIds((ids) => ids.filter((id) => id !== i.id)); }
+  }, [inList]);
   const pickerHeader = addMode ? (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingHorizontal: S[2], paddingVertical: S[2], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
       <IconButton icon="chevronLeft" label="Back to watchlist" onPress={() => router.canGoBack() ? router.back() : router.replace('/(trader)/watchlist')} />
       <View style={{ flex: 1, minWidth: 0 }}><SearchBox value={q} onChangeText={setQ} placeholder="Search scripts…" autoFocus /></View>
-      <T v="xs" style={{ paddingRight: S[2] }}>{added.length} added</T>
+      <T v="xs" style={{ paddingRight: S[2] }}>{inList.size} added</T>
     </View>
   ) : undefined;
   const categoryItems = MARKET_CATEGORIES.map((c) => {
@@ -185,10 +202,10 @@ export function SearchView({ addMode }: { addMode?: boolean } = {}) {
   return (
     <Screen back title={addMode ? 'Add script' : 'Search'} header={pickerHeader} scroll={false}>
       <VList data={res ?? []} keyOf={(i) => i.id}
-        header={filters}
+        header={<View style={{ gap: S[2] }}>{filters}{wl.error && !wl.data ? <ErrorState error={wl.error} retry={wl.refetch} /> : null}</View>}
         footer={res?.length === 500 ? <T v="xs">Showing the first 500 instruments. Search to narrow the list.</T> : undefined}
         empty={res === null ? <Skeleton rows={5} /> : err ? <ErrorState error={err} retry={() => setNonce((n) => n + 1)} /> : <Empty icon="search" title={q ? `No instruments match “${q}”` : 'Nothing listed here yet'}>{q ? 'Try the symbol, like NIFTY or GOLDM.' : 'Instruments appear here once they are loaded.'}</Empty>}
-        render={(i) => <SearchRow i={i} simple={addMode} qq={quotes[i.id]} inList={inList.has(i.id)} onAdd={onAdd} />} />
+        render={(i) => <SearchRow i={i} simple={addMode} qq={quotes[i.id]} inList={inList.has(i.id)} pending={pendingIds.includes(i.id) || !wl.data} onToggle={onToggle} />} />
     </Screen>
   );
 }
@@ -395,15 +412,19 @@ const WatchRow = memo(function WatchRow({ e, qq, detailed, onRemove, onOpen }: {
   const t = useTheme();
   const sym = shortSymbol(e.instrument.symbol);
   const row = detailed ? (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2], paddingVertical: S[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
-      <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}><T w="700" style={{ fontSize: 15 }}>{sym.toUpperCase()}</T>{e.instrument.expiry && <T v="xs" style={{ fontSize: 9 }}>{new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })}</T>}</View>
-        <View style={{ alignSelf: 'flex-start' }}><Badge text={e.instrument.category === 'CRYPTO' ? 'CRYPTO' : e.instrument.exchange} /></View>
-        <T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} numberOfLines={1} adjustsFontSizeToFit style={{ fontSize: 15 }}>{scriptPrice(qq?.ltp)}</T>
-        <T v="xs" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} style={{ fontSize: 10 }}>{qq?.change ? `${Number(qq.change) < 0 ? '\u25bc' : '\u25b2'} ${inr(qq.change, true)} (${inr(qq.changePct, true)}%)` : '\u2014'}</T>
-        <T v="xs" style={{ fontSize: 9 }}>{expiryTime(undefined, qq?.ts)}</T>
+    <View style={{ gap: S[2], paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line }}>
+      <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, contract details`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flexDirection: 'row', alignItems: 'center', gap: S[2] }}>
+        <T w="700" numberOfLines={2} style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 18 }}>{sym.toUpperCase()}</T>
+        {e.instrument.expiry && <T v="xs" style={{ fontSize: 10 }}>{new Date(e.instrument.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' })}</T>}
       </Pressable>
-      <BidAsk id={e.instrument.id} qq={qq} onPick={(sd) => onOpen(e.instrument.id, sd)} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: S[2] }}>
+        <Pressable onPress={() => onOpen(e.instrument.id)} onLongPress={() => onRemove(e)} accessibilityRole="button" accessibilityLabel={`${sym}, ${qq?.ltp ?? ''}`} accessibilityHint="Opens quick trade. Swipe left to remove." style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <T v="num" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={{ fontSize: 16 }}>{scriptPrice(qq?.ltp)}</T>
+          <T v="xs" c={toneOfValue(qq?.change) === 'neg' ? 'neg' : 'pos'} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ fontSize: 10 }}>{qq?.change ? `${Number(qq.change) < 0 ? '\u25bc' : '\u25b2'} ${inr(qq.change, true)} (${inr(qq.changePct, true)}%)` : '\u2014'}</T>
+          <T v="xs" numberOfLines={1} adjustsFontSizeToFit style={{ fontSize: 10 }}>{e.instrument.category === 'CRYPTO' ? 'CRYPTO' : e.instrument.exchange} · {expiryTime(undefined, qq?.ts)}</T>
+        </Pressable>
+        <BidAsk compact id={e.instrument.id} qq={qq} onPick={(sd) => onOpen(e.instrument.id, sd)} />
+      </View>
     </View>
   ) : (
     <ListRow onPress={() => onOpen(e.instrument.id)} label={`${sym}, ₹${qq?.ltp ?? ''}`} title={sym} sub={`${e.instrument.exchange} · ${e.instrument.segment}`}
